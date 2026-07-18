@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FitnessCaptain" />
+<meta name="theme-color" content="#16181d" />
+<title>FitnessCaptain</title>
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+/* ============================================================
+   THEME TOKENS - iron/graphite base, energetic ember accent.
+   Reuses the MenuCaptain/Tracker design system (one palette here).
+   Accent variables keep the shared "--amber" names so ported
+   components drop in unchanged; only the VALUES are FitnessCaptain's.
+   ============================================================ */
+:root{
+  --bg:#16181d;            /* iron base */
+  --bg-2:#1c1f26;          /* raised surface */
+  --bg-3:#242832;          /* card / input */
+  --bg-4:#2f3542;          /* hover / border-strong */
+  --line:#2f354233;        /* hairline */
+  --line-2:#3c4452;        /* visible border */
+  --ink:#eef0f3;           /* primary text */
+  --ink-2:#c1c6cc;         /* secondary text */
+  --ink-3:#8b93a0;         /* muted text */
+  --amber:#e8853d;         /* primary accent, ember */
+  --amber-2:#f2a366;       /* lighter ember */
+  --amber-dim:#e8853d22;   /* ember tint fill */
+  --amber-line:#e8853d55;  /* ember border */
+  --green:#7fb08a;         /* done / success */
+  --blue:#6fa3c4;          /* info */
+  --red:#d1735c;           /* destructive */
+  --violet:#a98bc4;        /* accent alt */
+  --radius:14px;
+  --radius-sm:10px;
+  --radius-lg:20px;
+  --shadow:0 6px 24px -8px rgba(0,0,0,0.55);
+  --shadow-lg:0 18px 50px -12px rgba(0,0,0,0.7);
+  --nav-h:64px;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;height:100%;}
+body{
+  background:
+    radial-gradient(120% 80% at 85% -10%, #1c2027 0%, transparent 55%),
+    radial-gradient(140% 90% at -10% 110%, #1a1d24 0%, transparent 50%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--ink);
+  font-family:'Outfit',-apple-system,system-ui,sans-serif;
+  font-size:16px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+  overscroll-behavior-y:none;
+}
+#root{min-height:100%;}
+h1,h2,h3,h4{font-family:'Fraunces',Georgia,serif;font-weight:600;margin:0;letter-spacing:-0.01em;}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+input,textarea,select{font-family:inherit;font-size:16px;color:var(--ink);}
+::placeholder{color:var(--ink-3);}
+a{color:var(--amber);}
+svg{fill:none;stroke:currentColor;stroke-width:2;}
+
+/* ---------- layout ---------- */
+.app{max-width:680px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));}
+.screen{flex:1;padding:0 18px 24px;animation:fade .35s var(--ease);}
+@keyframes fade{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:none;}}
+.topbar{position:sticky;top:0;z-index:40;padding:calc(env(safe-area-inset-top) + 14px) 18px 12px;
+  background:linear-gradient(180deg, var(--bg) 60%, transparent);}
+.topbar-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.eyebrow{font-family:'Outfit';font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--amber);font-weight:600;}
+.title{font-size:30px;line-height:1.05;margin-top:2px;}
+.title-sm{font-size:22px;}
+.subtle{color:var(--ink-3);font-size:13px;}
+.set-group{font-family:'Outfit';font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);font-weight:600;margin:22px 4px 9px;}
+.updrow{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;padding:4px 0 2px;}
+
+/* ---------- sync banner ---------- */
+.sync{display:flex;align-items:center;gap:8px;font-size:12px;padding:7px 12px;border-radius:999px;
+  margin-top:10px;border:1px solid var(--line-2);background:var(--bg-2);width:fit-content;transition:.3s;}
+.sync .dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);}
+.sync.idle .dot{background:var(--green);}
+.sync.busy .dot{background:var(--amber);animation:pulse 1s infinite;}
+.sync.pending .dot{background:var(--blue);}
+.sync.error{border-color:var(--red);color:var(--red);}
+.sync.error .dot{background:var(--red);}
+@keyframes pulse{50%{opacity:.3;}}
+
+/* ---------- cards & lists ---------- */
+.card{background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius);padding:14px;box-shadow:var(--shadow);}
+.list{display:flex;flex-direction:column;gap:10px;margin-top:14px;}
+.item{display:flex;gap:12px;align-items:flex-start;background:var(--bg-2);border:1px solid var(--line-2);
+  border-radius:var(--radius);padding:13px 14px;transition:.18s var(--ease);width:100%;text-align:left;}
+.item:active{transform:scale(.99);}
+.item-body{flex:1;min-width:0;}
+.item-title{font-size:15.5px;font-weight:500;line-height:1.35;word-break:break-word;}
+.item-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;align-items:center;}
+.chip{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--bg-4);color:var(--ink-2);
+  display:inline-flex;align-items:center;gap:4px;font-weight:500;letter-spacing:.01em;}
+.chip.amber{background:var(--amber-dim);color:var(--amber-2);border:1px solid var(--amber-line);}
+.chip svg{width:12px;height:12px;flex:0 0 auto;}
+/* category chip colors */
+.chip.red{background:#d1735c22;color:#e79b86;}
+.chip.blue{background:#6fa3c422;color:#93bdd8;}
+.chip.green{background:#7fb08a22;color:#a3cbab;}
+.chip.violet{background:#a98bc422;color:#c3a9dd;}
+
+/* ---------- forms ---------- */
+.field{margin-bottom:14px;}
+.label{display:block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px;font-weight:600;}
+.input,.textarea,.select{width:100%;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius-sm);
+  padding:12px 13px;color:var(--ink);outline:none;transition:.18s;font-size:16px;}
+.input:focus,.textarea:focus,.select:focus{border-color:var(--amber-line);background:var(--bg-4);}
+.textarea{resize:vertical;min-height:84px;line-height:1.5;}
+.title-field{margin-bottom:18px;}
+.title-field .label{color:var(--amber);}
+.title-input{width:100%;background:var(--bg-3);border:1.5px solid var(--amber-line);border-radius:var(--radius);
+  padding:16px 15px;color:var(--ink);outline:none;transition:.18s;font-size:20px;font-weight:600;line-height:1.3;}
+.title-input::placeholder{color:var(--ink-3);font-weight:500;}
+.title-input:focus{border-color:var(--amber);background:var(--bg-4);box-shadow:0 0 0 3px var(--amber-dim);}
+.select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%238b93a0' stroke-width='2'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:34px;}
+.row{display:flex;gap:10px;}
+.row>*{flex:1;}
+/* password field with the reveal eyeball (PORTABLE-IMPROVEMENTS 2026-07-10) */
+.pw-wrap{position:relative;}
+.pw-wrap .input{padding-right:46px;}
+.pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:36px;height:36px;
+  display:flex;align-items:center;justify-content:center;border-radius:50%;color:var(--ink-3);}
+.pw-eye:active{color:var(--ink);}
+.pw-eye svg{width:19px;height:19px;stroke-width:1.9;}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;border-radius:var(--radius-sm);
+  font-weight:600;font-size:15px;transition:.18s var(--ease);border:1px solid transparent;}
+.btn:active{transform:scale(.97);}
+.btn svg{width:15px;height:15px;flex:0 0 auto;}
+.btn-primary{background:var(--amber);color:#241505;}
+.btn-primary:active{background:var(--amber-2);}
+.btn-ghost{background:var(--bg-3);color:var(--ink);border-color:var(--line-2);}
+.btn-danger{background:#d1735c1a;color:var(--red);border-color:#d1735c55;}
+.btn-block{width:100%;}
+.btn-sm{padding:8px 13px;font-size:13px;}
+
+/* tabs / pills */
+.pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;}
+.pill{padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--bg-2);border:1px solid var(--line-2);color:var(--ink-3);transition:.15s;}
+.pill.on{background:var(--amber);color:#241505;border-color:var(--amber);}
+
+/* empty state */
+.empty{text-align:center;padding:56px 20px;color:var(--ink-3);}
+.empty .glyph{font-family:'Fraunces';font-size:44px;color:var(--line-2);margin-bottom:10px;}
+.empty p{margin:6px 0 0;font-size:14px;}
+
+/* ---------- bottom nav ---------- */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:50;height:calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom:env(safe-area-inset-bottom);
+  background:rgba(22,24,29,.92);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  border-top:1px solid var(--line-2);display:flex;align-items:center;justify-content:space-around;max-width:680px;margin:0 auto;}
+.nav-btn{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-3);font-size:10px;font-weight:600;letter-spacing:.03em;padding:8px 0;transition:.15s;}
+.nav-btn.on{color:var(--amber);}
+.nav-btn svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;}
+.icon-btn{flex:0 0 auto;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;
+  background:var(--bg-3);border:1px solid var(--line-2);color:var(--ink-2);transition:.15s;}
+.icon-btn:active{border-color:var(--amber-line);background:var(--bg-4);}
+.icon-btn svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;}
+.fab{position:fixed;right:calc(50% - 340px + 18px);bottom:calc(var(--nav-h) + 18px + env(safe-area-inset-bottom));z-index:55;
+  width:56px;height:56px;border-radius:50%;background:var(--amber);color:#241505;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 10px 26px -6px rgba(232,133,61,.55);transition:.18s var(--ease);}
+@media (max-width:716px){.fab{right:18px;}}
+.fab:active{transform:scale(.92);}
+.fab svg{width:26px;height:26px;stroke:#241505;stroke-width:2.4;fill:none;}
+
+/* ---------- sheet / modal ---------- */
+.scrim{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);animation:fade .2s;}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;max-width:680px;margin:0 auto;
+  background:var(--bg-2);border-top-left-radius:var(--radius-lg);border-top-right-radius:var(--radius-lg);
+  border-top:1px solid var(--line-2);box-shadow:var(--shadow-lg);
+  max-height:92vh;overflow-y:auto;animation:slideup .32s var(--ease);
+  padding:8px 18px calc(24px + env(safe-area-inset-bottom));}
+@keyframes slideup{from{transform:translateY(100%);}to{transform:none;}}
+.sheet-grip{width:38px;height:4px;border-radius:999px;background:var(--line-2);margin:8px auto 14px;}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;}
+.sheet-title{font-size:21px;margin-bottom:0;}
+.sheet-x{flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:var(--bg-3);border:1px solid var(--line-2);
+  display:flex;align-items:center;justify-content:center;color:var(--ink-2);}
+.sheet-x:active{background:var(--bg-4);}
+.sheet-x svg{width:18px;height:18px;stroke:currentColor;stroke-width:2;fill:none;}
+
+/* ---------- auth ---------- */
+.auth-wrap{max-width:420px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:24px 22px calc(24px + env(safe-area-inset-bottom));}
+.auth-brand{text-align:center;margin-bottom:26px;}
+.auth-brand .mark{font-family:'Fraunces';font-size:40px;font-weight:700;letter-spacing:-.02em;}
+.auth-brand .mark span{color:var(--amber);}
+.auth-brand .tag{color:var(--ink-3);font-size:13.5px;margin-top:6px;}
+.auth-msg{font-size:13px;padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:14px;line-height:1.45;}
+.auth-msg.err{background:#d1735c1a;border:1px solid #d1735c55;color:#e6a08d;}
+.auth-msg.ok{background:#7fb08a1a;border:1px solid #7fb08a55;color:#a7cbad;}
+.auth-switch{text-align:center;margin-top:16px;font-size:13.5px;color:var(--ink-3);}
+.auth-switch button{color:var(--amber);font-weight:600;}
+.auth-forgot{display:block;margin:14px auto 0;background:none;border:none;color:var(--ink-3);font-size:13px;text-decoration:underline;cursor:pointer;}
+
+/* ---------- misc ---------- */
+.divider{height:1px;background:var(--line-2);margin:18px 0;}
+.hint{font-size:12.5px;color:var(--ink-3);line-height:1.5;margin-top:6px;}
+.danger-text{color:var(--red);}
+.center{text-align:center;}
+.spin{width:20px;height:20px;border:2px solid var(--amber-line);border-top-color:var(--amber);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.spin-lg{width:34px;height:34px;border-width:3px;margin:60px auto;}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#0e1013;border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px;max-height:320px;overflow:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;}
+.log .tag{color:var(--amber-2);}
+.log .err{color:var(--red);}
+.log .t{color:var(--ink-3);}
+.toast{position:fixed;bottom:calc(var(--nav-h) + 24px);left:50%;transform:translateX(-50%);z-index:90;
+  background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;}
+.update-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--amber);color:#241505;border:none;text-align:left;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;font-size:13.5px;font-weight:600;}
+.update-go{flex:0 0 auto;background:#241505;color:var(--amber);border-radius:999px;padding:6px 15px;font-weight:800;font-size:12.5px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ============================================================
+   LOGGING - module-level ring buffer, ASCII-only bracketed tags.
+   iPhone has no console, so Settings -> Diagnostics renders this.
+   ============================================================ */
+const LOG_CAP = 600;
+const LOG = [];
+// User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
+// prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
+const APP_VERSION = "0.1.0";
+// Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
+// Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
+const BUILD = "2026-07-18.1";
+// True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
+function buildIsNewer(a, b){
+  const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
+  const pa=parse(a), pb=parse(b), len=Math.max(pa.length,pb.length);
+  for(let i=0;i<len;i++){ const x=pa[i]||0, y=pb[i]||0; if(x>y) return true; if(x<y) return false; }
+  return false;
+}
+function log(tag, msg){
+  const line = { t: new Date().toISOString().slice(11,19), tag, msg: String(msg) };
+  LOG.push(line);
+  if (LOG.length > LOG_CAP) LOG.shift();
+  try { console.log("[" + tag + "] " + line.msg); } catch(e){}
+}
+log("INIT", "FitnessCaptain booting - v"+APP_VERSION+" (build "+BUILD+")");
+
+/* ============================================================
+   SMALL UTILITIES
+   ============================================================ */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const nowISO = () => new Date().toISOString();
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso + (iso.length<=10 ? "T00:00:00" : ""));
+  if(isNaN(d)) return "";
+  return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+}
+function todayStr(){ const d=new Date(), p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+
+/* ============================================================
+   LOCAL STORAGE LAYER (namespaced "fitnesscaptain:")
+   Offline cache; the backend + Supabase are the source of truth at rest.
+   NAMES ARE FOREVER - do not rename this namespace after launch.
+   ============================================================ */
+const NS = "fitnesscaptain:";
+const lsGet = (k, fb) => { try { const v = localStorage.getItem(NS+k); return v===null ? fb : JSON.parse(v); } catch(e){ log("ERROR","lsGet "+k+": "+e.message); return fb; } };
+const lsSet = (k, v) => { try { localStorage.setItem(NS+k, JSON.stringify(v)); } catch(e){ log("ERROR","lsSet "+k+": "+e.message); } };
+const lsDel = (k) => { try { localStorage.removeItem(NS+k); } catch(e){} };
+
+// One per-record JSONB collection per entity (mirrors the backend COLLECTIONS).
+const FILES = ["exercises","workouts","routines"];
+
+/* ============================================================
+   BACKEND + AUTH CONFIG
+   All three values are PUBLIC-SAFE and intentionally shipped in the browser:
+   the Supabase anon key only permits auth (not data access - data goes through
+   our backend), and the API base is just a URL. The real secrets (service-role
+   key, Anthropic key) live ONLY on the Railway backend, never here.
+   ============================================================ */
+// Placeholder is a VALID URL on purpose so createClient does not throw pre-config.
+const SUPABASE_URL = "https://REPLACE-WITH-PROJECT-REF.supabase.co";
+// Supabase anon / publishable key (Settings > API Keys > anon public). This is
+// PUBLIC-SAFE by design - it only permits auth, never data access.
+const SUPABASE_ANON_KEY = "REPLACE_WITH_SUPABASE_ANON_KEY";
+const API_BASE = "https://REPLACE-WITH-RAILWAY-SERVICE.up.railway.app";
+
+const CONFIGURED =
+  SUPABASE_URL.indexOf("REPLACE") === -1 &&
+  SUPABASE_ANON_KEY.indexOf("REPLACE") === -1 &&
+  API_BASE.indexOf("REPLACE") === -1;
+if(!CONFIGURED) log("CONFIG","backend placeholders present - running unconfigured");
+
+// Supabase client - AUTH ONLY (login, session, token refresh). Data + AI never
+// touch it; they go through our backend with the user's access token.
+const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY || "unconfigured", {
+  auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage, storageKey: "fitnesscaptain-auth" }
+});
+
+async function authToken(){
+  try{ const { data } = await supa.auth.getSession(); return data.session ? data.session.access_token : null; }
+  catch(e){ log("ERROR","authToken: "+e.message); return null; }
+}
+
+/* ============================================================
+   BACKEND COLLECTIONS API
+   GET  /api/collection/<name> -> the whole array
+   PUT  /api/collection/<name> -> replace the whole array
+   `meta` is a per-user singleton OBJECT, so it gets its own load/save.
+   ============================================================ */
+async function collGet(file){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/" + file, { headers: { "Authorization":"Bearer "+token } });
+  if(!r.ok){ const t=await r.text(); log("ERROR","GET "+file+" "+r.status+" "+t.slice(0,140));
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    throw new Error("Load failed ("+r.status+")"); }
+  const j = await r.json();
+  const arr = Array.isArray(j) ? j : [];
+  log("API","GET "+file+" ok ("+arr.length+" rows)");
+  return arr;
+}
+async function collPut(file, data){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/" + file, {
+    method:"PUT",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(data)
+  });
+  if(!r.ok){ const t=await r.text(); log("ERROR","PUT "+file+" "+r.status+" "+t.slice(0,140));
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    throw new Error("Save failed ("+r.status+")"); }
+  log("API","PUT "+file+" ok ("+data.length+" rows)");
+  return true;
+}
+async function metaGet(){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/meta", { headers:{ "Authorization":"Bearer "+token } });
+  if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Load failed ("+r.status+")"); }
+  const j = await r.json();
+  return (j && typeof j==="object" && !Array.isArray(j)) ? j : {};
+}
+async function metaPut(obj){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in");
+  const r = await fetch(API_BASE + "/api/collection/meta", {
+    method:"PUT",
+    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+    body: JSON.stringify(obj)
+  });
+  if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Save failed ("+r.status+")"); }
+  return true;
+}
+
+/* ============================================================
+   AI RELAY (backend-metered). Task label routes the model server-side.
+   Wired for: progress_summary, routine_suggest, explain_exercise (build
+   order step 6 uses these; the plumbing ships with the shell).
+   ============================================================ */
+async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  const r = await fetch(API_BASE + "/api/ai/relay",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+    body: JSON.stringify({ task, model:"claude-sonnet-5", max_tokens:maxTokens, system, messages })
+  });
+  if(!r.ok){
+    if(r.status===401) throw new Error("Session expired - sign in again.");
+    if(r.status===402 || r.status===429) throw new Error("AI is at its limit for now. Try again later.");
+    if(r.status===503) throw new Error("AI is temporarily unavailable.");
+    throw new Error("AI error "+r.status+".");
+  }
+  const j = await r.json();
+  return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
+}
+
+/* ============================================================
+   DOMAIN CONSTANTS
+   ============================================================ */
+// Per-user config living in meta.cfg. units applies to logged weights.
+const DEFAULT_CFG = { appName:"FitnessCaptain", units:"lb" };
+
+/* ============================================================
+   DATA STORE HOOK
+   Holds all entities in memory + localStorage. Optimistic local writes, then
+   push each changed collection to the backend. Dirty collections retry on the
+   next sign-in / when the device comes back online.
+   ============================================================ */
+function useStore(){
+  const [cfg, setCfg] = useState(() => ({...DEFAULT_CFG, ...lsGet("cfg", {})}));
+  const [data, setData] = useState(() => {
+    const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
+  });
+  const [dirty, setDirty] = useState(() => lsGet("dirty", {}));
+  const [sync, setSync] = useState("idle");       // idle | busy | pending | error
+  const [syncMsg, setSyncMsg] = useState("");
+  const [online, setOnline] = useState(navigator.onLine);
+  const [authed, setAuthed] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authReady, setAuthReady] = useState(false);
+  // true after a PASSWORD_RECOVERY event (user landed here from a reset link)
+  const [recovery, setRecovery] = useState(false);
+
+  const dataRef = useRef(data); dataRef.current = data;
+  const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
+  const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
+  const authedRef = useRef(false);
+
+  const setDirtyFlag = useCallback((file, on) => {
+    setDirty(prev => { const next = {...prev}; if(on) next[file]=true; else delete next[file]; lsSet("dirty", next); return next; });
+  }, []);
+
+  // Push one collection to the backend. Leaves its dirty flag set on failure so
+  // the next flush retries it.
+  const pushFile = useCallback(async (file) => {
+    if(!authedRef.current) return;
+    if(!navigator.onLine){ setSync("pending"); return; }
+    try{
+      setSync("busy");
+      await collPut(file, dataRef.current[file] || []);
+      setDirtyFlag(file, false);
+      setSync("idle");
+    }catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushFile "+file+": "+e.message); }
+  }, [setDirtyFlag]);
+
+  const pushCfg = useCallback(async () => {
+    if(!cfgDirtyRef.current || !authedRef.current) return;
+    if(!navigator.onLine){ setSync("pending"); return; }
+    try{ await metaPut({ cfg: cfgRef.current }); cfgDirtyRef.current=false; lsSet("cfgDirty", false); }
+    catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushCfg: "+e.message); }
+  }, []);
+
+  // Pull everything from the backend into the local cache. Dirty collections
+  // are NOT overwritten (their local edits win; the flush below pushes them).
+  const pullAll = useCallback(async () => {
+    if(!authedRef.current) return;
+    setSync("busy");
+    try{
+      const next = {...dataRef.current};
+      for(const f of FILES){
+        if(dirtyRef.current[f]){ log("SYNC","pull skipping dirty "+f); continue; }
+        next[f] = await collGet(f); lsSet("cache:"+f, next[f]);
+      }
+      setData(next); dataRef.current = next;
+      const m = await metaGet();
+      if(m && m.cfg && typeof m.cfg==="object" && !cfgDirtyRef.current){
+        const merged = {...DEFAULT_CFG, ...m.cfg};
+        setCfg(merged); lsSet("cfg", merged); cfgRef.current = merged;
+      }
+      setSync(Object.keys(dirtyRef.current).length ? "pending" : "idle"); setSyncMsg("");
+      log("SYNC","pull complete");
+      // Push anything still dirty from an offline session.
+      for(const f of Object.keys(dirtyRef.current)){ await pushFile(f); }
+      await pushCfg();
+    }catch(e){ setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message); }
+  }, [pushFile, pushCfg]);
+
+  // Flush any dirty collections + config (called on online + after sign-in).
+  const flush = useCallback(async () => {
+    if(!authedRef.current || !navigator.onLine) return;
+    for(const f of Object.keys(dirtyRef.current)){ await pushFile(f); }
+    await pushCfg();
+  }, [pushFile, pushCfg]);
+
+  // Mutate a collection: optimistic local write + persist + push.
+  const saveCollection = useCallback((file, items) => {
+    setData(prev => { const next = {...prev, [file]: items}; dataRef.current = next; return next; });
+    lsSet("cache:"+file, items);
+    setDirtyFlag(file, true);
+    pushFile(file);
+  }, [pushFile, setDirtyFlag]);
+
+  const saveCfg = useCallback((next) => {
+    setCfg(next); lsSet("cfg", next); cfgRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  // ---- auth actions ----
+  const signIn = useCallback(async (email, password) => {
+    const { error } = await supa.auth.signInWithPassword({ email:(email||"").trim(), password:password||"" });
+    if(error){ log("AUTH","sign-in failed: "+error.message); throw new Error(error.message); }
+    log("AUTH","sign-in ok");
+  }, []);
+
+  // Self-serve signup. With email confirmation ON (Supabase setting), there is
+  // no session until the user clicks the emailed link, so data.session is null
+  // and the UI shows a "check your email" state. emailRedirectTo brings the
+  // confirmation link back to THIS app (allow-list it in Supabase Auth URLs).
+  const signUp = useCallback(async (email, password) => {
+    const redirectTo = window.location.origin + window.location.pathname;
+    const { data, error } = await supa.auth.signUp({
+      email:(email||"").trim(), password:password||"",
+      options:{ emailRedirectTo: redirectTo }
+    });
+    if(error){ log("AUTH","sign-up failed: "+error.message); throw new Error(error.message); }
+    const needsConfirm = !data.session;
+    log("AUTH","sign-up ok needsConfirm="+needsConfirm);
+    return { needsConfirm };
+  }, []);
+
+  // "Forgot password?" - email a reset link. The link returns here with a
+  // recovery token; onAuthStateChange flips `recovery` to show SetPassword.
+  const requestReset = useCallback(async (email) => {
+    const redirectTo = window.location.origin + window.location.pathname;
+    const { error } = await supa.auth.resetPasswordForEmail((email||"").trim(), { redirectTo });
+    if(error){ log("AUTH","reset request failed: "+error.message); throw new Error(error.message); }
+    log("AUTH","reset email sent");
+  }, []);
+
+  // Set a new password for the current (recovery) session, then leave recovery mode.
+  const updatePassword = useCallback(async (newPassword) => {
+    const { error } = await supa.auth.updateUser({ password: newPassword });
+    if(error){ log("AUTH","updatePassword failed: "+error.message); throw new Error(error.message); }
+    setRecovery(false);
+    log("AUTH","password updated");
+  }, []);
+
+  const signOut = useCallback(async () => {
+    try{ await supa.auth.signOut(); }catch(e){ log("ERROR","signOut: "+e.message); }
+    // Clear the local cache + dirty flags so the next login starts CLEAN from
+    // the server. Prevents one account's data leaking to another on a shared
+    // device. The onAuthStateChange handler below does the state reset.
+    log("AUTH","sign-out requested");
+  }, []);
+
+  // ---- auth session wiring ----
+  useEffect(() => {
+    let mounted = true;
+    supa.auth.getSession().then(({ data }) => {
+      if(!mounted) return;
+      const s = data.session;
+      authedRef.current = !!s;
+      setAuthed(!!s); setAuthEmail(s ? (s.user.email||"") : ""); setAuthReady(true);
+      if(s){ pullAll(); }
+    }).catch(e => { log("ERROR","getSession: "+e.message); setAuthReady(true); });
+    const { data: sub } = supa.auth.onAuthStateChange((evt, session) => {
+      if(evt === "PASSWORD_RECOVERY"){ log("AUTH","password recovery link"); setRecovery(true); }
+      const was = authedRef.current;
+      authedRef.current = !!session;
+      setAuthed(!!session); setAuthEmail(session ? (session.user.email||"") : "");
+      if(session && !was){ pullAll(); }
+      else if(!session && was){
+        // Sign-out: wipe local cache so a shared device doesn't leak data.
+        FILES.forEach(f => { lsDel("cache:"+f); });
+        lsDel("dirty"); lsDel("cfg"); lsDel("cfgDirty");
+        const blank = {}; FILES.forEach(f => blank[f]=[]);
+        setData(blank); dataRef.current = blank;
+        setDirty({}); dirtyRef.current = {};
+        setCfg(DEFAULT_CFG); cfgRef.current = DEFAULT_CFG;
+        cfgDirtyRef.current = false;
+        log("AUTH","signed out (local cache + config cleared)");
+      }
+    });
+    return () => { mounted = false; sub.subscription.unsubscribe(); };
+  }, [pullAll]);
+
+  // ---- online/offline flush ----
+  useEffect(() => {
+    const goOnline = () => { setOnline(true); log("SYNC","online"); flush(); };
+    const goOffline = () => { setOnline(false); log("SYNC","offline"); setSync("pending"); };
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, [flush]);
+
+  return { data, cfg, sync, syncMsg, online, authed, authEmail, authReady, recovery,
+           saveCollection, saveCfg, pullAll, flush,
+           signIn, signUp, signOut, requestReset, updatePassword };
+}
+
+/* ============================================================
+   ICONS (inline feather-style)
+   ============================================================ */
+const Icon = ({d, size}) => (
+  <svg viewBox="0 0 24 24" width={size||22} height={size||22} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+    {d.map((p,i)=><path key={i} d={p}/>)}
+  </svg>
+);
+const ICONS = {
+  dumbbell:["M6.4 6.4v11.2","M17.6 6.4v11.2","M3.2 9.2v5.6","M20.8 9.2v5.6","M6.4 12h11.2"],
+  book:    ["M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2","M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2","M9 12h6","M9 16h6"],
+  repeat:  ["M17 1l4 4-4 4","M3 11V9a4 4 0 0 1 4-4h14","M7 23l-4-4 4-4","M21 13v2a4 4 0 0 1-4 4H3"],
+  chart:   ["M18 20V10","M12 20V4","M6 20v-6"],
+  gear:    ["M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z","M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"],
+  plus:    ["M12 5v14","M5 12h14"],
+  x:       ["M18 6L6 18","M6 6l12 12"],
+  back:    ["M19 12H5","M12 19l-7-7 7-7"],
+  refresh: ["M23 4v6h-6","M1 20v-6h6","M3.51 9a9 9 0 0 1 14.85-3.36L23 10","M1 14l4.64 4.36A9 9 0 0 0 20.49 15"],
+  eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
+  eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
+};
+
+/* ============================================================
+   PASSWORD INPUT with reveal eyeball - the shared-shell STANDARD
+   (PORTABLE-IMPROVEMENTS 2026-07-10). Used on EVERY password field.
+   ============================================================ */
+function PwInput({ value, onChange, placeholder, autoComplete, onEnter }){
+  const [show, setShow] = useState(false);
+  return (
+    <div className="pw-wrap">
+      <input className="input" type={show ? "text" : "password"} value={value}
+        autoCapitalize="off" autoComplete={autoComplete||"current-password"}
+        onChange={e=>onChange(e.target.value)} placeholder={placeholder||""}
+        onKeyDown={e=>{ if(e.key==="Enter" && onEnter) onEnter(); }} />
+      <button type="button" className="pw-eye" onClick={()=>setShow(s=>!s)}
+        aria-label={show ? "Hide password" : "Show password"}>
+        <Icon d={show ? ICONS.eyeOff : ICONS.eye} size={19}/>
+      </button>
+    </div>
+  );
+}
+
+/* ============================================================
+   AUTH SCREEN - sign in / sign up / forgot password
+   ============================================================ */
+function AuthScreen({ store }){
+  const [mode, setMode] = useState("in");     // in | up
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [ok, setOk] = useState("");
+  const [pending, setPending] = useState("");   // email awaiting confirmation
+  const [resetSent, setResetSent] = useState(false);
+
+  const submit = async () => {
+    setErr(""); setOk("");
+    if(!email.trim() || !pw){ setErr("Enter your email and password."); return; }
+    if(mode==="up" && pw.length<6){ setErr("Password must be at least 6 characters."); return; }
+    setBusy(true);
+    try{
+      if(mode==="up"){
+        const { needsConfirm } = await store.signUp(email, pw);
+        if(needsConfirm){
+          setPending(email.trim());
+          setOk("Check your inbox to confirm your email, then sign in.");
+          setMode("in");
+        }
+      } else {
+        await store.signIn(email, pw);
+        // onAuthStateChange takes over from here.
+      }
+    }catch(e){
+      let m = e.message || "Something went wrong.";
+      // Translate raw vendor errors into human copy (playbook section 5).
+      if(pending && email.trim()===pending && /invalid/i.test(m)) m = "Confirm your email first - check your inbox.";
+      else if(/only request this after/i.test(m)) m = "We just sent an email - try again in a minute.";
+      setErr(m); log("ERROR","auth: "+(e.message||m));
+    }finally{ setBusy(false); }
+  };
+
+  const forgot = async () => {
+    setErr(""); setOk("");
+    if(!email.trim()){ setErr("Enter your email above first, then tap Forgot password."); return; }
+    setBusy(true);
+    try{ await store.requestReset(email); setResetSent(true); }
+    catch(e){
+      let m = e.message || "Couldn't send the reset email.";
+      if(/only request this after/i.test(m)) m = "We just sent an email - try again in a minute.";
+      setErr(m);
+    }
+    finally{ setBusy(false); }
+  };
+
+  if(resetSent){
+    return (
+      <div className="auth-wrap">
+        <div className="auth-brand">
+          <div className="mark">Fitness<span>Captain</span></div>
+        </div>
+        <div className="auth-msg ok">
+          We sent a password-reset link to <b>{email.trim()}</b>. Tap it and you'll be able to set a new password.
+        </div>
+        <button className="btn btn-ghost btn-block" onClick={()=>{ setResetSent(false); setErr(""); setOk(""); }}>
+          Back to sign in
+        </button>
+      </div>
+    );
+  }
+
+  // The pending-confirmation trap (playbook section 5): after signup we dim
+  // the sign-in flow toward the confirm-first message rather than letting a
+  // raw "invalid credentials" confuse the user.
+  return (
+    <div className="auth-wrap">
+      <div className="auth-brand">
+        <div className="mark">Fitness<span>Captain</span></div>
+        <div className="tag">Log workouts fast. See your progress build.</div>
+      </div>
+      {!CONFIGURED &&
+        <div className="auth-msg err">This build isn't connected to a backend yet: the Supabase and API values still need to be set in index.html.</div>}
+      {err && <div className="auth-msg err">{err}</div>}
+      {ok && <div className="auth-msg ok">{ok}</div>}
+      <div className="field">
+        <label className="label">Email</label>
+        <input className="input" type="email" autoComplete="email" autoCapitalize="off" autoCorrect="off"
+          value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"
+          onKeyDown={e=>{ if(e.key==="Enter") submit(); }} />
+      </div>
+      <div className="field">
+        <label className="label">Password</label>
+        <PwInput value={pw} onChange={setPw} onEnter={submit}
+          placeholder={mode==="up" ? "At least 6 characters" : "Your password"}
+          autoComplete={mode==="up" ? "new-password" : "current-password"} />
+      </div>
+      <button className="btn btn-primary btn-block" disabled={busy || !CONFIGURED} onClick={submit}>
+        {busy ? <span className="spin"></span> : (mode==="up" ? "Create account" : "Sign in")}
+      </button>
+      <div className="auth-switch">
+        {mode==="up" ? "Already have an account? " : "New here? "}
+        <button onClick={()=>{ setMode(mode==="up"?"in":"up"); setErr(""); setOk(""); }}>
+          {mode==="up" ? "Sign in" : "Create one"}
+        </button>
+      </div>
+      {mode==="in" &&
+        <button className="auth-forgot" disabled={busy} onClick={forgot}>Forgot password?</button>}
+      <p className="hint center" style={{marginTop:18,opacity:.6}}>v{APP_VERSION}</p>
+    </div>
+  );
+}
+
+/* ============================================================
+   SET PASSWORD - shown after a password-recovery link lands here.
+   ============================================================ */
+function SetPassword({ store }){
+  const [pw, setPw] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = async () => {
+    setErr("");
+    if(pw.length<6){ setErr("Password must be at least 6 characters."); return; }
+    if(pw!==confirm){ setErr("The two passwords don't match."); return; }
+    setBusy(true);
+    try{ await store.updatePassword(pw); }
+    catch(e){ setErr(e.message||"Couldn't update the password."); }
+    finally{ setBusy(false); }
+  };
+
+  return (
+    <div className="auth-wrap">
+      <div className="auth-brand">
+        <div className="mark">Fitness<span>Captain</span></div>
+        <div className="tag">Choose a new password for {store.authEmail || "your account"}.</div>
+      </div>
+      {err && <div className="auth-msg err">{err}</div>}
+      <div className="field">
+        <label className="label">New password</label>
+        <PwInput value={pw} onChange={setPw} placeholder="At least 6 characters" autoComplete="new-password" />
+      </div>
+      <div className="field">
+        <label className="label">Confirm new password</label>
+        <PwInput value={confirm} onChange={setConfirm} placeholder="Re-enter it" autoComplete="new-password" onEnter={submit} />
+      </div>
+      <button className="btn btn-primary btn-block" disabled={busy} onClick={submit}>
+        {busy ? <span className="spin"></span> : "Update password"}
+      </button>
+    </div>
+  );
+}
+
+/* ============================================================
+   SCREENS - step-1 shell. Domain features land in build-order steps
+   2 (exercise library), 3 (workout logging), 4 (routines), 5 (progress).
+   ============================================================ */
+function WorkoutsScreen({ store }){
+  const workouts = store.data.workouts || [];
+  if(!workouts.length){
+    return (
+      <div className="empty">
+        <div className="glyph">FC</div>
+        <h3 className="title-sm">Your training log starts here</h3>
+        <p>Fast mid-workout set logging is coming next: start from a routine or an empty workout, big tap targets, pre-filled from last time.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="list">
+      {workouts.map(w => (
+        <div key={w.id} className="item">
+          <div className="item-body">
+            <div className="item-title">{w.name || "Workout"}</div>
+            <div className="item-meta">
+              {w.date && <span className="chip">{fmtDate(w.date)}</span>}
+              {Array.isArray(w.entries) && <span className="chip amber">{w.entries.length} exercise{w.entries.length===1?"":"s"}</span>}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ExercisesScreen({ store }){
+  const exercises = store.data.exercises || [];
+  if(!exercises.length){
+    return (
+      <div className="empty">
+        <div className="glyph">+</div>
+        <h3 className="title-sm">Exercise library</h3>
+        <p>A seeded library of common lifts and cardio, searchable by muscle group, arrives in the next build. You'll add your own too.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="list">
+      {exercises.map(x => (
+        <div key={x.id} className="item">
+          <div className="item-body">
+            <div className="item-title">{x.name}</div>
+            <div className="item-meta">
+              {x.type && <span className="chip amber">{x.type}</span>}
+              {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+              {x.equipment && <span className="chip">{x.equipment}</span>}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RoutinesScreen({ store }){
+  const routines = store.data.routines || [];
+  if(!routines.length){
+    return (
+      <div className="empty">
+        <div className="glyph">&gt;</div>
+        <h3 className="title-sm">Reusable routines</h3>
+        <p>Build a routine once - push day, 5x5, couch-to-5k - then start a pre-filled workout from it in one tap. Coming soon.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="list">
+      {routines.map(r => (
+        <div key={r.id} className="item">
+          <div className="item-body">
+            <div className="item-title">{r.name}</div>
+            <div className="item-meta">
+              {Array.isArray(r.items) && <span className="chip amber">{r.items.length} exercise{r.items.length===1?"":"s"}</span>}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProgressScreen(){
+  return (
+    <div className="empty">
+      <div className="glyph">^</div>
+      <h3 className="title-sm">Progress</h3>
+      <p>Per-exercise history, PRs, and weekly volume - built from your logged workouts. Coming soon.</p>
+    </div>
+  );
+}
+
+function SettingsScreen({ store, onCheckUpdate, updateState, updMsg }){
+  const [showLog, setShowLog] = useState(false);
+  const setUnits = (u) => store.saveCfg({ ...store.cfg, units: u });
+  return (
+    <div>
+      <div className="set-group">Account</div>
+      <div className="card">
+        <div className="subtle" style={{marginBottom:10}}>{store.authEmail || "Signed in"}</div>
+        <button className="btn btn-ghost btn-block" onClick={()=>store.signOut()}>Sign out</button>
+      </div>
+
+      <div className="set-group">Preferences</div>
+      <div className="card">
+        <div className="subtle">Weight units</div>
+        <div className="pills">
+          <button className={"pill "+(store.cfg.units==="lb"?"on":"")} onClick={()=>setUnits("lb")}>lb</button>
+          <button className={"pill "+(store.cfg.units==="kg"?"on":"")} onClick={()=>setUnits("kg")}>kg</button>
+        </div>
+      </div>
+
+      <div className="set-group">About</div>
+      <div className="card">
+        <div className="updrow">
+          <span className="subtle">FitnessCaptain v{APP_VERSION} (build {BUILD})</span>
+        </div>
+        <div className="updrow" style={{marginTop:8}}>
+          {updateState==="checking"
+            ? <span className="spin"></span>
+            : <button className="btn btn-ghost btn-sm" onClick={()=>onCheckUpdate(true)}><Icon d={ICONS.refresh} size={14}/> Check for updates</button>}
+          {updMsg && <span className="subtle">{updMsg}</span>}
+        </div>
+      </div>
+
+      <div className="set-group">Diagnostics</div>
+      <div className="card">
+        <button className="btn btn-ghost btn-block" onClick={()=>setShowLog(s=>!s)}>{showLog ? "Hide" : "Show"} log</button>
+        {showLog &&
+          <div className="log" style={{marginTop:12}}>
+            {LOG.slice(-120).map((l,i)=>(
+              <div key={i} className={l.tag==="ERROR"?"err":""}>
+                <span className="t">{l.t} </span><span className="tag">[{l.tag}]</span> {l.msg}
+              </div>
+            ))}
+          </div>}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   APP SHELL
+   ============================================================ */
+const TABS = [
+  { key:"workouts",  label:"Workouts",  eyebrow:"Train",    icon:ICONS.dumbbell },
+  { key:"exercises", label:"Exercises", eyebrow:"Library",  icon:ICONS.book },
+  { key:"routines",  label:"Routines",  eyebrow:"Plan",     icon:ICONS.repeat },
+  { key:"progress",  label:"Progress",  eyebrow:"Momentum", icon:ICONS.chart },
+];
+
+function App(){
+  const store = useStore();
+  const [tab, setTab] = useState("workouts");
+  const [inSettings, setInSettings] = useState(false);
+  const [toast, setToast] = useState("");
+  const toastRef = useRef();
+  const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
+
+  // --- PWA self-update: fetch the deployed index.html (no-store), read its
+  // BUILD stamp, offer a one-tap refresh when a genuinely newer build is live.
+  // Checks on launch AND resume AND a periodic timer - installed PWAs are
+  // usually RESUMED, not cold-launched (portable fix from MenuCaptain).
+  const [update, setUpdate] = useState(null);   // { build } of a newer deployed build, else null
+  const [updState, setUpdState] = useState("");
+  const [updMsg, setUpdMsg] = useState("");
+  const updTimer = useRef(null);
+  const flashUpd = useCallback((msg)=>{ setUpdMsg(msg); if(updTimer.current) clearTimeout(updTimer.current); updTimer.current = setTimeout(()=>setUpdMsg(""), 4000); },[]);
+  const checkUpdate = useCallback(async (manual=false)=>{
+    if(manual){ setUpdState("checking"); setUpdMsg(""); }
+    try{
+      const res = await fetch(location.pathname + "?_=" + Date.now(), { cache:"no-store" });
+      if(!res.ok){ log("UPDATE","check http "+res.status); if(manual){ setUpdState(""); flashUpd("Couldn't check - are you online?"); } return; }
+      const html = await res.text();
+      const mb = html.match(/const BUILD = "([^"]+)";/);
+      const remote = mb && mb[1];
+      if(remote && buildIsNewer(remote, BUILD)){
+        log("UPDATE","newer build live: "+remote);
+        setUpdate({ build: remote });
+        if(manual) setUpdState("");
+      } else {
+        log("UPDATE","up to date (v"+APP_VERSION+", "+BUILD+")");
+        setUpdate(null);
+        if(manual){ setUpdState(""); flashUpd("You're on the latest (v"+APP_VERSION+")"); }
+      }
+    }catch(e){ log("UPDATE","check failed: "+e.message); if(manual){ setUpdState(""); flashUpd("Update check failed"); } }
+  },[flashUpd]);
+  useEffect(()=>{
+    let last=0; const GAP=60*1000;
+    const maybe=()=>{ const now=Date.now(); if(now-last<GAP) return; last=now; checkUpdate(false); };
+    const t=setTimeout(maybe, 1500);                       // initial launch check
+    const onVis=()=>{ if(document.visibilityState==="visible") maybe(); };
+    document.addEventListener("visibilitychange", onVis);
+    const iv=setInterval(maybe, 20*60*1000);               // periodic while open
+    return ()=>{ clearTimeout(t); clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  },[checkUpdate]);
+
+  // Service worker: app-shell offline caching. Registered with a RELATIVE path
+  // so the scope is /fitnesscaptain-app/ on GitHub Pages ("/sw.js" would 404).
+  // Deliberately no web manifest (template decision): without one, Add to Home
+  // Screen uses the current page URL as the launch URL.
+  useEffect(()=>{
+    if(!("serviceWorker" in navigator)) return;
+    const onLoad = ()=>{ navigator.serviceWorker.register("sw.js")
+      .then(()=>log("SW","registered"))
+      .catch(e=>log("SW","register failed: "+(e&&e.message))); };
+    if(document.readyState==="complete") onLoad(); else window.addEventListener("load", onLoad);
+    return ()=>window.removeEventListener("load", onLoad);
+  },[]);
+
+  // Apply by navigating to a build-stamped URL so iOS can't serve cached HTML.
+  // Wipe the SW caches first so the new build is never masked by a cached shell.
+  function applyUpdate(){
+    const stamp=(update&&update.build)||String(Date.now());
+    log("UPDATE","applying -> "+stamp);
+    try{ if(navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage("clearCache"); }catch(_){}
+    window.location.replace(location.pathname + "?u=" + encodeURIComponent(stamp));
+  }
+
+  if(!store.authReady){
+    return <div className="app"><div className="spin spin-lg"></div></div>;
+  }
+  if(store.recovery){
+    return <SetPassword store={store} />;
+  }
+  if(!store.authed){
+    return <AuthScreen store={store} />;
+  }
+
+  const activeTab = TABS.find(t=>t.key===tab) || TABS[0];
+
+  return (
+    <div className="app">
+      {update &&
+        <button className="update-bar" onClick={applyUpdate}>
+          <span>A new version of FitnessCaptain is ready.</span>
+          <span className="update-go">Update</span>
+        </button>}
+
+      <div className="topbar">
+        <div className="topbar-row">
+          <div>
+            <div className="eyebrow">{inSettings ? "Configure" : activeTab.eyebrow}</div>
+            <h1 className="title">{inSettings ? "Settings" : activeTab.label}</h1>
+          </div>
+          <button className="icon-btn" onClick={()=>setInSettings(s=>!s)} aria-label="Settings">
+            <Icon d={inSettings ? ICONS.back : ICONS.gear} size={21}/>
+          </button>
+        </div>
+        <div className={"sync "+store.sync}>
+          <span className="dot"></span>
+          {store.sync==="idle" && "All changes saved"}
+          {store.sync==="busy" && "Syncing..."}
+          {store.sync==="pending" && "Offline - will sync"}
+          {store.sync==="error" && (store.syncMsg || "Sync error")}
+        </div>
+      </div>
+
+      <div className="screen">
+        {inSettings
+          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg} />
+          : <>
+              {tab==="workouts"  && <WorkoutsScreen store={store} />}
+              {tab==="exercises" && <ExercisesScreen store={store} />}
+              {tab==="routines"  && <RoutinesScreen store={store} />}
+              {tab==="progress"  && <ProgressScreen />}
+            </>}
+      </div>
+
+      {!inSettings &&
+        <nav className="nav">
+          {TABS.map(t => (
+            <button key={t.key} className={"nav-btn "+(tab===t.key?"on":"")} onClick={()=>setTab(t.key)}>
+              <Icon d={t.icon} size={22}/>
+              {t.label}
+            </button>
+          ))}
+        </nav>}
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
