@@ -156,6 +156,14 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;}
 .pill{padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--bg-2);border:1px solid var(--line-2);color:var(--ink-3);transition:.15s;}
 .pill.on{background:var(--amber);color:#241505;border-color:var(--amber);}
+/* horizontal (scrolling) filter pill row + search field with clear (x) */
+.pills-row{display:flex;gap:7px;overflow-x:auto;margin-top:10px;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
+.pills-row::-webkit-scrollbar{display:none;}
+.pills-row .pill{flex:0 0 auto;}
+.search-wrap{position:relative;margin-top:12px;}
+.search-wrap .input{padding-right:44px;}
+.search-x{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--ink-3);}
+.search-x svg{width:16px;height:16px;}
 
 /* empty state */
 .empty{text-align:center;padding:56px 20px;color:var(--ink-3);}
@@ -241,10 +249,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.2.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-20.1";
+const BUILD = "2026-07-20.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -395,7 +403,92 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
    DOMAIN CONSTANTS
    ============================================================ */
 // Per-user config living in meta.cfg. units applies to logged weights.
+// exercisesSeeded flags the one-time starter-library seed (so a user who
+// deletes everything stays empty).
 const DEFAULT_CFG = { appName:"FitnessCaptain", units:"lb" };
+
+const EXERCISE_TYPES = ["strength","cardio","mobility"];
+const MUSCLE_GROUPS = ["Chest","Back","Shoulders","Arms","Legs","Glutes","Core","Full body"];
+const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
+function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
+
+// Starter library (~55 common movements). Stable "x-" ids so the seed is
+// idempotent and future features can reference them. Users add their own
+// (custom:true) and can edit or delete anything, seed included.
+function EXERCISE_SEED(){
+  const mk = (id, name, group, equip, type) => ({
+    id, name, type: type||"strength", muscleGroup: group, equipment: equip,
+    notes:"", custom:false, createdAt: nowISO(), updatedAt: nowISO(),
+  });
+  return [
+    // Chest
+    mk("x-bench-press","Bench Press","Chest","barbell"),
+    mk("x-incline-bench-press","Incline Bench Press","Chest","barbell"),
+    mk("x-db-bench-press","Dumbbell Bench Press","Chest","dumbbell"),
+    mk("x-chest-fly","Chest Fly","Chest","dumbbell"),
+    mk("x-push-up","Push-Up","Chest","bodyweight"),
+    mk("x-dip","Dip","Chest","bodyweight"),
+    // Back
+    mk("x-deadlift","Deadlift","Back","barbell"),
+    mk("x-pull-up","Pull-Up","Back","bodyweight"),
+    mk("x-bent-over-row","Bent-Over Row","Back","barbell"),
+    mk("x-db-row","Dumbbell Row","Back","dumbbell"),
+    mk("x-lat-pulldown","Lat Pulldown","Back","machine"),
+    mk("x-seated-cable-row","Seated Cable Row","Back","cable"),
+    mk("x-face-pull","Face Pull","Back","cable"),
+    // Shoulders
+    mk("x-overhead-press","Overhead Press","Shoulders","barbell"),
+    mk("x-db-shoulder-press","Dumbbell Shoulder Press","Shoulders","dumbbell"),
+    mk("x-lateral-raise","Lateral Raise","Shoulders","dumbbell"),
+    mk("x-rear-delt-fly","Rear Delt Fly","Shoulders","dumbbell"),
+    mk("x-shrug","Shrug","Shoulders","dumbbell"),
+    // Arms
+    mk("x-barbell-curl","Barbell Curl","Arms","barbell"),
+    mk("x-db-curl","Dumbbell Curl","Arms","dumbbell"),
+    mk("x-hammer-curl","Hammer Curl","Arms","dumbbell"),
+    mk("x-triceps-pushdown","Triceps Pushdown","Arms","cable"),
+    mk("x-skull-crusher","Skull Crusher","Arms","barbell"),
+    mk("x-overhead-triceps-ext","Overhead Triceps Extension","Arms","dumbbell"),
+    // Legs
+    mk("x-back-squat","Back Squat","Legs","barbell"),
+    mk("x-front-squat","Front Squat","Legs","barbell"),
+    mk("x-goblet-squat","Goblet Squat","Legs","dumbbell"),
+    mk("x-leg-press","Leg Press","Legs","machine"),
+    mk("x-walking-lunge","Walking Lunge","Legs","dumbbell"),
+    mk("x-bulgarian-split-squat","Bulgarian Split Squat","Legs","dumbbell"),
+    mk("x-romanian-deadlift","Romanian Deadlift","Legs","barbell"),
+    mk("x-leg-curl","Leg Curl","Legs","machine"),
+    mk("x-calf-raise","Calf Raise","Legs","machine"),
+    // Glutes
+    mk("x-hip-thrust","Hip Thrust","Glutes","barbell"),
+    mk("x-glute-bridge","Glute Bridge","Glutes","bodyweight"),
+    // Core
+    mk("x-plank","Plank","Core","bodyweight"),
+    mk("x-crunch","Crunch","Core","bodyweight"),
+    mk("x-hanging-leg-raise","Hanging Leg Raise","Core","bodyweight"),
+    mk("x-russian-twist","Russian Twist","Core","bodyweight"),
+    mk("x-ab-wheel-rollout","Ab Wheel Rollout","Core","other"),
+    // Full body strength
+    mk("x-kettlebell-swing","Kettlebell Swing","Full body","kettlebell"),
+    mk("x-clean-and-press","Clean and Press","Full body","barbell"),
+    mk("x-thruster","Thruster","Full body","barbell"),
+    mk("x-farmers-carry","Farmer's Carry","Full body","dumbbell"),
+    // Cardio
+    mk("x-running","Running","Full body","none","cardio"),
+    mk("x-treadmill-run","Treadmill Run","Full body","treadmill","cardio"),
+    mk("x-cycling","Cycling","Full body","bike","cardio"),
+    mk("x-stationary-bike","Stationary Bike","Full body","bike","cardio"),
+    mk("x-rowing","Rowing","Full body","rower","cardio"),
+    mk("x-jump-rope","Jump Rope","Full body","other","cardio"),
+    mk("x-swimming","Swimming","Full body","none","cardio"),
+    mk("x-walking","Walking","Full body","none","cardio"),
+    mk("x-burpee","Burpee","Full body","bodyweight","cardio"),
+    // Mobility
+    mk("x-foam-rolling","Foam Rolling","Full body","other","mobility"),
+    mk("x-yoga-flow","Yoga Flow","Full body","none","mobility"),
+    mk("x-full-body-stretch","Full-Body Stretch","Full body","none","mobility"),
+  ];
+}
 
 /* ============================================================
    DATA STORE HOOK
@@ -465,13 +558,27 @@ function useStore(){
         const merged = {...DEFAULT_CFG, ...m.cfg};
         setCfg(merged); lsSet("cfg", merged); cfgRef.current = merged;
       }
+      // One-time starter seed: an empty library after a clean pull gets the
+      // ~55 common movements. The cfg flag makes it once-per-account, so a
+      // user who deletes everything is respected.
+      if(!(next.exercises||[]).length && !dirtyRef.current.exercises && !cfgRef.current.exercisesSeeded){
+        const seeded = EXERCISE_SEED();
+        const withSeed = {...dataRef.current, exercises: seeded};
+        setData(withSeed); dataRef.current = withSeed;
+        lsSet("cache:exercises", seeded);
+        setDirtyFlag("exercises", true);
+        const flagged = {...cfgRef.current, exercisesSeeded: true};
+        setCfg(flagged); lsSet("cfg", flagged); cfgRef.current = flagged;
+        cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+        log("SEED","exercise library seeded ("+seeded.length+")");
+      }
       setSync(Object.keys(dirtyRef.current).length ? "pending" : "idle"); setSyncMsg("");
       log("SYNC","pull complete");
-      // Push anything still dirty from an offline session.
+      // Push anything still dirty (offline edits or the fresh seed).
       for(const f of Object.keys(dirtyRef.current)){ await pushFile(f); }
       await pushCfg();
     }catch(e){ setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message); }
-  }, [pushFile, pushCfg]);
+  }, [pushFile, pushCfg, setDirtyFlag]);
 
   // Flush any dirty collections + config (called on online + after sign-in).
   const flush = useCallback(async () => {
@@ -811,32 +918,160 @@ function WorkoutsScreen({ store }){
   );
 }
 
-function ExercisesScreen({ store }){
+function ExercisesScreen({ store, onAdd, onEdit }){
+  const [q, setQ] = useState("");
+  const [typeF, setTypeF] = useState("all");
+  const [groupF, setGroupF] = useState("all");
   const exercises = store.data.exercises || [];
+
   if(!exercises.length){
     return (
       <div className="empty">
         <div className="glyph">+</div>
         <h3 className="title-sm">Exercise library</h3>
-        <p>A seeded library of common lifts and cardio, searchable by muscle group, arrives in the next build. You'll add your own too.</p>
+        <p>The starter library loads on your first sync. Add your own any time.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.plus} size={16}/> Add an exercise
+        </button>
       </div>
     );
   }
+
+  const needle = q.trim().toLowerCase();
+  const filtered = exercises
+    .filter(x => typeF==="all" || x.type===typeF)
+    .filter(x => groupF==="all" || x.muscleGroup===groupF)
+    .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1 ||
+                 (x.equipment||"").toLowerCase().indexOf(needle)!==-1)
+    .slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+
   return (
-    <div className="list">
-      {exercises.map(x => (
-        <div key={x.id} className="item">
-          <div className="item-body">
-            <div className="item-title">{x.name}</div>
-            <div className="item-meta">
-              {x.type && <span className="chip amber">{x.type}</span>}
-              {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
-              {x.equipment && <span className="chip">{x.equipment}</span>}
-            </div>
+    <div>
+      <div className="search-wrap">
+        <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+          placeholder="Search exercises" autoCapitalize="off" autoCorrect="off" />
+        {q &&
+          <button className="search-x" onClick={()=>setQ("")} aria-label="Clear search">
+            <Icon d={ICONS.x} size={16}/>
+          </button>}
+      </div>
+      <div className="pills-row">
+        {["all"].concat(EXERCISE_TYPES).map(t =>
+          <button key={t} className={"pill "+(typeF===t?"on":"")} onClick={()=>setTypeF(t)}>
+            {t==="all" ? "All types" : t.charAt(0).toUpperCase()+t.slice(1)}
+          </button>)}
+      </div>
+      <div className="pills-row">
+        {["all"].concat(MUSCLE_GROUPS).map(g =>
+          <button key={g} className={"pill "+(groupF===g?"on":"")} onClick={()=>setGroupF(g)}>
+            {g==="all" ? "All muscles" : g}
+          </button>)}
+      </div>
+      {!filtered.length
+        ? <div className="empty" style={{padding:"36px 20px"}}>
+            <h3 className="title-sm">No matches</h3>
+            <p>Nothing fits that search and filter combination.</p>
+          </div>
+        : <div className="list">
+            {filtered.map(x => (
+              <button key={x.id} className="item" onClick={()=>onEdit(x)}>
+                <div className="item-body">
+                  <div className="item-title">{x.name}</div>
+                  <div className="item-meta">
+                    <span className={"chip "+typeClass(x.type)}>{x.type}</span>
+                    {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+                    {x.equipment && x.equipment!=="none" && <span className="chip">{x.equipment}</span>}
+                    {x.custom && <span className="chip violet">custom</span>}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>}
+      <p className="hint center" style={{marginTop:14,opacity:.7}}>
+        {filtered.length} of {exercises.length} exercises
+      </p>
+    </div>
+  );
+}
+
+/* Add/edit one exercise. Deleting is allowed for seed items too - the
+   once-per-account seed flag means they stay deleted. */
+function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
+  const [name, setName] = useState(exercise ? (exercise.name||"") : "");
+  const [type, setType] = useState(exercise ? (exercise.type||"strength") : "strength");
+  const [group, setGroup] = useState(exercise ? (exercise.muscleGroup||"Full body") : "Full body");
+  const [equip, setEquip] = useState(exercise ? (exercise.equipment||"none") : "none");
+  const [notes, setNotes] = useState(exercise ? (exercise.notes||"") : "");
+
+  const save = () => {
+    if(!name.trim()) return;
+    onSave({
+      id: exercise ? exercise.id : uid(),
+      name: name.trim(), type, muscleGroup: group, equipment: equip,
+      notes: notes.trim(),
+      custom: exercise ? (exercise.custom!==false) : true,
+      createdAt: exercise ? (exercise.createdAt||nowISO()) : nowISO(),
+      updatedAt: nowISO(),
+    });
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{exercise ? "Edit exercise" : "Add an exercise"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <div className="title-field">
+          <label className="label">Name</label>
+          <input className="title-input" value={name} onChange={e=>setName(e.target.value)}
+            placeholder="e.g. Incline Dumbbell Press" autoFocus={!exercise} />
+        </div>
+
+        <div className="field">
+          <label className="label">Type</label>
+          <div className="pills" style={{marginTop:4}}>
+            {EXERCISE_TYPES.map(t =>
+              <button key={t} className={"pill "+(type===t?"on":"")} onClick={()=>setType(t)}>
+                {t.charAt(0).toUpperCase()+t.slice(1)}
+              </button>)}
           </div>
         </div>
-      ))}
-    </div>
+
+        <div className="row">
+          <div className="field">
+            <label className="label">Muscle group</label>
+            <select className="select" value={group} onChange={e=>setGroup(e.target.value)}>
+              {MUSCLE_GROUPS.map(g=><option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label className="label">Equipment</label>
+            <select className="select" value={equip} onChange={e=>setEquip(e.target.value)}>
+              {EQUIPMENT.map(g=><option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Notes</label>
+          <textarea className="textarea" value={notes} onChange={e=>setNotes(e.target.value)}
+            placeholder="Form cues, seat settings, anything worth remembering." />
+        </div>
+
+        <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>
+          {exercise ? "Save changes" : "Add exercise"}
+        </button>
+        {exercise &&
+          <button className="btn btn-danger btn-block" style={{marginTop:10}}
+            onClick={()=>{ if(confirm("Delete this exercise? Logged workouts keep their history.")) onDelete(exercise.id); }}>
+            Delete exercise
+          </button>}
+      </div>
+    </>
   );
 }
 
@@ -940,9 +1175,24 @@ function App(){
   const store = useStore();
   const [tab, setTab] = useState("workouts");
   const [inSettings, setInSettings] = useState(false);
+  const [exSheet, setExSheet] = useState(null);   // null | {exercise: rec|null}
   const [toast, setToast] = useState("");
   const toastRef = useRef();
   const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
+
+  // ---- exercise CRUD ----
+  const saveExercise = (rec) => {
+    const list = store.data.exercises || [];
+    const exists = list.some(x => x.id === rec.id);
+    store.saveCollection("exercises", exists ? list.map(x => x.id===rec.id ? rec : x) : [rec, ...list]);
+    setExSheet(null);
+    showToast(exists ? "Exercise updated" : "Exercise added");
+  };
+  const deleteExercise = (id) => {
+    store.saveCollection("exercises", (store.data.exercises||[]).filter(x => x.id !== id));
+    setExSheet(null);
+    showToast("Exercise deleted");
+  };
 
   // --- PWA self-update: fetch the deployed index.html (no-store), read its
   // BUILD stamp, offer a one-tap refresh when a genuinely newer build is live.
@@ -1048,11 +1298,17 @@ function App(){
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg} />
           : <>
               {tab==="workouts"  && <WorkoutsScreen store={store} />}
-              {tab==="exercises" && <ExercisesScreen store={store} />}
+              {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
               {tab==="routines"  && <RoutinesScreen store={store} />}
               {tab==="progress"  && <ProgressScreen />}
             </>}
       </div>
+
+      {!inSettings && tab==="exercises" && !exSheet &&
+        <button className="fab" onClick={()=>setExSheet({exercise:null})} aria-label="Add exercise"><Icon d={ICONS.plus} size={26}/></button>}
+
+      {exSheet &&
+        <ExerciseSheet exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
 
       {!inSettings &&
         <nav className="nav">
