@@ -165,6 +165,44 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .search-x{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--ink-3);}
 .search-x svg{width:16px;height:16px;}
 
+/* ---------- workout editor (full-screen overlay) ---------- */
+.editor{position:fixed;inset:0;z-index:70;background:var(--bg);overflow-y:auto;animation:fade .25s var(--ease);}
+.editor-inner{max-width:680px;margin:0 auto;padding:0 18px 140px;}
+.editor-top{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,var(--bg) 72%,transparent);
+  padding:calc(env(safe-area-inset-top) + 12px) 0 10px;display:flex;align-items:center;gap:10px;}
+.editor-title{flex:1;min-width:0;}
+.editor-title input{width:100%;background:none;border:none;outline:none;color:var(--ink);
+  font-family:'Fraunces',Georgia,serif;font-size:23px;font-weight:600;padding:0;}
+.elapsed{font-size:12px;color:var(--ink-3);font-weight:600;letter-spacing:.05em;margin-top:1px;}
+.entry{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--radius);padding:13px 14px;margin-top:12px;}
+.entry-head{display:flex;align-items:flex-start;gap:8px;}
+.entry-name{flex:1;min-width:0;font-weight:600;font-size:16px;}
+.entry-last{font-size:11.5px;color:var(--ink-3);margin-top:2px;font-weight:500;}
+.entry-x{flex:0 0 auto;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--ink-3);}
+.entry-x svg{width:15px;height:15px;}
+.set-row{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);font-size:14.5px;width:100%;text-align:left;}
+.set-num{width:46px;flex:0 0 auto;color:var(--ink-3);font-size:11px;font-weight:700;letter-spacing:.07em;}
+.set-main{flex:1;min-width:0;font-weight:600;}
+.set-row.sel .set-main{color:var(--amber-2);}
+.set-x{width:30px;height:30px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:var(--ink-3);border-radius:50%;}
+.set-x svg{width:13px;height:13px;}
+.logger{margin-top:10px;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px;}
+.stepper{display:flex;align-items:center;gap:8px;margin-top:8px;}
+.stepper .lbl{width:56px;flex:0 0 auto;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;}
+.step-btn{width:46px;height:46px;border-radius:50%;background:var(--bg-4);border:1px solid var(--line-2);
+  display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--ink);flex:0 0 auto;line-height:1;}
+.step-btn:active{background:var(--amber-dim);border-color:var(--amber-line);}
+.step-val{flex:1;text-align:center;background:none;border:none;outline:none;color:var(--ink);font-size:22px;font-weight:700;min-width:0;}
+.rest{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(26px + env(safe-area-inset-bottom));z-index:75;
+  background:var(--amber);color:#241505;border-radius:999px;padding:11px 24px;font-weight:800;font-size:15px;
+  box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;border:none;}
+/* nested full-screen layer (e.g. exercise picker inside the editor) */
+.layer{position:fixed;inset:0;z-index:80;background:var(--bg);overflow-y:auto;animation:fade .2s;}
+.layer-inner{max-width:680px;margin:0 auto;padding:0 18px 40px;}
+.layer-top{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,var(--bg) 72%,transparent);
+  padding:calc(env(safe-area-inset-top) + 12px) 0 8px;display:flex;align-items:center;gap:12px;}
+.layer-top h2{font-size:21px;}
+
 /* empty state */
 .empty{text-align:center;padding:56px 20px;color:var(--ink-3);}
 .empty .glyph{font-family:'Fraunces';font-size:44px;color:var(--line-2);margin-bottom:10px;}
@@ -249,10 +287,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.2.0";
+const APP_VERSION = "0.3.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-20.2";
+const BUILD = "2026-07-20.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -280,6 +318,29 @@ function fmtDate(iso){
   return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
 }
 function todayStr(){ const d=new Date(), p=n=>String(n).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function fmtNum(n){ const x = Number(n); return isNaN(x) ? String(n) : x.toLocaleString(); }
+// Trim a float for display: 137.5 -> "137.5", 135.0 -> "135".
+function fmtW(n){ const x = Number(n)||0; return (Math.round(x*100)/100).toString(); }
+function fmtClock(totalSecs){
+  const s = Math.max(0, Math.round(totalSecs));
+  const m = Math.floor(s/60), r = s%60;
+  return m + ":" + String(r).padStart(2,"0");
+}
+function dayPartName(){
+  const h = new Date().getHours();
+  return (h<11 ? "Morning" : h<17 ? "Afternoon" : "Evening") + " workout";
+}
+// Total weight moved in a workout (strength sets only).
+function workoutVolume(w){
+  let v = 0;
+  for(const e of (w.entries||[])) for(const s of (e.sets||[])) v += (Number(s.reps)||0)*(Number(s.weight)||0);
+  return v;
+}
+function workoutSets(w){
+  let n = 0;
+  for(const e of (w.entries||[])) n += (e.sets||[]).length;
+  return n;
+}
 
 /* ============================================================
    LOCAL STORAGE LAYER (namespaced "fitnesscaptain:")
@@ -890,30 +951,66 @@ function SetPassword({ store }){
    SCREENS - step-1 shell. Domain features land in build-order steps
    2 (exercise library), 3 (workout logging), 4 (routines), 5 (progress).
    ============================================================ */
-function WorkoutsScreen({ store }){
-  const workouts = store.data.workouts || [];
+function WorkoutsScreen({ store, onStart, onOpen }){
+  const units = store.cfg.units || "lb";
+  const workouts = (store.data.workouts||[]).slice()
+    .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+  const activeW = workouts.find(w=>!w.endedAt);
+  const done = workouts.filter(w=>w.endedAt);
+
   if(!workouts.length){
     return (
       <div className="empty">
         <div className="glyph">FC</div>
         <h3 className="title-sm">Your training log starts here</h3>
-        <p>Fast mid-workout set logging is coming next: start from a routine or an empty workout, big tap targets, pre-filled from last time.</p>
+        <p>Start a workout, add exercises, and log sets with two taps. Everything pre-fills from last time.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onStart}>
+          <Icon d={ICONS.plus} size={16}/> Start a workout
+        </button>
       </div>
     );
   }
+
   return (
-    <div className="list">
-      {workouts.map(w => (
-        <div key={w.id} className="item">
-          <div className="item-body">
-            <div className="item-title">{w.name || "Workout"}</div>
-            <div className="item-meta">
-              {w.date && <span className="chip">{fmtDate(w.date)}</span>}
-              {Array.isArray(w.entries) && <span className="chip amber">{w.entries.length} exercise{w.entries.length===1?"":"s"}</span>}
+    <div>
+      {activeW
+        ? <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
+            <div className="item-body">
+              <div className="item-title" style={{color:"var(--amber-2)"}}>Workout in progress</div>
+              <div className="item-meta">
+                <span className="chip amber">{activeW.name}</span>
+                <span className="chip">{(activeW.entries||[]).length} exercise{(activeW.entries||[]).length===1?"":"s"}</span>
+                <span className="chip">{workoutSets(activeW)} sets</span>
+              </div>
             </div>
+          </button>
+        : <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={onStart}>
+            <Icon d={ICONS.plus} size={16}/> Start a workout
+          </button>}
+
+      {!done.length
+        ? <div className="empty" style={{padding:"40px 20px"}}>
+            <p>Finished workouts show up here as your history.</p>
           </div>
-        </div>
-      ))}
+        : <div className="list">
+            {done.map(w => {
+              const vol = workoutVolume(w);
+              return (
+                <button key={w.id} className="item" onClick={()=>onOpen(w)}>
+                  <div className="item-body">
+                    <div className="item-title">{w.name || "Workout"}</div>
+                    <div className="item-meta">
+                      <span className="chip">{fmtDate(w.date)}</span>
+                      <span className="chip amber">{(w.entries||[]).length} exercise{(w.entries||[]).length===1?"":"s"}</span>
+                      {workoutSets(w)>0 && <span className="chip">{workoutSets(w)} sets</span>}
+                      {vol>0 && <span className="chip">{fmtNum(vol)} {units}</span>}
+                      {w.durationMin>0 && <span className="chip">{w.durationMin} min</span>}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>}
     </div>
   );
 }
@@ -1075,6 +1172,282 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
   );
 }
 
+/* ============================================================
+   WORKOUT LOGGING - the product. Big tap targets, pre-filled from last
+   time, +/- steppers, rest timer. One JSONB doc per workout.
+   ============================================================ */
+function Stepper({ label, value, onChange, step, min }){
+  const clamp = v => Math.max(min===undefined?0:min, Math.round(v*100)/100);
+  return (
+    <div className="stepper">
+      <span className="lbl">{label}</span>
+      <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)-step))} aria-label={"Decrease "+label}>-</button>
+      <input className="step-val" inputMode="decimal" value={String(value)}
+        onChange={e=>{ const v=parseFloat(e.target.value); onChange(isNaN(v)?0:clamp(v)); }} />
+      <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)+step))} aria-label={"Increase "+label}>+</button>
+    </div>
+  );
+}
+
+/* One exercise inside a workout. Strength: reps x weight sets. Cardio and
+   mobility: minutes + distance. The steppers seed from the last set here,
+   else from the previous workout ("same as last time"), else defaults. */
+function EntryCard({ entry, prev, units, active, onUpdate, onRemove, onSetLogged }){
+  const isCardio = entry.type!=="strength";
+  const wStep = units==="kg" ? 2.5 : 5;
+  const sets = entry.sets || [];
+  const seed = sets.length ? sets[sets.length-1]
+             : (prev && prev.sets && prev.sets.length ? prev.sets[prev.sets.length-1] : { reps:10, weight:0 });
+  const [reps, setReps]   = useState(Number(seed.reps)||0);
+  const [weight, setWeight] = useState(Number(seed.weight)||0);
+  const [mins, setMins]   = useState(entry.cardio ? Number(entry.cardio.minutes)||0 : 20);
+  const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
+  const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
+
+  const logSet = () => {
+    const next = sets.slice();
+    if(selIdx>=0 && selIdx<next.length){ next[selIdx] = { reps, weight }; setSelIdx(-1); }
+    else { next.push({ reps, weight }); onSetLogged(); }
+    onUpdate(e => ({ ...e, sets: next }));
+  };
+  const pickSet = (i) => {
+    if(!active) return;
+    if(selIdx===i){ setSelIdx(-1); return; }
+    setSelIdx(i); setReps(Number(sets[i].reps)||0); setWeight(Number(sets[i].weight)||0);
+  };
+  const removeSet = (i) => {
+    onUpdate(e => ({ ...e, sets: (e.sets||[]).filter((_,j)=>j!==i) }));
+    if(selIdx===i) setSelIdx(-1);
+  };
+  const saveCardio = () => {
+    onUpdate(e => ({ ...e, cardio: { minutes: mins, distance: dist, unit: units==="kg" ? "km" : "mi" } }));
+  };
+
+  return (
+    <div className="entry">
+      <div className="entry-head">
+        <div style={{flex:1,minWidth:0}}>
+          <div className="entry-name">{entry.name}</div>
+          {prev && !isCardio &&
+            <div className="entry-last">
+              Last time: {prev.sets.length} set{prev.sets.length===1?"":"s"}, best {prev.best.reps} x {fmtW(prev.best.weight)} {units}
+            </div>}
+        </div>
+        {active &&
+          <button className="entry-x" onClick={onRemove} aria-label={"Remove "+entry.name}>
+            <Icon d={ICONS.x} size={15}/>
+          </button>}
+      </div>
+
+      {!isCardio && sets.map((s,i)=>(
+        <button key={i} className={"set-row "+(selIdx===i?"sel":"")} onClick={()=>pickSet(i)}>
+          <span className="set-num">SET {i+1}</span>
+          <span className="set-main">{s.reps} x {fmtW(s.weight)} {units}</span>
+          {active &&
+            <span className="set-x" onClick={(ev)=>{ ev.stopPropagation(); removeSet(i); }} role="button" aria-label={"Delete set "+(i+1)}>
+              <Icon d={ICONS.x} size={13}/>
+            </span>}
+        </button>
+      ))}
+      {isCardio && entry.cardio &&
+        <div className="set-row" style={{cursor:"default"}}>
+          <span className="set-num">DONE</span>
+          <span className="set-main">
+            {entry.cardio.minutes} min{Number(entry.cardio.distance)>0 ? " - "+fmtW(entry.cardio.distance)+" "+(entry.cardio.unit||"mi") : ""}
+          </span>
+        </div>}
+
+      {active && !isCardio &&
+        <div className="logger">
+          <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0}/>
+          <Stepper label={"Weight ("+units+")"} value={weight} onChange={setWeight} step={wStep} min={0}/>
+          <button className="btn btn-primary btn-block log-set-btn" style={{marginTop:12}} onClick={logSet}>
+            {selIdx>=0 ? "Update set "+(selIdx+1) : "Log set "+(sets.length+1)}
+          </button>
+          {selIdx>=0 &&
+            <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:8}} onClick={()=>setSelIdx(-1)}>
+              Cancel edit
+            </button>}
+        </div>}
+      {active && isCardio &&
+        <div className="logger">
+          <Stepper label="Minutes" value={mins} onChange={setMins} step={5} min={0}/>
+          <Stepper label={"Dist ("+(units==="kg"?"km":"mi")+")"} value={dist} onChange={setDist} step={0.25} min={0}/>
+          <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={saveCardio}>
+            {entry.cardio ? "Update" : "Save"}
+          </button>
+        </div>}
+    </div>
+  );
+}
+
+/* Nested full-screen layer: pick an exercise from the library (or create one
+   on the spot). Rendered INSIDE the editor at a higher z-index so the editor
+   keeps its state (playbook rule: no two screens on one overlay variable). */
+function ExercisePicker({ store, onPick, onCreate, onClose }){
+  const [q, setQ] = useState("");
+  const [groupF, setGroupF] = useState("all");
+  const needle = q.trim().toLowerCase();
+  const list = (store.data.exercises||[])
+    .filter(x => groupF==="all" || x.muscleGroup===groupF)
+    .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
+    .slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2>Add exercise</h2>
+        </div>
+        <div className="search-wrap" style={{marginTop:4}}>
+          <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+            placeholder="Search the library" autoCapitalize="off" autoCorrect="off" autoFocus />
+          {q &&
+            <button className="search-x" onClick={()=>setQ("")} aria-label="Clear search">
+              <Icon d={ICONS.x} size={16}/>
+            </button>}
+        </div>
+        <div className="pills-row">
+          {["all"].concat(MUSCLE_GROUPS).map(g =>
+            <button key={g} className={"pill "+(groupF===g?"on":"")} onClick={()=>setGroupF(g)}>
+              {g==="all" ? "All muscles" : g}
+            </button>)}
+        </div>
+        {q.trim().length>1 && !list.some(x=>(x.name||"").toLowerCase()===needle) &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:12}} onClick={()=>onCreate(q.trim())}>
+            <Icon d={ICONS.plus} size={15}/> Create "{q.trim()}"
+          </button>}
+        <div className="list">
+          {list.map(x => (
+            <button key={x.id} className="item" onClick={()=>onPick(x)}>
+              <div className="item-body">
+                <div className="item-title">{x.name}</div>
+                <div className="item-meta">
+                  <span className={"chip "+typeClass(x.type)}>{x.type}</span>
+                  {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
+   Finish. Finished: view/edit history + delete. */
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
+  const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
+  const [picker, setPicker] = useState(false);
+  const [restUntil, setRestUntil] = useState(0);
+  const [, setTick] = useState(0);
+  useEffect(()=>{ const iv=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(iv); },[]);
+  if(!workout) return null;
+
+  const active = !workout.endedAt;
+  const units = store.cfg.units || "lb";
+  const restSecs = store.cfg.restSecs===undefined ? 90 : store.cfg.restSecs;
+
+  const patch = (p) => {
+    store.saveCollection("workouts",
+      (store.data.workouts||[]).map(w => w.id===workout.id ? { ...w, ...p, updatedAt: nowISO() } : w));
+  };
+  const updateEntry = (id, fn) => patch({ entries: (workout.entries||[]).map(e => e.id===id ? fn(e) : e) });
+  const removeEntry = (id) => {
+    const e = (workout.entries||[]).find(x=>x.id===id);
+    if(e && ((e.sets||[]).length || e.cardio) && !confirm("Remove "+e.name+" and its logged sets?")) return;
+    patch({ entries: (workout.entries||[]).filter(x=>x.id!==id) });
+  };
+  const addExercise = (x) => {
+    patch({ entries: [...(workout.entries||[]), { id: uid(), exerciseId: x.id, name: x.name, type: x.type, sets: [], cardio: null }] });
+    setPicker(false);
+  };
+  const createAndAdd = (name) => {
+    const x = { id: uid(), name, type:"strength", muscleGroup:"Full body", equipment:"none",
+                notes:"", custom:true, createdAt: nowISO(), updatedAt: nowISO() };
+    store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
+    addExercise(x);
+  };
+  const onSetLogged = () => {
+    if(active && restSecs>0) setRestUntil(Date.now() + restSecs*1000);
+    try{ if(navigator.vibrate) navigator.vibrate(15); }catch(e){}
+  };
+
+  // "Same as last time": most recent OTHER workout containing this exercise.
+  const lastPerf = (exerciseId) => {
+    const ws = (store.data.workouts||[]).slice()
+      .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+    for(const w of ws){
+      if(w.id===workout.id) continue;
+      const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
+      if(e){
+        const best = e.sets.reduce((a,b)=>((Number(b.reps)||0)*(Number(b.weight)||0) > (Number(a.reps)||0)*(Number(a.weight)||0) ? b : a), e.sets[0]);
+        return { sets: e.sets, best };
+      }
+    }
+    return null;
+  };
+
+  const elapsed = active
+    ? fmtClock((Date.now() - new Date(workout.startedAt).getTime())/1000)
+    : null;
+  const restLeft = Math.ceil((restUntil - Date.now())/1000);
+
+  return (
+    <div className="editor">
+      <div className="editor-inner">
+        <div className="editor-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <div className="editor-title">
+            {/* Save on blur, not per keystroke - each save is a whole-collection PUT. */}
+            <input defaultValue={workout.name||""} onBlur={e=>{ if(e.target.value!==workout.name) patch({name:e.target.value}); }}
+              placeholder="Workout name" />
+            <div className="elapsed">
+              {active ? elapsed+" elapsed" : fmtDate(workout.date) + (workout.durationMin>0 ? " - "+workout.durationMin+" min" : "")}
+            </div>
+          </div>
+          {active &&
+            <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}}
+              onClick={()=>{ if(confirm("Finish this workout?")) onFinish(workout); }}>
+              Finish
+            </button>}
+        </div>
+
+        {(workout.entries||[]).length===0 &&
+          <div className="empty" style={{padding:"36px 20px"}}>
+            <h3 className="title-sm">{active ? "Add your first exercise" : "Empty workout"}</h3>
+            {active && <p>Pick from the library; sets pre-fill from your last session.</p>}
+          </div>}
+
+        {(workout.entries||[]).map(e => (
+          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={active}
+            onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
+        ))}
+
+        {active &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
+            <Icon d={ICONS.plus} size={15}/> Add exercise
+          </button>}
+
+        {!active &&
+          <button className="btn btn-danger btn-block" style={{marginTop:18}}
+            onClick={()=>{ if(confirm("Delete this workout from your history?")) onDelete(workout.id); }}>
+            Delete workout
+          </button>}
+      </div>
+
+      {active && restLeft>0 &&
+        <button className="rest" onClick={()=>setRestUntil(0)}>
+          Rest {fmtClock(restLeft)} <Icon d={ICONS.x} size={14}/>
+        </button>}
+
+      {picker &&
+        <ExercisePicker store={store} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
+    </div>
+  );
+}
+
 function RoutinesScreen({ store }){
   const routines = store.data.routines || [];
   if(!routines.length){
@@ -1130,6 +1503,15 @@ function SettingsScreen({ store, onCheckUpdate, updateState, updMsg }){
           <button className={"pill "+(store.cfg.units==="lb"?"on":"")} onClick={()=>setUnits("lb")}>lb</button>
           <button className={"pill "+(store.cfg.units==="kg"?"on":"")} onClick={()=>setUnits("kg")}>kg</button>
         </div>
+        <div className="subtle" style={{marginTop:14}}>Rest timer after each set</div>
+        <div className="pills">
+          {[0,60,90,120].map(s => (
+            <button key={s} className={"pill "+((store.cfg.restSecs===undefined?90:store.cfg.restSecs)===s?"on":"")}
+              onClick={()=>store.saveCfg({ ...store.cfg, restSecs: s })}>
+              {s===0 ? "Off" : s+"s"}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="set-group">About</div>
@@ -1176,9 +1558,32 @@ function App(){
   const [tab, setTab] = useState("workouts");
   const [inSettings, setInSettings] = useState(false);
   const [exSheet, setExSheet] = useState(null);   // null | {exercise: rec|null}
+  const [workoutId, setWorkoutId] = useState(null);   // open workout editor
   const [toast, setToast] = useState("");
   const toastRef = useRef();
   const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
+
+  // ---- workout lifecycle ----
+  const startWorkout = () => {
+    const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
+    if(existing){ setWorkoutId(existing.id); return; }   // one active at a time
+    const w = { id: uid(), name: dayPartName(), date: todayStr(), startedAt: nowISO(),
+                endedAt: null, durationMin: 0, notes: "", entries: [] };
+    store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
+    setWorkoutId(w.id);
+  };
+  const finishWorkout = (w) => {
+    const mins = Math.max(1, Math.round((Date.now() - new Date(w.startedAt).getTime())/60000));
+    store.saveCollection("workouts",
+      (store.data.workouts||[]).map(x => x.id===w.id ? { ...x, endedAt: nowISO(), durationMin: mins, updatedAt: nowISO() } : x));
+    setWorkoutId(null);
+    showToast("Workout saved - "+mins+" min");
+  };
+  const deleteWorkout = (id) => {
+    store.saveCollection("workouts", (store.data.workouts||[]).filter(w => w.id !== id));
+    setWorkoutId(null);
+    showToast("Workout deleted");
+  };
 
   // ---- exercise CRUD ----
   const saveExercise = (rec) => {
@@ -1297,18 +1702,24 @@ function App(){
         {inSettings
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg} />
           : <>
-              {tab==="workouts"  && <WorkoutsScreen store={store} />}
+              {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
               {tab==="routines"  && <RoutinesScreen store={store} />}
               {tab==="progress"  && <ProgressScreen />}
             </>}
       </div>
 
+      {!inSettings && tab==="workouts" && !workoutId &&
+        <button className="fab" onClick={startWorkout} aria-label="Start workout"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="exercises" && !exSheet &&
         <button className="fab" onClick={()=>setExSheet({exercise:null})} aria-label="Add exercise"><Icon d={ICONS.plus} size={26}/></button>}
 
       {exSheet &&
         <ExerciseSheet exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
+
+      {workoutId &&
+        <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
+          onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout} />}
 
       {!inSettings &&
         <nav className="nav">
