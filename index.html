@@ -287,10 +287,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.4.0";
+const APP_VERSION = "0.5.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-21.1";
+const BUILD = "2026-07-21.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -470,6 +470,7 @@ function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g
 const DEFAULT_CFG = { appName:"FitnessCaptain", units:"lb" };
 
 const EXERCISE_TYPES = ["strength","cardio","mobility"];
+const GYM_KINDS = ["home","club","hotel","other"];
 const MUSCLE_GROUPS = ["Chest","Back","Shoulders","Arms","Legs","Glutes","Core","Full body"];
 const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
 function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
@@ -560,6 +561,9 @@ function EXERCISE_SEED(){
    ============================================================ */
 function useStore(){
   const [cfg, setCfg] = useState(() => ({...DEFAULT_CFG, ...lsGet("cfg", {})}));
+  // Gyms ride on the synced meta object (the PriorityCaptain Spaces/Templates
+  // pattern): a small per-user list, NO backend change needed.
+  const [gyms, setGyms] = useState(() => lsGet("gyms", []));
   const [data, setData] = useState(() => {
     const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
   });
@@ -576,6 +580,9 @@ function useStore(){
   const dataRef = useRef(data); dataRef.current = data;
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
+  const gymsRef = useRef(gyms); gymsRef.current = gyms;
+  // Last-pulled meta object, so pushes preserve keys other builds may add.
+  const metaBaseRef = useRef({});
   const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
   const authedRef = useRef(false);
 
@@ -599,7 +606,10 @@ function useStore(){
   const pushCfg = useCallback(async () => {
     if(!cfgDirtyRef.current || !authedRef.current) return;
     if(!navigator.onLine){ setSync("pending"); return; }
-    try{ await metaPut({ cfg: cfgRef.current }); cfgDirtyRef.current=false; lsSet("cfgDirty", false); }
+    try{
+      await metaPut({ ...metaBaseRef.current, cfg: cfgRef.current, gyms: gymsRef.current });
+      cfgDirtyRef.current=false; lsSet("cfgDirty", false);
+    }
     catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushCfg: "+e.message); }
   }, []);
 
@@ -616,9 +626,13 @@ function useStore(){
       }
       setData(next); dataRef.current = next;
       const m = await metaGet();
+      metaBaseRef.current = (m && typeof m==="object") ? m : {};
       if(m && m.cfg && typeof m.cfg==="object" && !cfgDirtyRef.current){
         const merged = {...DEFAULT_CFG, ...m.cfg};
         setCfg(merged); lsSet("cfg", merged); cfgRef.current = merged;
+      }
+      if(m && Array.isArray(m.gyms) && !cfgDirtyRef.current){
+        setGyms(m.gyms); lsSet("gyms", m.gyms); gymsRef.current = m.gyms;
       }
       // One-time starter seed: an empty library after a clean pull gets the
       // ~55 common movements. The cfg flag makes it once-per-account, so a
@@ -659,6 +673,12 @@ function useStore(){
 
   const saveCfg = useCallback((next) => {
     setCfg(next); lsSet("cfg", next); cfgRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  const saveGyms = useCallback((next) => {
+    setGyms(next); lsSet("gyms", next); gymsRef.current = next;
     cfgDirtyRef.current = true; lsSet("cfgDirty", true);
     pushCfg();
   }, [pushCfg]);
@@ -730,11 +750,12 @@ function useStore(){
       else if(!session && was){
         // Sign-out: wipe local cache so a shared device doesn't leak data.
         FILES.forEach(f => { lsDel("cache:"+f); });
-        lsDel("dirty"); lsDel("cfg"); lsDel("cfgDirty");
+        lsDel("dirty"); lsDel("cfg"); lsDel("cfgDirty"); lsDel("gyms");
         const blank = {}; FILES.forEach(f => blank[f]=[]);
         setData(blank); dataRef.current = blank;
         setDirty({}); dirtyRef.current = {};
         setCfg(DEFAULT_CFG); cfgRef.current = DEFAULT_CFG;
+        setGyms([]); gymsRef.current = []; metaBaseRef.current = {};
         cfgDirtyRef.current = false;
         log("AUTH","signed out (local cache + config cleared)");
       }
@@ -751,8 +772,8 @@ function useStore(){
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, [flush]);
 
-  return { data, cfg, sync, syncMsg, online, authed, authEmail, authReady, recovery,
-           saveCollection, saveCfg, pullAll, flush,
+  return { data, cfg, gyms, sync, syncMsg, online, authed, authEmail, authReady, recovery,
+           saveCollection, saveCfg, saveGyms, pullAll, flush,
            signIn, signUp, signOut, requestReset, updatePassword };
 }
 
@@ -1009,6 +1030,7 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport }){
                     <div className="item-title">{w.name || "Workout"}</div>
                     <div className="item-meta">
                       <span className="chip">{fmtDate(w.date)}</span>
+                      {w.gymName && <span className="chip blue">{w.gymName}</span>}
                       <span className="chip amber">{(w.entries||[]).length} exercise{(w.entries||[]).length===1?"":"s"}</span>
                       {workoutSets(w)>0 && <span className="chip">{workoutSets(w)} sets</span>}
                       {vol>0 && <span className="chip">{fmtNum(vol)} {units}</span>}
@@ -1181,6 +1203,95 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
 }
 
 /* ============================================================
+   GYMS - the places you train. Each gym = equipment TAGS (drive the
+   location-aware exercise picker) + a free-text INVENTORY (browsable, and
+   the knowledge base the AI reads when designing workouts for a location).
+   Rides on synced meta - no backend change.
+   ============================================================ */
+function GymSheet({ gym, onSave, onDelete, onClose }){
+  const [name, setName] = useState(gym ? (gym.name||"") : "");
+  const [kind, setKind] = useState(gym ? (gym.kind||"home") : "home");
+  const [equip, setEquip] = useState(gym && Array.isArray(gym.equipment) ? gym.equipment : []);
+  const [inventory, setInventory] = useState(gym ? (gym.inventory||"") : "");
+
+  const toggleEquip = (e) => setEquip(prev => prev.includes(e) ? prev.filter(x=>x!==e) : [...prev, e]);
+
+  const save = () => {
+    if(!name.trim()) return;
+    onSave({
+      id: gym ? gym.id : uid(),
+      name: name.trim(), kind, equipment: equip,
+      inventory: inventory.trim(),
+      createdAt: gym ? (gym.createdAt||nowISO()) : nowISO(),
+      updatedAt: nowISO(),
+    });
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{gym ? "Edit gym" : "Add a gym"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <div className="title-field">
+          <label className="label">Name</label>
+          <input className="title-input" value={name} onChange={e=>setName(e.target.value)}
+            placeholder="e.g. Dallas home gym" autoFocus={!gym} />
+        </div>
+
+        <div className="field">
+          <label className="label">Kind</label>
+          <div className="pills" style={{marginTop:4}}>
+            {GYM_KINDS.map(k =>
+              <button key={k} className={"pill "+(kind===k?"on":"")} onClick={()=>setKind(k)}>
+                {k.charAt(0).toUpperCase()+k.slice(1)}
+              </button>)}
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Equipment available</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            Used to flag exercises you can't do here.
+          </div>
+          <div className="pills" style={{marginTop:4}}>
+            {EQUIPMENT.filter(e=>e!=="none").map(e =>
+              <button key={e} className={"pill "+(equip.includes(e)?"on":"")} onClick={()=>toggleEquip(e)}>
+                {e}
+              </button>)}
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Inventory (knowledge base)</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            The detailed list - machines, dumbbell range, plates, attachments.
+            Browsable here, and the AI reads it when designing workouts for
+            this location. Paste freely; more detail = smarter suggestions.
+          </div>
+          <textarea className="textarea" style={{minHeight:140}} value={inventory}
+            onChange={e=>setInventory(e.target.value)}
+            placeholder={"e.g.\nDumbbells 5-75 lb\nSquat rack + 610 lb plates\nAssault bike, battle rope\nNo treadmill"} />
+        </div>
+
+        <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>
+          {gym ? "Save changes" : "Add gym"}
+        </button>
+        {gym &&
+          <button className="btn btn-danger btn-block" style={{marginTop:10}}
+            onClick={()=>{ if(confirm("Delete this gym? Logged workouts keep its name.")) onDelete(gym.id); }}>
+            Delete gym
+          </button>}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================
    WORKOUT LOGGING - the product. Big tap targets, pre-filled from last
    time, +/- steppers, rest timer. One JSONB doc per workout.
    ============================================================ */
@@ -1292,14 +1403,19 @@ function EntryCard({ entry, prev, units, active, onUpdate, onRemove, onSetLogged
 /* Nested full-screen layer: pick an exercise from the library (or create one
    on the spot). Rendered INSIDE the editor at a higher z-index so the editor
    keeps its state (playbook rule: no two screens on one overlay variable). */
-function ExercisePicker({ store, onPick, onCreate, onClose }){
+function ExercisePicker({ store, gym, onPick, onCreate, onClose }){
   const [q, setQ] = useState("");
   const [groupF, setGroupF] = useState("all");
   const needle = q.trim().toLowerCase();
+  // Location-aware: flag exercises whose equipment this gym lacks. Only
+  // meaningful when the gym has equipment tags; bodyweight/none always fit.
+  const notHere = (x) => !!(gym && Array.isArray(gym.equipment) && gym.equipment.length &&
+    x.equipment && ["barbell","dumbbell","kettlebell","machine","cable","band","treadmill","bike","rower"].includes(x.equipment) &&
+    !gym.equipment.includes(x.equipment));
   const list = (store.data.exercises||[])
     .filter(x => groupF==="all" || x.muscleGroup===groupF)
     .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
-    .slice().sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+    .slice().sort((a,b)=> (notHere(a)?1:0)-(notHere(b)?1:0) || (a.name||"").localeCompare(b.name||""));
   return (
     <div className="layer">
       <div className="layer-inner">
@@ -1307,6 +1423,8 @@ function ExercisePicker({ store, onPick, onCreate, onClose }){
           <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
           <h2>Add exercise</h2>
         </div>
+        {gym && Array.isArray(gym.equipment) && gym.equipment.length>0 &&
+          <div className="hint" style={{marginTop:2}}>Showing availability at {gym.name}.</div>}
         <div className="search-wrap" style={{marginTop:4}}>
           <input className="input" value={q} onChange={e=>setQ(e.target.value)}
             placeholder="Search the library" autoCapitalize="off" autoCorrect="off" autoFocus />
@@ -1333,6 +1451,7 @@ function ExercisePicker({ store, onPick, onCreate, onClose }){
                 <div className="item-meta">
                   <span className={"chip "+typeClass(x.type)}>{x.type}</span>
                   {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+                  {notHere(x) && <span className="chip red">not at this gym</span>}
                 </div>
               </div>
             </button>
@@ -1401,6 +1520,11 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
     ? fmtClock((Date.now() - new Date(workout.startedAt).getTime())/1000)
     : null;
   const restLeft = Math.ceil((restUntil - Date.now())/1000);
+  const gym = (store.gyms||[]).find(g=>g.id===workout.gymId) || null;
+  const setGym = (g) => {
+    patch({ gymId: g ? g.id : null, gymName: g ? g.name : null });
+    if(g) store.saveCfg({ ...store.cfg, lastGymId: g.id });
+  };
 
   return (
     <div className="editor">
@@ -1421,6 +1545,15 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
               Finish
             </button>}
         </div>
+
+        {(store.gyms||[]).length>0 &&
+          <div className="pills-row">
+            <button className={"pill "+(!workout.gymId?"on":"")} onClick={()=>setGym(null)}>No gym</button>
+            {(store.gyms||[]).map(g =>
+              <button key={g.id} className={"pill "+(workout.gymId===g.id?"on":"")} onClick={()=>setGym(g)}>
+                {g.name}
+              </button>)}
+          </div>}
 
         {(workout.entries||[]).length===0 &&
           <div className="empty" style={{padding:"36px 20px"}}>
@@ -1451,7 +1584,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
         </button>}
 
       {picker &&
-        <ExercisePicker store={store} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
+        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
     </div>
   );
 }
@@ -1682,11 +1815,37 @@ function ProgressScreen(){
   );
 }
 
-function SettingsScreen({ store, onCheckUpdate, updateState, updMsg }){
+function SettingsScreen({ store, onCheckUpdate, updateState, updMsg, onAddGym, onEditGym }){
   const [showLog, setShowLog] = useState(false);
   const setUnits = (u) => store.saveCfg({ ...store.cfg, units: u });
   return (
     <div>
+      <div className="set-group">My gyms</div>
+      <div className="card">
+        {(store.gyms||[]).length===0 &&
+          <div className="hint" style={{marginTop:0,marginBottom:10}}>
+            Add the places you train - each gym keeps an equipment inventory the
+            app uses to flag what's available and to design workouts for that
+            location.
+          </div>}
+        {(store.gyms||[]).map(g => (
+          <button key={g.id} className="item" style={{marginBottom:8}} onClick={()=>onEditGym(g)}>
+            <div className="item-body">
+              <div className="item-title">{g.name}</div>
+              <div className="item-meta">
+                <span className="chip amber">{g.kind}</span>
+                {Array.isArray(g.equipment) && g.equipment.length>0 &&
+                  <span className="chip">{g.equipment.length} equipment tag{g.equipment.length===1?"":"s"}</span>}
+                {g.inventory && <span className="chip green">inventory on file</span>}
+              </div>
+            </div>
+          </button>
+        ))}
+        <button className="btn btn-ghost btn-block btn-sm" onClick={onAddGym}>
+          <Icon d={ICONS.plus} size={14}/> Add a gym
+        </button>
+      </div>
+
       <div className="set-group">Account</div>
       <div className="card">
         <div className="subtle" style={{marginBottom:10}}>{store.authEmail || "Signed in"}</div>
@@ -1757,6 +1916,22 @@ function App(){
   const [exSheet, setExSheet] = useState(null);   // null | {exercise: rec|null}
   const [workoutId, setWorkoutId] = useState(null);   // open workout editor
   const [importer, setImporter] = useState(false);    // AI history import layer
+  const [gymSheet, setGymSheet] = useState(null);     // null | {gym: rec|null}
+
+  // ---- gym CRUD ----
+  const saveGym = (rec) => {
+    const gyms = store.gyms || [];
+    const exists = gyms.some(g => g.id === rec.id);
+    store.saveGyms(exists ? gyms.map(g => g.id===rec.id ? rec : g) : [...gyms, rec]);
+    setGymSheet(null);
+    showToast(exists ? "Gym updated" : "Gym added");
+  };
+  const deleteGym = (id) => {
+    store.saveGyms((store.gyms||[]).filter(g => g.id !== id));
+    if(store.cfg.lastGymId === id) store.saveCfg({ ...store.cfg, lastGymId: null });
+    setGymSheet(null);
+    showToast("Gym deleted");
+  };
   const [toast, setToast] = useState("");
   const toastRef = useRef();
   const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
@@ -1765,8 +1940,10 @@ function App(){
   const startWorkout = () => {
     const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
     if(existing){ setWorkoutId(existing.id); return; }   // one active at a time
+    const lastGym = (store.gyms||[]).find(g=>g.id===store.cfg.lastGymId) || null;
     const w = { id: uid(), name: dayPartName(), date: todayStr(), startedAt: nowISO(),
-                endedAt: null, durationMin: 0, notes: "", entries: [] };
+                endedAt: null, durationMin: 0, notes: "", entries: [],
+                gymId: lastGym ? lastGym.id : null, gymName: lastGym ? lastGym.name : null };
     store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
     setWorkoutId(w.id);
   };
@@ -1898,7 +2075,8 @@ function App(){
 
       <div className="screen">
         {inSettings
-          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg} />
+          ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg}
+              onAddGym={()=>setGymSheet({gym:null})} onEditGym={(g)=>setGymSheet({gym:g})} />
           : <>
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
@@ -1914,6 +2092,9 @@ function App(){
 
       {exSheet &&
         <ExerciseSheet exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
+
+      {gymSheet &&
+        <GymSheet gym={gymSheet.gym} onSave={saveGym} onDelete={deleteGym} onClose={()=>setGymSheet(null)} />}
 
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
