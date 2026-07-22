@@ -196,6 +196,13 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .rest{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(26px + env(safe-area-inset-bottom));z-index:75;
   background:var(--amber);color:#241505;border-radius:999px;padding:11px 24px;font-weight:800;font-size:15px;
   box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;border:none;}
+/* collapsible catalog category header */
+.cat-head{width:100%;display:flex;align-items:center;gap:8px;padding:11px 4px;text-align:left;
+  color:var(--ink-2);font-weight:600;font-size:13px;letter-spacing:.05em;text-transform:uppercase;}
+.cat-head .chev{display:inline-flex;transition:transform .18s var(--ease);color:var(--ink-3);margin-left:auto;}
+.cat-head.open .chev{transform:rotate(90deg);}
+.cat-head .chip{flex:0 0 auto;}
+
 /* nested full-screen layer (e.g. exercise picker inside the editor) */
 .layer{position:fixed;inset:0;z-index:80;background:var(--bg);overflow-y:auto;animation:fade .2s;}
 .layer-inner{max-width:680px;margin:0 auto;padding:0 18px 40px;}
@@ -287,10 +294,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.7.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-22.2";
+const BUILD = "2026-07-22.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -805,6 +812,7 @@ const ICONS = {
   back:    ["M19 12H5","M12 19l-7-7 7-7"],
   refresh: ["M23 4v6h-6","M1 20v-6h6","M3.51 9a9 9 0 0 1 14.85-3.36L23 10","M1 14l4.64 4.36A9 9 0 0 0 20.49 15"],
   pin:     ["M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z","M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
+  chev:    ["M9 18l6-6-6-6"],
   edit:    ["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7","M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"],
   eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
@@ -1356,6 +1364,8 @@ function GymsScreen({ store, onOpen, onAdd }){
 function GymDetail({ store, gymId, onEdit, onStartHere, onClose }){
   const [organizing, setOrganizing] = useState(false);
   const [orgErr, setOrgErr] = useState("");
+  const [openCats, setOpenCats] = useState({});   // catalog sections start collapsed
+  const toggleCat = (c) => setOpenCats(p=>({ ...p, [c]: !p[c] }));
   const gym = (store.gyms||[]).find(g=>g.id===gymId);
   if(!gym) return null;
   const here = (store.data.workouts||[]).filter(w => w.gymId===gym.id && w.endedAt);
@@ -1450,15 +1460,20 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose }){
           ? <>
               {catalog.map(sec => (
                 <div key={sec.category}>
-                  <div className="subtle" style={{margin:"12px 4px 6px",fontWeight:600,letterSpacing:".04em"}}>{sec.category}</div>
-                  <div className="card" style={{paddingTop:6,paddingBottom:6}}>
-                    {sec.items.map((it,i)=>(
-                      <div key={i} className="set-row" style={{cursor:"default",display:"block"}}>
-                        <div style={{fontWeight:600,fontSize:14.5}}>{it.name}</div>
-                        {it.detail && <div className="hint" style={{marginTop:1}}>{it.detail}</div>}
-                      </div>
-                    ))}
-                  </div>
+                  <button className={"cat-head "+(openCats[sec.category]?"open":"")} onClick={()=>toggleCat(sec.category)}>
+                    <span>{sec.category}</span>
+                    <span className="chip">{sec.items.length}</span>
+                    <span className="chev"><Icon d={ICONS.chev} size={16}/></span>
+                  </button>
+                  {openCats[sec.category] &&
+                    <div className="card" style={{paddingTop:6,paddingBottom:6}}>
+                      {sec.items.map((it,i)=>(
+                        <div key={i} className="set-row" style={{cursor:"default",display:"block"}}>
+                          <div style={{fontWeight:600,fontSize:14.5}}>{it.name}</div>
+                          {it.detail && <div className="hint" style={{marginTop:1}}>{it.detail}</div>}
+                        </div>
+                      ))}
+                    </div>}
                 </div>
               ))}
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:12}} disabled={organizing} onClick={organize}>
