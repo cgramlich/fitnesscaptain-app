@@ -294,10 +294,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.10.0";
+const APP_VERSION = "0.10.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-22.6";
+const BUILD = "2026-07-22.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -490,6 +490,9 @@ function availableAt(x, gym){
 const MUSCLE_GROUPS = ["Chest","Back","Shoulders","Arms","Legs","Glutes","Core","Full body"];
 const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
 function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
+// Deterministic demo link - a YouTube SEARCH, never an AI-invented URL
+// (generated video links rot; search results stay current).
+function demoUrl(name){ return "https://www.youtube.com/results?search_query=" + encodeURIComponent(String(name||"").trim() + " exercise form"); }
 
 // Starter library (~55 common movements). Stable "x-" ids so the seed is
 // idempotent and future features can reference them. Users add their own
@@ -1229,9 +1232,15 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
             value={notes} onChange={e=>setNotes(e.target.value)}
             placeholder="Form cues, seat settings, anything worth remembering." />
           {explainErr && <div className="auth-msg err" style={{marginTop:8,marginBottom:0}}>{explainErr}</div>}
-          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} disabled={explaining} onClick={explain}>
-            {explaining ? <span className="spin"></span> : (notes.trim() ? "Rewrite form cues with AI" : "Write form cues with AI")}
-          </button>
+          <div className="row" style={{marginTop:8}}>
+            <button className="btn btn-ghost btn-sm" disabled={explaining} onClick={explain}>
+              {explaining ? <span className="spin"></span> : (notes.trim() ? "Rewrite cues with AI" : "Write cues with AI")}
+            </button>
+            <a className="btn btn-ghost btn-sm" style={{textDecoration:"none"}}
+              href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
+              Watch a demo
+            </a>
+          </div>
         </div>
 
         <button className="btn btn-primary btn-block" onClick={save} disabled={!name.trim()}>
@@ -1590,14 +1599,21 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
     <div className="entry">
       <div className="entry-head">
         <div style={{flex:1,minWidth:0}}>
-          {/* Tapping the name reveals cached form cues (exercise notes). */}
-          <div className="entry-name" onClick={()=>{ if(howTo) setShowHow(s=>!s); }}
-            style={howTo ? {cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3} : null}>
+          {/* Tapping the name reveals form cues (when cached) + a demo link. */}
+          <div className="entry-name" onClick={()=>setShowHow(s=>!s)}
+            style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
             {entry.name}
           </div>
-          {showHow && howTo &&
+          {showHow &&
             <div className="hint" style={{marginTop:6,whiteSpace:"pre-wrap",background:"var(--bg-3)",
-              border:"1px solid var(--line-2)",borderRadius:10,padding:"9px 11px"}}>{howTo}</div>}
+              border:"1px solid var(--line-2)",borderRadius:10,padding:"9px 11px"}}>
+              {howTo || "No form cues saved yet - add them from the Exercises tab."}
+              {"\n"}
+              <a href={demoUrl(entry.name)} target="_blank" rel="noopener noreferrer"
+                style={{display:"inline-block",marginTop:8,fontWeight:600}}>
+                Watch a demo
+              </a>
+            </div>}
           {entry.targetSets>0 && !isCardio &&
             <div className="entry-last" style={{color:"var(--amber-2)"}}>
               Target: {entry.targetSets} x {entry.targetReps}
