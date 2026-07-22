@@ -287,10 +287,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.3.0";
+const APP_VERSION = "0.4.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-20.3";
+const BUILD = "2026-07-21.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -459,6 +459,7 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   const j = await r.json();
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
 }
+function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g,"").trim(); }
 
 /* ============================================================
    DOMAIN CONSTANTS
@@ -951,7 +952,7 @@ function SetPassword({ store }){
    SCREENS - step-1 shell. Domain features land in build-order steps
    2 (exercise library), 3 (workout logging), 4 (routines), 5 (progress).
    ============================================================ */
-function WorkoutsScreen({ store, onStart, onOpen }){
+function WorkoutsScreen({ store, onStart, onOpen, onImport }){
   const units = store.cfg.units || "lb";
   const workouts = (store.data.workouts||[]).slice()
     .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
@@ -966,6 +967,9 @@ function WorkoutsScreen({ store, onStart, onOpen }){
         <p>Start a workout, add exercises, and log sets with two taps. Everything pre-fills from last time.</p>
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onStart}>
           <Icon d={ICONS.plus} size={16}/> Start a workout
+        </button>
+        <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={onImport}>
+          Import past workouts
         </button>
       </div>
     );
@@ -987,6 +991,10 @@ function WorkoutsScreen({ store, onStart, onOpen }){
         : <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={onStart}>
             <Icon d={ICONS.plus} size={16}/> Start a workout
           </button>}
+
+      <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={onImport}>
+        Import past workouts
+      </button>
 
       {!done.length
         ? <div className="empty" style={{padding:"40px 20px"}}>
@@ -1448,6 +1456,195 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
   );
 }
 
+/* ============================================================
+   AI HISTORY IMPORT - paste workout history from anywhere, the relay
+   (task import_history -> Sonnet) organizes it into structured workouts,
+   the user REVIEWS before anything saves (PriorityCaptain organizer
+   pattern). Scan output is a draft, never an auto-commit.
+   ============================================================ */
+const normName = s => String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+
+function importSystemPrompt(units, libraryNames){
+  return "You organize pasted workout history into strict JSON. Return ONLY a JSON object, " +
+    "no prose and no markdown fences, shaped exactly like this: " +
+    '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","notes":"",' +
+    '"entries":[{"exercise":"name","type":"strength|cardio|mobility",' +
+    '"sets":[{"reps":N,"weight":N}] (strength only, else null),' +
+    '"cardio":{"minutes":N,"distance":N} (cardio/mobility only, else null)}]}],' +
+    '"skipped":["input lines you could not interpret"]}. ' +
+    "Rules: weights are in " + units + " unless the text clearly says otherwise (convert if needed); " +
+    "bodyweight movements use weight 0; numbers are plain with no units. " +
+    "When an exercise clearly matches one of the user's library names, use the library name EXACTLY. " +
+    "Library: " + libraryNames.join(", ") + ". " +
+    "Otherwise use a clean title-case name. Use dates from the text; null when absent. " +
+    "Split distinct days into separate workouts. Never invent workouts, exercises, or sets that are not in the text.";
+}
+
+function ImportLayer({ store, onClose, onImported }){
+  const [phase, setPhase] = useState("paste");   // paste | busy | review
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const [parsed, setParsed] = useState([]);
+  const [skipped, setSkipped] = useState([]);
+  const units = store.cfg.units || "lb";
+
+  const organize = async () => {
+    const t = text.trim();
+    if(t.length < 10){ setErr("Paste some workout history first."); return; }
+    setErr(""); setPhase("busy");
+    try{
+      const names = (store.data.exercises||[]).map(x=>x.name);
+      const out = await aiRelay("import_history",
+        [{ role:"user", content: t.slice(0, 20000) }],
+        { system: importSystemPrompt(units, names), maxTokens: 16000 });
+      let obj;
+      try{ obj = JSON.parse(stripFences(out)); }
+      catch(e){ throw new Error("Couldn't read the result. Try pasting a smaller chunk."); }
+      const ws = Array.isArray(obj && obj.workouts) ? obj.workouts : [];
+      if(!ws.length) throw new Error("No workouts found in that text. Try a different chunk.");
+      const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+      const review = ws.map(w => ({
+        include: true,
+        date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
+        name: (w.name||"Imported workout").slice(0,60),
+        notes: (w.notes||"").slice(0,500),
+        entries: (Array.isArray(w.entries)?w.entries:[]).map(e => {
+          const type = EXERCISE_TYPES.includes(e.type) ? e.type : "strength";
+          const sets = (type==="strength" && Array.isArray(e.sets))
+            ? e.sets.map(s=>({ reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
+                               weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) }))
+                    .filter(s=>s.reps>0)
+            : [];
+          const cardio = (type!=="strength" && e.cardio && Number(e.cardio.minutes)>0)
+            ? { minutes: Math.round(Number(e.cardio.minutes)), distance: Math.max(0, Number(e.cardio.distance)||0), unit: units==="kg"?"km":"mi" }
+            : null;
+          const name = String(e.exercise||"Exercise").slice(0,60);
+          return { name, type, sets, cardio, matched: !!lib[normName(name)] };
+        }).filter(e => e.sets.length || e.cardio),
+      })).filter(w => w.entries.length);
+      if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
+      setParsed(review);
+      setSkipped(Array.isArray(obj.skipped) ? obj.skipped.slice(0,20) : []);
+      setPhase("review");
+      log("IMPORT","parsed "+review.length+" workouts");
+    }catch(e){
+      setErr(e.message||"Import failed."); setPhase("paste");
+      log("ERROR","import: "+e.message);
+    }
+  };
+
+  const toggle = (i) => setParsed(p => p.map((w,j)=> j===i ? {...w, include:!w.include} : w));
+  const setDate = (i, d) => setParsed(p => p.map((w,j)=> j===i ? {...w, date:d} : w));
+
+  const importAll = () => {
+    const inc = parsed.filter(p=>p.include);
+    if(!inc.length){ setErr("Everything is set to skip."); return; }
+    // 1. Create any exercises the library doesn't have yet (dedup by name).
+    const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+    const created = [];
+    inc.forEach(w => w.entries.forEach(e => {
+      const key = normName(e.name);
+      if(!lib[key]){
+        const x = { id: uid(), name: e.name, type: e.type, muscleGroup: "Full body",
+                    equipment: "none", notes: "", custom: true,
+                    createdAt: nowISO(), updatedAt: nowISO() };
+        lib[key] = x; created.push(x);
+      }
+    }));
+    if(created.length) store.saveCollection("exercises", [...created, ...(store.data.exercises||[])]);
+    // 2. Create the workouts as FINISHED history (endedAt set; duration unknown).
+    const workouts = inc.map(w => ({
+      id: uid(), name: w.name, date: w.date,
+      startedAt: w.date + "T12:00:00.000Z", endedAt: w.date + "T12:00:00.000Z",
+      durationMin: 0, notes: w.notes, imported: true,
+      entries: w.entries.map(e => ({
+        id: uid(), exerciseId: lib[normName(e.name)].id, name: lib[normName(e.name)].name,
+        type: e.type, sets: e.sets, cardio: e.cardio,
+      })),
+    }));
+    store.saveCollection("workouts", [...workouts, ...(store.data.workouts||[])]);
+    log("IMPORT","imported "+workouts.length+" workouts, "+created.length+" new exercises");
+    onImported(workouts.length, created.length);
+  };
+
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2>Import history</h2>
+        </div>
+
+        {phase==="paste" && <>
+          <p className="hint" style={{marginTop:4}}>
+            Paste workout history from anywhere - a notes app, a spreadsheet, another
+            app's export. Any format works; the AI organizes it and you review
+            everything before it saves. For long histories, paste a few weeks at a time.
+          </p>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          <textarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
+            onChange={e=>setText(e.target.value)}
+            placeholder={"e.g.\nMon 7/14 - push day\nbench 3x8 @ 185\nohp 135 x8x8x6\n20 min bike"} />
+          <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={organize}>
+            Organize with AI
+          </button>
+        </>}
+
+        {phase==="busy" &&
+          <div className="empty" style={{padding:"60px 20px"}}>
+            <span className="spin spin-lg" style={{margin:"0 auto 16px",display:"block"}}></span>
+            <p>Reading your history...</p>
+          </div>}
+
+        {phase==="review" && <>
+          <p className="hint" style={{marginTop:4}}>
+            Review before saving. Tap a workout to include or skip it; fix any dates.
+            Exercises marked "new" will be added to your library.
+          </p>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          {parsed.map((w,i) => (
+            <div key={i} className="entry" style={{opacity: w.include?1:.45}}>
+              <div className="entry-head">
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="entry-name">{w.name}</div>
+                  <input className="input" type="date" value={w.date} style={{marginTop:8,maxWidth:180,padding:"8px 10px"}}
+                    onChange={e=>setDate(i, e.target.value||todayStr())} />
+                </div>
+                <button className={"pill "+(w.include?"on":"")} style={{flex:"0 0 auto"}} onClick={()=>toggle(i)}>
+                  {w.include ? "Include" : "Skip"}
+                </button>
+              </div>
+              {w.entries.map((e,j) => (
+                <div key={j} className="set-row" style={{cursor:"default"}}>
+                  <span className="set-main" style={{fontWeight:500}}>
+                    {e.name}
+                    {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")+
+                      " (top "+e.sets.reduce((a,b)=>b.reps*b.weight>=a.reps*a.weight?b:a,e.sets[0]).reps+
+                      " x "+fmtW(e.sets.reduce((a,b)=>b.reps*b.weight>=a.reps*a.weight?b:a,e.sets[0]).weight)+" "+units+")"}
+                    {e.cardio && " - "+e.cardio.minutes+" min"+(e.cardio.distance>0?" / "+fmtW(e.cardio.distance)+" "+e.cardio.unit:"")}
+                  </span>
+                  {!e.matched && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+          {skipped.length>0 &&
+            <div className="card" style={{marginTop:12}}>
+              <div className="subtle" style={{marginBottom:6}}>Couldn't interpret:</div>
+              {skipped.map((s,i)=><div key={i} className="hint">{String(s).slice(0,120)}</div>)}
+            </div>}
+          <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={importAll}>
+            Import {parsed.filter(p=>p.include).length} workout{parsed.filter(p=>p.include).length===1?"":"s"}
+          </button>
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>{ setPhase("paste"); setErr(""); }}>
+            Back to paste
+          </button>
+        </>}
+      </div>
+    </div>
+  );
+}
+
 function RoutinesScreen({ store }){
   const routines = store.data.routines || [];
   if(!routines.length){
@@ -1559,6 +1756,7 @@ function App(){
   const [inSettings, setInSettings] = useState(false);
   const [exSheet, setExSheet] = useState(null);   // null | {exercise: rec|null}
   const [workoutId, setWorkoutId] = useState(null);   // open workout editor
+  const [importer, setImporter] = useState(false);    // AI history import layer
   const [toast, setToast] = useState("");
   const toastRef = useRef();
   const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
@@ -1702,7 +1900,7 @@ function App(){
         {inSettings
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updateState={updState} updMsg={updMsg} />
           : <>
-              {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} />}
+              {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
               {tab==="routines"  && <RoutinesScreen store={store} />}
               {tab==="progress"  && <ProgressScreen />}
@@ -1720,6 +1918,11 @@ function App(){
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout} />}
+
+      {importer &&
+        <ImportLayer store={store} onClose={()=>setImporter(false)}
+          onImported={(nw, nx)=>{ setImporter(false);
+            showToast("Imported "+nw+" workout"+(nw===1?"":"s")+(nx>0 ? " + "+nx+" new exercise"+(nx===1?"":"s") : "")); }} />}
 
       {!inSettings &&
         <nav className="nav">
