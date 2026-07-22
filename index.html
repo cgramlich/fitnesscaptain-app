@@ -294,10 +294,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.7.1";
+const APP_VERSION = "0.8.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-22.3";
+const BUILD = "2026-07-22.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1564,6 +1564,10 @@ function EntryCard({ entry, prev, units, active, onUpdate, onRemove, onSetLogged
       <div className="entry-head">
         <div style={{flex:1,minWidth:0}}>
           <div className="entry-name">{entry.name}</div>
+          {entry.targetSets>0 && !isCardio &&
+            <div className="entry-last" style={{color:"var(--amber-2)"}}>
+              Target: {entry.targetSets} x {entry.targetReps}
+            </div>}
           {prev && !isCardio &&
             <div className="entry-last">
               Last time: {prev.sets.length} set{prev.sets.length===1?"":"s"}, best {prev.best.reps} x {fmtW(prev.best.weight)} {units}
@@ -1678,7 +1682,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onClose }){
 
 /* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
    Finish. Finished: view/edit history + delete. */
-function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [restUntil, setRestUntil] = useState(0);
@@ -1785,8 +1789,12 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete }){
             <Icon d={ICONS.plus} size={15}/> Add exercise
           </button>}
 
+        {!active && (workout.entries||[]).length>0 &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:18}} onClick={()=>onSaveAsRoutine(workout)}>
+            Save as routine
+          </button>}
         {!active &&
-          <button className="btn btn-danger btn-block" style={{marginTop:18}}
+          <button className="btn btn-danger btn-block" style={{marginTop:10}}
             onClick={()=>{ if(confirm("Delete this workout from your history?")) onDelete(workout.id); }}>
             Delete workout
           </button>}
@@ -1992,29 +2000,147 @@ function ImportLayer({ store, onClose, onImported }){
   );
 }
 
-function RoutinesScreen({ store }){
-  const routines = store.data.routines || [];
+/* ============================================================
+   ROUTINES - reusable workout templates (the PriorityCaptain Templates
+   pattern). Create/edit; "Start" instantiates a pre-filled workout;
+   finished workouts can be captured back as routines.
+   ============================================================ */
+function RoutinesScreen({ store, onOpen, onAdd, onStart }){
+  const routines = (store.data.routines||[]).slice()
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   if(!routines.length){
     return (
       <div className="empty">
         <div className="glyph">&gt;</div>
         <h3 className="title-sm">Reusable routines</h3>
-        <p>Build a routine once - push day, 5x5, couch-to-5k - then start a pre-filled workout from it in one tap. Coming soon.</p>
+        <p>Build a routine once - push day, 5x5, hotel circuit - then start a
+        pre-filled workout from it in one tap. Or finish a workout you liked
+        and save it as a routine from its detail view.</p>
+        <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
+          <Icon d={ICONS.plus} size={16}/> New routine
+        </button>
       </div>
     );
   }
   return (
     <div className="list">
       {routines.map(r => (
-        <div key={r.id} className="item">
-          <div className="item-body">
+        <div key={r.id} className="item" style={{alignItems:"center"}}>
+          <button style={{flex:1,minWidth:0,textAlign:"left",display:"block"}} onClick={()=>onOpen(r)}>
             <div className="item-title">{r.name}</div>
             <div className="item-meta">
-              {Array.isArray(r.items) && <span className="chip amber">{r.items.length} exercise{r.items.length===1?"":"s"}</span>}
+              <span className="chip amber">{(r.items||[]).length} exercise{(r.items||[]).length===1?"":"s"}</span>
+              {r.gymName && <span className="chip blue">{r.gymName}</span>}
             </div>
-          </div>
+          </button>
+          <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}} onClick={(e)=>{ e.stopPropagation(); onStart(r); }}>
+            Start
+          </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* Full-screen routine editor (same layer pattern as the workout editor). */
+function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
+  const routine = (store.data.routines||[]).find(r=>r.id===routineId);
+  const [picker, setPicker] = useState(false);
+  if(!routine) return null;
+  const gym = (store.gyms||[]).find(g=>g.id===routine.gymId) || null;
+
+  const patch = (p) => store.saveCollection("routines",
+    (store.data.routines||[]).map(r => r.id===routine.id ? { ...r, ...p, updatedAt: nowISO() } : r));
+  const patchItem = (id, p) => patch({ items: (routine.items||[]).map(it => it.id===id ? { ...it, ...p } : it) });
+  const removeItem = (id) => patch({ items: (routine.items||[]).filter(it => it.id!==id) });
+  const addExercise = (x) => {
+    patch({ items: [...(routine.items||[]), {
+      id: uid(), exerciseId: x.id, name: x.name, type: x.type,
+      targetSets: 3, targetReps: 10,
+    }]});
+    setPicker(false);
+  };
+  const createAndAdd = (name) => {
+    const x = { id: uid(), name, type:"strength", muscleGroup:"Full body", equipment:"none",
+                notes:"", custom:true, createdAt: nowISO(), updatedAt: nowISO() };
+    store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
+    addExercise(x);
+  };
+  const setGym = (g) => patch({ gymId: g ? g.id : null, gymName: g ? g.name : null });
+  const bump = (it, field, delta, min, max) => patchItem(it.id, { [field]: Math.max(min, Math.min(max, (Number(it[field])||0) + delta)) });
+
+  const sBtn = { width:34, height:34, borderRadius:"50%", background:"var(--bg-4)", border:"1px solid var(--line-2)",
+                 display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:700, flex:"0 0 auto" };
+
+  return (
+    <div className="editor">
+      <div className="editor-inner">
+        <div className="editor-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <div className="editor-title">
+            <input defaultValue={routine.name||""} onBlur={e=>{ if(e.target.value!==routine.name) patch({name:e.target.value||"Routine"}); }}
+              placeholder="Routine name" />
+            <div className="elapsed">{(routine.items||[]).length} exercise{(routine.items||[]).length===1?"":"s"}</div>
+          </div>
+          <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}}
+            disabled={!(routine.items||[]).length} onClick={()=>onStart(routine)}>
+            Start
+          </button>
+        </div>
+
+        {(store.gyms||[]).length>0 &&
+          <div className="pills-row">
+            <button className={"pill "+(!routine.gymId?"on":"")} onClick={()=>setGym(null)}>Any gym</button>
+            {(store.gyms||[]).map(g =>
+              <button key={g.id} className={"pill "+(routine.gymId===g.id?"on":"")} onClick={()=>setGym(g)}>
+                {g.name}
+              </button>)}
+          </div>}
+
+        {(routine.items||[]).length===0 &&
+          <div className="empty" style={{padding:"36px 20px"}}>
+            <h3 className="title-sm">Add exercises</h3>
+            <p>Pick the movements and set targets. Starting the routine creates a
+            workout pre-filled with all of them.</p>
+          </div>}
+
+        {(routine.items||[]).map(it => (
+          <div key={it.id} className="entry">
+            <div className="entry-head">
+              <div style={{flex:1,minWidth:0}}>
+                <div className="entry-name">{it.name}</div>
+                {it.type!=="strength" && <div className="entry-last">{it.type}</div>}
+              </div>
+              <button className="entry-x" onClick={()=>removeItem(it.id)} aria-label={"Remove "+it.name}>
+                <Icon d={ICONS.x} size={15}/>
+              </button>
+            </div>
+            {it.type==="strength" &&
+              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8,flexWrap:"wrap"}}>
+                <button style={sBtn} onClick={()=>bump(it,"targetSets",-1,1,10)} aria-label="Fewer sets">-</button>
+                <span style={{fontWeight:700,fontSize:17,minWidth:20,textAlign:"center"}}>{it.targetSets}</span>
+                <button style={sBtn} onClick={()=>bump(it,"targetSets",1,1,10)} aria-label="More sets">+</button>
+                <span className="subtle">sets of</span>
+                <button style={sBtn} onClick={()=>bump(it,"targetReps",-1,1,100)} aria-label="Fewer reps">-</button>
+                <span style={{fontWeight:700,fontSize:17,minWidth:24,textAlign:"center"}}>{it.targetReps}</span>
+                <button style={sBtn} onClick={()=>bump(it,"targetReps",1,1,100)} aria-label="More reps">+</button>
+                <span className="subtle">reps</span>
+              </div>}
+          </div>
+        ))}
+
+        <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
+          <Icon d={ICONS.plus} size={15}/> Add exercise
+        </button>
+
+        <button className="btn btn-danger btn-block" style={{marginTop:18}}
+          onClick={()=>{ if(confirm("Delete this routine?")) onDelete(routine.id); }}>
+          Delete routine
+        </button>
+      </div>
+
+      {picker &&
+        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
     </div>
   );
 }
@@ -2149,6 +2275,53 @@ function App(){
     setWorkoutId(w.id);
   };
   const startHere = (g) => { setGymView(null); setTab("workouts"); startWorkout(g); };
+
+  // ---- routines ----
+  const [routineId, setRoutineId] = useState(null);   // open routine editor
+  const createRoutine = () => {
+    const r = { id: uid(), name: "New routine", items: [], gymId: null, gymName: null,
+                createdAt: nowISO(), updatedAt: nowISO() };
+    store.saveCollection("routines", [r, ...(store.data.routines||[])]);
+    setRoutineId(r.id);
+  };
+  const deleteRoutine = (id) => {
+    store.saveCollection("routines", (store.data.routines||[]).filter(r => r.id !== id));
+    setRoutineId(null);
+    showToast("Routine deleted");
+  };
+  // Instantiate a routine into a pre-filled workout (the whole point).
+  const startRoutine = (r) => {
+    const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
+    if(existing){ showToast("Finish the workout in progress first"); setWorkoutId(existing.id); setRoutineId(null); return; }
+    const gym = (store.gyms||[]).find(g=>g.id===r.gymId)
+             || (store.gyms||[]).find(g=>g.id===store.cfg.lastGymId) || null;
+    const w = { id: uid(), name: r.name, date: todayStr(), startedAt: nowISO(),
+                endedAt: null, durationMin: 0, notes: "", routineId: r.id,
+                gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
+                entries: (r.items||[]).map(it => ({
+                  id: uid(), exerciseId: it.exerciseId, name: it.name, type: it.type,
+                  sets: [], cardio: null,
+                  targetSets: it.targetSets, targetReps: it.targetReps,
+                })) };
+    store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
+    setRoutineId(null); setTab("workouts"); setWorkoutId(w.id);
+  };
+  // Capture a finished workout as a reusable routine.
+  const saveAsRoutine = (w) => {
+    const items = (w.entries||[]).filter(e => (e.sets||[]).length || e.cardio || e.type!=="strength")
+      .map(e => {
+        const reps = (e.sets||[]).map(s=>Number(s.reps)||0).filter(Boolean);
+        const mode = reps.length ? reps.sort((a,b)=> reps.filter(v=>v===a).length - reps.filter(v=>v===b).length).pop() : 10;
+        return { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
+                 targetSets: (e.sets||[]).length || 3, targetReps: mode };
+      });
+    if(!items.length){ showToast("Nothing to capture from this workout"); return; }
+    const r = { id: uid(), name: w.name || "Routine", items,
+                gymId: w.gymId||null, gymName: w.gymName||null,
+                createdAt: nowISO(), updatedAt: nowISO() };
+    store.saveCollection("routines", [r, ...(store.data.routines||[])]);
+    showToast("Saved as routine: "+r.name);
+  };
   const finishWorkout = (w) => {
     const mins = Math.max(1, Math.round((Date.now() - new Date(w.startedAt).getTime())/60000));
     store.saveCollection("workouts",
@@ -2282,7 +2455,7 @@ function App(){
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
-              {tab==="routines"  && <RoutinesScreen store={store} />}
+              {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} />}
               {tab==="progress"  && <ProgressScreen />}
             </>}
       </div>
@@ -2291,6 +2464,8 @@ function App(){
         <button className="fab" onClick={()=>startWorkout()} aria-label="Start workout"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="gyms" && !gymSheet && !gymView &&
         <button className="fab" onClick={()=>setGymSheet({gym:null})} aria-label="Add gym"><Icon d={ICONS.plus} size={26}/></button>}
+      {!inSettings && tab==="routines" && !routineId &&
+        <button className="fab" onClick={createRoutine} aria-label="New routine"><Icon d={ICONS.plus} size={26}/></button>}
       {!inSettings && tab==="exercises" && !exSheet &&
         <button className="fab" onClick={()=>setExSheet({exercise:null})} aria-label="Add exercise"><Icon d={ICONS.plus} size={26}/></button>}
 
@@ -2306,7 +2481,12 @@ function App(){
 
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
-          onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout} />}
+          onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
+          onSaveAsRoutine={saveAsRoutine} />}
+
+      {routineId &&
+        <RoutineEditor key={routineId} store={store} routineId={routineId}
+          onClose={()=>setRoutineId(null)} onDelete={deleteRoutine} onStart={startRoutine} />}
 
       {importer &&
         <ImportLayer store={store} onClose={()=>setImporter(false)}
