@@ -294,10 +294,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.8.0";
+const APP_VERSION = "0.9.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-22.4";
+const BUILD = "2026-07-22.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2005,7 +2005,7 @@ function ImportLayer({ store, onClose, onImported }){
    pattern). Create/edit; "Start" instantiates a pre-filled workout;
    finished workouts can be captured back as routines.
    ============================================================ */
-function RoutinesScreen({ store, onOpen, onAdd, onStart }){
+function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport }){
   const routines = (store.data.routines||[]).slice()
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   if(!routines.length){
@@ -2018,6 +2018,9 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart }){
         and save it as a routine from its detail view.</p>
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
           <Icon d={ICONS.plus} size={16}/> New routine
+        </button>
+        <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={onImport}>
+          Import a program
         </button>
       </div>
     );
@@ -2038,6 +2041,179 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart }){
           </button>
         </div>
       ))}
+      <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:4}} onClick={onImport}>
+        Import a program
+      </button>
+    </div>
+  );
+}
+
+/* Paste a whole training program -> AI parses it into routines -> review
+   before anything saves. Same discipline as the workout history import. */
+function ImportRoutinesLayer({ store, onClose, onImported }){
+  const [phase, setPhase] = useState("paste");   // paste | busy | review
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const [parsed, setParsed] = useState([]);
+  const [skipped, setSkipped] = useState([]);
+
+  const organize = async () => {
+    const t = text.trim();
+    if(t.length < 10){ setErr("Paste a program first."); return; }
+    setErr(""); setPhase("busy");
+    try{
+      const names = (store.data.exercises||[]).map(x=>x.name);
+      const gymNames = (store.gyms||[]).map(g=>g.name);
+      const system = "You convert a pasted training program into strict JSON. Return ONLY a JSON " +
+        "object, no prose and no markdown fences: " +
+        '{"routines":[{"name":"...","gym":"gym name or null","items":[{"exercise":"name",' +
+        '"type":"strength|cardio|mobility","targetSets":N,"targetReps":N}]}],' +
+        '"skipped":["lines you could not interpret"]}. ' +
+        "Rules: one routine per named day/section, keep the section's name. " +
+        "When an exercise clearly matches one of the user's library names use the library name EXACTLY: " +
+        names.join(", ") + ". Otherwise use a clean title-case name. " +
+        "type: lifts and carries = strength; running/bike/row intervals = cardio; stretches, holds and " +
+        "mobility drills = mobility. targetSets/targetReps: for strength use the text's sets and reps " +
+        "(per-side counts stay as written; default 3 and 10 if unstated); for cardio/mobility use 0 and 0. " +
+        "Supersets become separate consecutive items. " +
+        (gymNames.length ? 'gym: one of "'+gymNames.join('", "')+'" when the text names it, else null. ' : "gym: always null. ") +
+        "Never invent routines or exercises not in the text.";
+      const out = await aiRelay("import_routines",
+        [{ role:"user", content: t.slice(0, 20000) }],
+        { system, maxTokens: 8000 });
+      let obj;
+      try{ obj = JSON.parse(stripFences(out)); }
+      catch(e){ throw new Error("Couldn't read the result. Try a smaller chunk."); }
+      const rs = Array.isArray(obj && obj.routines) ? obj.routines : [];
+      if(!rs.length) throw new Error("No routines found in that text.");
+      const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+      const review = rs.map(r => {
+        const gym = (store.gyms||[]).find(g => g.name === r.gym) || null;
+        return {
+          include: true,
+          name: (r.name||"Routine").slice(0,60),
+          gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
+          items: (Array.isArray(r.items)?r.items:[]).map(it => ({
+            name: String(it.exercise||"Exercise").slice(0,60),
+            type: EXERCISE_TYPES.includes(it.type) ? it.type : "strength",
+            targetSets: Math.max(0, Math.min(10, Math.round(Number(it.targetSets)||0))),
+            targetReps: Math.max(0, Math.min(100, Math.round(Number(it.targetReps)||0))),
+            matched: !!lib[normName(String(it.exercise||""))],
+          })).filter(it=>it.name),
+        };
+      }).filter(r => r.items.length);
+      if(!review.length) throw new Error("Nothing usable was parsed.");
+      setParsed(review);
+      setSkipped(Array.isArray(obj.skipped) ? obj.skipped.slice(0,20) : []);
+      setPhase("review");
+      log("IMPORT","parsed "+review.length+" routines");
+    }catch(e){
+      setErr(e.message||"Import failed."); setPhase("paste");
+      log("ERROR","import_routines: "+e.message);
+    }
+  };
+
+  const toggle = (i) => setParsed(p => p.map((r,j)=> j===i ? {...r, include:!r.include} : r));
+
+  const importAll = () => {
+    const inc = parsed.filter(r=>r.include);
+    if(!inc.length){ setErr("Everything is set to skip."); return; }
+    const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+    const created = [];
+    inc.forEach(r => r.items.forEach(it => {
+      const key = normName(it.name);
+      if(!lib[key]){
+        const x = { id: uid(), name: it.name, type: it.type, muscleGroup: "Full body",
+                    equipment: "none", notes: "", custom: true,
+                    createdAt: nowISO(), updatedAt: nowISO() };
+        lib[key] = x; created.push(x);
+      }
+    }));
+    if(created.length) store.saveCollection("exercises", [...created, ...(store.data.exercises||[])]);
+    const routines = inc.map(r => ({
+      id: uid(), name: r.name, gymId: r.gymId, gymName: r.gymName,
+      items: r.items.map(it => ({
+        id: uid(), exerciseId: lib[normName(it.name)].id, name: lib[normName(it.name)].name,
+        type: it.type,
+        targetSets: it.type==="strength" ? (it.targetSets||3) : 0,
+        targetReps: it.type==="strength" ? (it.targetReps||10) : 0,
+      })),
+      createdAt: nowISO(), updatedAt: nowISO(),
+    }));
+    store.saveCollection("routines", [...routines, ...(store.data.routines||[])]);
+    log("IMPORT","imported "+routines.length+" routines, "+created.length+" new exercises");
+    onImported(routines.length, created.length);
+  };
+
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2>Import routines</h2>
+        </div>
+
+        {phase==="paste" && <>
+          <p className="hint" style={{marginTop:4}}>
+            Paste a whole program - day names, exercises, sets x reps. The AI
+            turns each day into a routine; you review before anything saves.
+          </p>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          <textarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
+            onChange={e=>setText(e.target.value)}
+            placeholder={"e.g.\nDay 1 - Lower\nTrap Bar Deadlift 4x6\nGoblet Squat 3x10\n\nDay 2 - Push\nBench Press 4x8 ..."} />
+          <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={organize}>
+            Organize with AI
+          </button>
+        </>}
+
+        {phase==="busy" &&
+          <div className="empty" style={{padding:"60px 20px"}}>
+            <span className="spin spin-lg" style={{margin:"0 auto 16px",display:"block"}}></span>
+            <p>Reading the program...</p>
+          </div>}
+
+        {phase==="review" && <>
+          <p className="hint" style={{marginTop:4}}>
+            Review before saving. Exercises marked "new" will be added to your library.
+          </p>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          {parsed.map((r,i) => (
+            <div key={i} className="entry" style={{opacity: r.include?1:.45}}>
+              <div className="entry-head">
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="entry-name">{r.name}</div>
+                  {r.gymName && <div className="entry-last">{r.gymName}</div>}
+                </div>
+                <button className={"pill "+(r.include?"on":"")} style={{flex:"0 0 auto"}} onClick={()=>toggle(i)}>
+                  {r.include ? "Include" : "Skip"}
+                </button>
+              </div>
+              {r.items.map((it,j) => (
+                <div key={j} className="set-row" style={{cursor:"default"}}>
+                  <span className="set-main" style={{fontWeight:500}}>
+                    {it.name}
+                    {it.type==="strength" && it.targetSets>0 && " - "+it.targetSets+" x "+it.targetReps}
+                    {it.type!=="strength" && " - "+it.type}
+                  </span>
+                  {!it.matched && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+          {skipped.length>0 &&
+            <div className="card" style={{marginTop:12}}>
+              <div className="subtle" style={{marginBottom:6}}>Couldn't interpret:</div>
+              {skipped.map((s,i)=><div key={i} className="hint">{String(s).slice(0,120)}</div>)}
+            </div>}
+          <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={importAll}>
+            Import {parsed.filter(r=>r.include).length} routine{parsed.filter(r=>r.include).length===1?"":"s"}
+          </button>
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>{ setPhase("paste"); setErr(""); }}>
+            Back to paste
+          </button>
+        </>}
+      </div>
     </div>
   );
 }
@@ -2231,6 +2407,7 @@ function App(){
   const [exSheet, setExSheet] = useState(null);   // null | {exercise: rec|null}
   const [workoutId, setWorkoutId] = useState(null);   // open workout editor
   const [importer, setImporter] = useState(false);    // AI history import layer
+  const [routineImporter, setRoutineImporter] = useState(false);   // AI program import layer
   const [gymSheet, setGymSheet] = useState(null);     // null | {gym: rec|null}
   const [gymView, setGymView] = useState(null);       // open gym place page (id)
 
@@ -2455,7 +2632,7 @@ function App(){
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})} />}
-              {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} />}
+              {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter(true)} />}
               {tab==="progress"  && <ProgressScreen />}
             </>}
       </div>
@@ -2492,6 +2669,11 @@ function App(){
         <ImportLayer store={store} onClose={()=>setImporter(false)}
           onImported={(nw, nx)=>{ setImporter(false);
             showToast("Imported "+nw+" workout"+(nw===1?"":"s")+(nx>0 ? " + "+nx+" new exercise"+(nx===1?"":"s") : "")); }} />}
+
+      {routineImporter &&
+        <ImportRoutinesLayer store={store} onClose={()=>setRoutineImporter(false)}
+          onImported={(nr, nx)=>{ setRoutineImporter(false); setTab("routines");
+            showToast("Imported "+nr+" routine"+(nr===1?"":"s")+(nx>0 ? " + "+nx+" new exercise"+(nx===1?"":"s") : "")); }} />}
 
       {!inSettings &&
         <nav className="nav">
