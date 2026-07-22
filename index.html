@@ -294,10 +294,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.10.1";
+const APP_VERSION = "0.10.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-22.7";
+const BUILD = "2026-07-22.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1234,7 +1234,7 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
           {explainErr && <div className="auth-msg err" style={{marginTop:8,marginBottom:0}}>{explainErr}</div>}
           <div className="row" style={{marginTop:8}}>
             <button className="btn btn-ghost btn-sm" disabled={explaining} onClick={explain}>
-              {explaining ? <span className="spin"></span> : (notes.trim() ? "Rewrite cues with AI" : "Write cues with AI")}
+              {explaining ? <span className="spin"></span> : (notes.trim() ? "Rewrite how-to" : "How to do it")}
             </button>
             <a className="btn btn-ghost btn-sm" style={{textDecoration:"none"}}
               href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
