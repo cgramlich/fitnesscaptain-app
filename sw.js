@@ -17,7 +17,7 @@
      bytes is what makes the browser install the new worker.
 */
 
-const VERSION      = "0.13.0";                  // keep in lockstep with APP_VERSION
+const VERSION      = "0.13.1";                  // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "fc-shell-" + VERSION;
 const ASSET_CACHE  = "fc-assets-" + VERSION;
 const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versioned so it
