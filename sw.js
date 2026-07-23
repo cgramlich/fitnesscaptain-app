@@ -17,7 +17,7 @@
      bytes is what makes the browser install the new worker.
 */
 
-const VERSION      = "0.12.0";                  // keep in lockstep with APP_VERSION
+const VERSION      = "0.12.1";                  // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "fc-shell-" + VERSION;
 const ASSET_CACHE  = "fc-assets-" + VERSION;
 const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versioned so it
@@ -26,9 +26,18 @@ const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versione
 const SHELL_URL    = new URL("./", self.location).pathname;
 
 // Primed on install so even the very first offline open works.
+// Each is a Request with SRI (integrity) + CORS mode, mirroring the <script>
+// tags in index.html - the fetch fails (and is skipped by allSettled) if the
+// CDN response doesn't hash-match, so a tampered copy never enters the cache.
 const CRITICAL_ASSETS = [
-  "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js", {
+    integrity: "sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8",
+    mode: "cors",
+  }),
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js", {
+    integrity: "sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh",
+    mode: "cors",
+  }),
 ];
 
 self.addEventListener("install", (event) => {
