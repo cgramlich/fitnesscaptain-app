@@ -308,10 +308,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.14.0";
+const APP_VERSION = "0.14.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-23.2";
+const BUILD = "2026-07-24.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1030,11 +1030,17 @@ function SetPassword({ store }){
 function SwipeRow({ onDelete, className, children }){
   const [dx,setDx] = useState(0);
   const st = useRef(null); const moved = useRef(false);
-  function down(e){ st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false; try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){} }
+  // Pointer capture is deferred until horizontal drag intent: capturing on
+  // pointerdown retargets the follow-up click to the swipe body, which eats
+  // desktop mouse clicks on the wrapped row's buttons (rows look dead).
+  function down(e){ st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false; }
   function move(e){
     if(!st.current) return;
     const ddx = e.clientX - st.current.x, ddy = e.clientY - st.current.y;
-    if(Math.abs(ddx) > 8 && Math.abs(ddx) > Math.abs(ddy)) moved.current = true;
+    if(!moved.current && Math.abs(ddx) > 8 && Math.abs(ddx) > Math.abs(ddy)){
+      moved.current = true;
+      try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){}
+    }
     if(moved.current){ setDx(Math.max(-96, Math.min(0, st.current.base + ddx))); }
   }
   function end(){ if(!st.current) return; st.current = null; setDx(d => { const nd = d <= -48 ? -84 : 0; if(nd===0) moved.current = false; return nd; }); }
