@@ -5,6 +5,15 @@ portfolio). Copied from the HomeCaptain shell (the freshest clean extract of
 the MenuCaptain/Tracker template) and reskinned; auth patterns (forgot
 password, recovery, password-reveal eyeball) ported from Tracker.
 
+## Doc currency (Forever Apps starter spec section 5)
+
+Update docs in the SAME session as the code change: this CLAUDE.md stays true to
+the code, and the docs in `Dropbox\My AI\CG Apps\Health Tracker\` update when the
+architecture changes. Write a DATED entry in
+`C:\Users\cjgra\Dropbox\My AI\CG Apps\Health Tracker\Fitness Log\` for EVERY work
+session. Never hardcode versions in docs; point at `APP_VERSION`/`BUILD` in
+index.html and the backend's live `/health`.
+
 ## Architecture
 
 - `index.html` - the whole app: theme tokens, store, auth, screens. React via
