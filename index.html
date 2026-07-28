@@ -343,10 +343,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.34.0";
+const APP_VERSION = "0.35.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.32";
+const BUILD = "2026-07-28.33";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1618,6 +1618,27 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
   const next = programNext(prog, store.data.routines||[]);
   if(!next) return null;
   const busy = (store.data.workouts||[]).find(w=>!w.endedAt) || null;
+  // Chris: "two sections that say there's a workout in progress is just
+  // overload." He was right - this card grew a big "go to your workout in
+  // progress" button AND a sentence about it, while the dedicated card
+  // below said the same thing again. Now the in-progress card owns that
+  // message alone. If the open workout IS this program day, this card is
+  // redundant entirely and disappears; otherwise it goes quiet and just
+  // says what is queued.
+  if(busy && busy.routineId === next.routine.id) return null;
+  if(busy) return (
+    <div className="card" style={{marginTop:14}}>
+      <div className="updrow" style={{marginBottom:6}}>
+        <span className="subtle" style={{fontSize:12}}>{prog.name}</span>
+        <span className="subtle" style={{fontSize:12}}>day {next.position} of {next.total}</span>
+      </div>
+      <div style={{fontWeight:700,fontSize:16}}>{next.routine.name}</div>
+      <div className="item-meta" style={{marginTop:6}}>
+        <span className="chip">up next</span>
+        <span className="chip">{(next.routine.items||[]).length} exercise{(next.routine.items||[]).length===1?"":"s"}</span>
+      </div>
+    </div>
+  );
   return (
     <div className="card" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}}>
       <div className="updrow" style={{marginBottom:6}}>
@@ -1629,17 +1650,10 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
         <span className="chip">{(next.routine.items||[]).length} exercise{(next.routine.items||[]).length===1?"":"s"}</span>
         {next.routine.gymName && <span className="chip blue">{next.routine.gymName}</span>}
       </div>
-      {/* With a workout already open this used to be a DISABLED button styled
-          exactly like a live one, worded as an instruction - so it read as
-          "press me" and did nothing. It now goes where it points. */}
       <button className="btn btn-primary btn-block" style={{marginTop:12}}
-        onClick={()=> busy ? onOpenWorkout(busy) : onStartRoutine(next.routine)}>
-        {busy ? "Go to your workout in progress" : "Start "+next.routine.name}
+        onClick={()=>onStartRoutine(next.routine)}>
+        Start {next.routine.name}
       </button>
-      {busy &&
-        <p className="hint center" style={{marginTop:8,marginBottom:0}}>
-          Finish or delete it and {next.routine.name} is ready here.
-        </p>}
     </div>
   );
 }
@@ -1673,27 +1687,34 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRou
 
   return (
     <div>
+      {/* An open workout is the single most actionable thing on this screen,
+          so it goes first - above the program card, which now stays quiet
+          while one is running rather than repeating the same news. */}
+      {activeW &&
+        <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
+          <div className="item-body">
+            <div className="item-title" style={{color:"var(--amber-2)"}}>Workout in progress</div>
+            <div className="item-meta">
+              <span className="chip amber">{activeW.name}</span>
+              <span className="chip">{(activeW.entries||[]).length} exercise{(activeW.entries||[]).length===1?"":"s"}</span>
+              <span className="chip">{workoutSets(activeW)} sets</span>
+            </div>
+            <p className="hint" style={{margin:"8px 0 0"}}>Tap to pick it back up, or finish it there.</p>
+          </div>
+        </button>}
+
       <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
       <DailyCard store={store} />
-      {activeW
-        ? <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
-            <div className="item-body">
-              <div className="item-title" style={{color:"var(--amber-2)"}}>Workout in progress</div>
-              <div className="item-meta">
-                <span className="chip amber">{activeW.name}</span>
-                <span className="chip">{(activeW.entries||[]).length} exercise{(activeW.entries||[]).length===1?"":"s"}</span>
-                <span className="chip">{workoutSets(activeW)} sets</span>
-              </div>
-            </div>
-          </button>
-        : /* Only ONE orange button per screen. With a program running, the
-             Next up card is the recommendation and an ad-hoc start is the
-             alternative - two primaries side by side make the app look
-             undecided about what you should do. */
-          <button className={"btn btn-block "+(activeProgram(store) ? "btn-ghost" : "btn-primary")}
-            style={{marginTop:14}} onClick={onStart}>
-            <Icon d={ICONS.plus} size={16}/> Start a workout
-          </button>}
+
+      {!activeW &&
+        /* Only ONE orange button per screen. With a program running, the
+           Next up card is the recommendation and an ad-hoc start is the
+           alternative - two primaries side by side make the app look
+           undecided about what you should do. */
+        <button className={"btn btn-block "+(activeProgram(store) ? "btn-ghost" : "btn-primary")}
+          style={{marginTop:14}} onClick={onStart}>
+          <Icon d={ICONS.plus} size={16}/> Start a workout
+        </button>}
 
       <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={onImport}>
         Import past workouts
@@ -5052,13 +5073,20 @@ function App(){
             <Icon d={inSettings ? ICONS.back : ICONS.gear} size={21}/>
           </button>
         </div>
-        <div className={"sync "+store.sync}>
-          <span className="dot"></span>
-          {store.sync==="idle" && "All changes saved"}
-          {store.sync==="busy" && "Syncing..."}
-          {store.sync==="pending" && "Offline - will sync"}
-          {store.sync==="error" && (store.syncMsg || "Sync error")}
-        </div>
+        {/* The error state used to be a dead label: it stuck until something
+            else happened to trigger a pull, with no way to ask again. It is
+            a button now - the one moment the badge should be tappable. */}
+        {store.sync==="error"
+          ? <button className="sync error" onClick={()=>store.pullAll()}>
+              <span className="dot"></span>
+              {(store.syncMsg || "Sync error")} - tap to retry
+            </button>
+          : <div className={"sync "+store.sync}>
+              <span className="dot"></span>
+              {store.sync==="idle" && "All changes saved"}
+              {store.sync==="busy" && "Syncing..."}
+              {store.sync==="pending" && "Offline - will sync"}
+            </div>}
       </div>
 
       <div className="screen">
