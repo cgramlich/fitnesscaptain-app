@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.5";
+const APP_VERSION = "0.28.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.21";
+const BUILD = "2026-07-28.22";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4425,6 +4425,12 @@ function AddSheet({ hasRoutines, active, onPick, onClose }){
         {hasRoutines &&
           <Item what="fromRoutine" icon={ICONS.repeat} t1="Start from a routine" t2="Pick a routine, get a pre-filled workout" />}
         <div className="sheet-div"></div>
+        {/* Program creation lives here too. At the foot of the Routines list
+            it scrolls out of reach once you own a few routines - which is
+            exactly when you are least likely to go hunting for it. */}
+        <Item what="buildProgram"  icon={ICONS.repeat} t1="Build me a program" t2="Answer four questions, get a week" />
+        <Item what="importProgram" icon={ICONS.repeat} t1="Import a program"   t2="Paste one you already have" />
+        <div className="sheet-div"></div>
         <Item what="exercise" icon={ICONS.book} t1="Add exercise" t2="Grow your library" />
         <Item what="gym"      icon={ICONS.pin}  t1="Add gym"      t2="A place you train, with its equipment" />
         <Item what="routine"  icon={ICONS.plus} t1="New routine"  t2="Build a reusable plan" />
@@ -4534,6 +4540,8 @@ function App(){
     else if(what==="exercise"){ setExSheet({exercise:null}); }
     else if(what==="gym"){ setGymSheet({gym:null}); }
     else if(what==="routine"){ setTab("routines"); createRoutine(); }
+    else if(what==="buildProgram"){ setTab("routines"); setRoutineImporter("build"); }
+    else if(what==="importProgram"){ setTab("routines"); setRoutineImporter("paste"); }
   };
 
   // ---- routines ----
