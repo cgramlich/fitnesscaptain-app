@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.22.0";
+const APP_VERSION = "0.23.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.10";
+const BUILD = "2026-07-28.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -439,23 +439,11 @@ function mediaTokens(s){
   return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ")
     .filter(Boolean).map(t => MEDIA_SYNONYMS[t] || t);
 }
+// Illustrations tolerate a looser match than renaming does, but run through
+// the same scorer so a modifier mismatch can never show the wrong movement.
 function matchMedia(idx, name){
-  if(!idx || !idx.items) return null;
-  const exact = idx.items[normName(name)];
-  if(exact) return exact;
-  const want = mediaTokens(name);
-  if(!want.length) return null;
-  let best = null, bestScore = 0;
-  for(const k in idx.items){
-    const it = idx.items[k];
-    const have = mediaTokens(it.n);
-    let hit = 0;
-    for(const t of want) if(have.indexOf(t) !== -1) hit++;
-    if(!hit) continue;
-    const score = hit / Math.max(want.length, have.length);
-    if(score > bestScore){ bestScore = score; best = it; }
-  }
-  return bestScore >= 0.5 ? best : null;
+  const m = matchMediaScored(idx, name);
+  return (m && m.score >= 0.5) ? m.item : null;
 }
 
 /* Full reference record for one movement (instructions, equipment, muscles).
@@ -484,6 +472,50 @@ function refInstructions(ref){
    rename is listed afterwards and one tap undoes the lot, history
    snapshots included. */
 const RENAME_THRESHOLD = 0.62;
+/* Words that CHANGE the movement rather than describe it. Token overlap alone
+   cannot see the difference: "DB Standing Curl" vs "Standing Dumbbell Reverse
+   Curl" shares every word the user typed and scores 0.75, but a reverse curl
+   is a different exercise. So any of these present on one side and not the
+   other disqualifies the match outright. "flat" is deliberately absent - it
+   is the default a name omits, so "DB Flat Bench" -> "Dumbbell Bench Press"
+   must still pass. */
+const NAME_MODIFIERS = new Set([
+  "reverse","incline","decline","hammer","preacher","concentration","spider","zottman",
+  "sumo","deficit","romanian","stiff","behind","overhead","close","wide","narrow",
+  "single","one","alternating","bulgarian","split","pause","paused","negative","assisted",
+  "jump","plyo","smith","landmine","cable","machine","band","banded","kettlebell",
+  "barbell","goblet","trap","hex","safety","front","walking","lying","kneeling","bent",
+  "upright","seated","standing","chest","rear","side","bulgarian",
+  // Body parts change the movement as surely as any qualifier does: a leg
+  // curl is not a bicep curl, an ab crunch is not a neck crunch.
+  "leg","legs","arm","arms","calf","calves","thigh","glute","glutes","ab","abs",
+  "abdominal","oblique","neck","wrist","ankle","hip","hips","shoulder","shoulders",
+  "tricep","triceps","bicep","biceps","lat","lats","pec","pectoral","hamstring",
+  "quad","quadriceps","forearm","lateral","spinal","erector",
+]);
+function modifiersMatch(a, b){
+  for(const t of a) if(NAME_MODIFIERS.has(t) && b.indexOf(t) === -1) return false;
+  for(const t of b) if(NAME_MODIFIERS.has(t) && a.indexOf(t) === -1) return false;
+  return true;
+}
+/* The noun that says what the movement IS. Qualifiers can overlap completely
+   while the movement differs - "DB Standing Curl" and "Standing Dumbbell
+   Press" share two of three words and score 0.67, but one is a curl and the
+   other is a press. When both names name a movement, they must name the
+   same one. */
+const MOVEMENT_NOUNS = new Set([
+  "curl","press","bench","row","squat","deadlift","fly","flye","raise","extension",
+  "pulldown","pullup","chinup","pullover","dip","lunge","thrust","swing","carry",
+  "crunch","situp","plank","bridge","pushup","shrug","kickback","pushdown","stepup",
+  "rotation","chop","throw","jump","hold","stretch","twist","clean","snatch","jerk",
+  "thruster","hyperextension","abduction","adduction","burpee","climb","runner",
+]);
+function sameMovement(a, b){
+  const na = a.filter(t => MOVEMENT_NOUNS.has(t));
+  const nb = b.filter(t => MOVEMENT_NOUNS.has(t));
+  if(!na.length || !nb.length) return true;          // nothing to compare
+  return na.some(t => nb.indexOf(t) !== -1);
+}
 function matchMediaScored(idx, name){
   if(!idx || !idx.items) return null;
   const exact = idx.items[normName(name)];
@@ -494,6 +526,8 @@ function matchMediaScored(idx, name){
   for(const k in idx.items){
     const it = idx.items[k];
     const have = mediaTokens(it.n);
+    if(!modifiersMatch(want, have)) continue;
+    if(!sameMovement(want, have)) continue;
     let hit = 0;
     for(const t of want) if(have.indexOf(t) !== -1) hit++;
     if(!hit) continue;
@@ -512,9 +546,13 @@ function matchMediaScored(idx, name){
 function nameSuggestion(idx, lib, name){
   const inLib = !!lib[normName(name)];
   const m = idx ? matchMediaScored(idx, name) : null;
-  const suggest = (m && m.score >= RENAME_THRESHOLD && normName(m.item.n) !== normName(name))
-    ? m.item.n : null;
-  return { name, suggestName: inLib ? null : suggest, useSuggest: inLib ? false : !!suggest };
+  const ok = m && m.score >= RENAME_THRESHOLD && normName(m.item.n) !== normName(name);
+  // Pre-accept only a strong match. A merely plausible one is still offered,
+  // but the user's own wording stays selected until they say otherwise -
+  // being wrong by default is worse than asking for one extra tap.
+  return { name,
+           suggestName: inLib || !ok ? null : m.item.n,
+           useSuggest: !inLib && ok && m.score >= 0.8 };
 }
 const chosenName = (e) => (e && e.useSuggest && e.suggestName) ? e.suggestName : (e ? e.name : "");
 
@@ -2511,6 +2549,12 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
             <div className="entry-last">
               Last time: {prev.sets.length} set{prev.sets.length===1?"":"s"}, best {prev.best.reps} x {fmtW(prev.best.weight)} {units}
             </div>}
+          {/* Machine setup from the last time you did this - the numbers you
+              otherwise rediscover by trial and error every visit. */}
+          {(entry.settings || (prev && prev.settings)) && !isCardio &&
+            <div className="entry-last" style={{color:"var(--amber-2)"}}>
+              {entry.settings || prev.settings}
+            </div>}
         </div>
         {active &&
           <button className="entry-x" onClick={onRemove} aria-label={"Remove "+entry.name}>
@@ -2796,7 +2840,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       if(w.id===workout.id) continue;
       const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
       if(e){
-        return { sets: e.sets, best: topSet(e.sets) };
+        return { sets: e.sets, best: topSet(e.sets), settings: e.settings || "" };
       }
     }
     return null;
@@ -2893,20 +2937,29 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
    ============================================================ */
 const normName = s => String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
 
-function importSystemPrompt(units, libraryNames){
+function importSystemPrompt(units, libraryNames, gymNames){
   return "You organize pasted workout history into strict JSON. Return ONLY a JSON object, " +
     "no prose and no markdown fences, shaped exactly like this: " +
-    '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","notes":"",' +
+    '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","gym":"gym name or null","notes":"",' +
     '"entries":[{"exercise":"name","type":"strength|cardio|mobility","group":"muscle group",' +
-    '"sets":[{"reps":N,"weight":N}] (strength only, else null),' +
+    '"settings":"machine settings or empty",' +
+    '"sets":[{"reps":N,"weight":N,"effort":"easy|solid|hard|fail or omitted"}] (strength only, else null),' +
     '"cardio":{"minutes":N,"distance":N} (cardio/mobility only, else null)}]}],' +
     '"skipped":["input lines you could not interpret"]}. ' +
     "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
     '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
     "Rules: weights are in " + units + " unless the text clearly says otherwise (convert if needed); " +
     "bodyweight movements use weight 0; numbers are plain with no units. " +
+    'effort: ONLY when the text marks the set - "fail"/"f"/"failed"/"missed" -> "fail", ' +
+    '"hard"/"grinder"/"tough" -> "hard", "easy" -> "easy". Omit it otherwise; never guess from the numbers. ' +
+    'settings: machine setup noted in brackets or after the reps ("Seat 3, Arm 2", "Height 2", ' +
+    '"Level 3") copied verbatim, else "". Do NOT put set data in settings. ' +
     "When an exercise clearly matches one of the user's library names, use the library name EXACTLY. " +
     "Library: " + libraryNames.join(", ") + ". " +
+    (gymNames && gymNames.length
+      ? 'gym: one of "'+gymNames.join('", "')+'" when the text names that place (match loosely - a ' +
+        'short form or abbreviation of a gym name counts), else null. '
+      : "gym: always null. ") +
     "Otherwise use a clean title-case name. Use dates from the text; null when absent. " +
     "Split distinct days into separate workouts. Never invent workouts, exercises, or sets that are not in the text.";
 }
@@ -2925,9 +2978,10 @@ function ImportLayer({ store, onClose, onImported }){
     setErr(""); setPhase("busy");
     try{
       const names = (store.data.exercises||[]).map(x=>x.name);
+      const gymNames = (store.gyms||[]).map(g=>g.name);
       const out = await aiRelay("import_history",
         [{ role:"user", content: t.slice(0, 20000) }],
-        { system: importSystemPrompt(units, names), maxTokens: 16000 });
+        { system: importSystemPrompt(units, names, gymNames), maxTokens: 16000 });
       let obj;
       try{ obj = JSON.parse(stripFences(out)); }
       catch(e){ throw new Error("Couldn't read the result. Try pasting a smaller chunk."); }
@@ -2935,26 +2989,34 @@ function ImportLayer({ store, onClose, onImported }){
       if(!ws.length) throw new Error("No workouts found in that text. Try a different chunk.");
       const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
       const mediaIdx = await loadMediaIndex();
-      const review = ws.map(w => ({
+      const review = ws.map(w => {
+        const gym = (store.gyms||[]).find(g => normName(g.name) === normName(w.gym||"")) || null;
+        return {
         include: true,
         date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
         name: (w.name||"Imported workout").slice(0,60),
         notes: (w.notes||"").slice(0,500),
+        gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
         entries: (Array.isArray(w.entries)?w.entries:[]).map(e => {
           const type = EXERCISE_TYPES.includes(e.type) ? e.type : "strength";
           const sets = (type==="strength" && Array.isArray(e.sets))
-            ? e.sets.map(s=>({ reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
-                               weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) }))
-                    .filter(s=>s.reps>0)
+            ? e.sets.map(s=>{
+                const rec = { reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
+                              weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) };
+                if(EFFORTS.some(x=>x.k===s.effort)) rec.effort = s.effort;
+                return rec;
+              }).filter(s=>s.reps>0)
             : [];
           const cardio = (type!=="strength" && e.cardio && Number(e.cardio.minutes)>0)
             ? { minutes: Math.round(Number(e.cardio.minutes)), distance: Math.max(0, Number(e.cardio.distance)||0), unit: units==="kg"?"km":"mi" }
             : null;
           const name = String(e.exercise||"Exercise").slice(0,60);
           const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
-          return { name, type, group, sets, cardio, ...nameSuggestion(mediaIdx, lib, name) };
+          const settings = String(e.settings||"").slice(0,80);
+          return { name, type, group, sets, cardio, settings, ...nameSuggestion(mediaIdx, lib, name) };
         }).filter(e => e.sets.length || e.cardio),
-      })).filter(w => w.entries.length);
+        };
+      }).filter(w => w.entries.length);
       if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
       setParsed(review);
       setSkipped(Array.isArray(obj.skipped) ? obj.skipped.slice(0,20) : []);
@@ -2993,9 +3055,11 @@ function ImportLayer({ store, onClose, onImported }){
       id: uid(), name: w.name, date: w.date,
       startedAt: w.date + "T12:00:00.000Z", endedAt: w.date + "T12:00:00.000Z",
       durationMin: 0, notes: w.notes, imported: true,
+      gymId: w.gymId || null, gymName: w.gymName || null,
       entries: w.entries.map(e => ({
         id: uid(), exerciseId: lib[normName(chosenName(e))].id, name: lib[normName(chosenName(e))].name,
         type: e.type, sets: e.sets, cardio: e.cardio,
+        settings: e.settings || undefined,
       })),
     }));
     store.saveCollection("workouts", [...workouts, ...(store.data.workouts||[])]);
@@ -3046,6 +3110,7 @@ function ImportLayer({ store, onClose, onImported }){
                   <input className="input" type="date" value={w.date} style={{marginTop:8,maxWidth:180,padding:"8px 10px"}}
                     onChange={e=>setDate(i, e.target.value||todayStr())} />
                 </div>
+                {w.gymName && <span className="chip blue" style={{flex:"0 0 auto"}}>{w.gymName}</span>}
                 <button className={"pill "+(w.include?"on":"")} style={{flex:"0 0 auto"}} onClick={()=>toggle(i)}>
                   {w.include ? "Included" : "Skipped"}
                 </button>
@@ -3061,6 +3126,7 @@ function ImportLayer({ store, onClose, onImported }){
                     </span>
                     {!libHas(chosenName(e)) && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
                   </div>
+                  {e.settings && <div className="hint" style={{marginTop:2}}>{e.settings}</div>}
                   {e.suggestName &&
                     <button className="pill" style={{marginTop:6}} onClick={()=>toggleSuggest(i,j)}>
                       {e.useSuggest
