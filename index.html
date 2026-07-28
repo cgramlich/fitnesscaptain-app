@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.24.1";
+const APP_VERSION = "0.25.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.13";
+const BUILD = "2026-07-28.14";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -548,6 +548,42 @@ function matchMediaScored(idx, name){
    variant spellings entering the library at all - far better than renaming
    duplicates afterwards, which cannot un-split the history. A name the user
    already has is never second-guessed. */
+/* Gyms get the same treatment as exercise names. Exact matching alone left
+   "Home Gym (Dallas)" unattached when the gym is called "Dallas Home Gym" -
+   same place, different word order, and the whole day imported with no
+   location. Containment first, then token overlap. */
+function matchGym(gyms, raw){
+  const name = String(raw||"").trim();
+  if(!name || !gyms || !gyms.length) return null;
+  const exact = gyms.find(g => normName(g.name) === normName(name));
+  if(exact) return exact;
+  const n = normName(name);
+  const inside = gyms.find(g => {
+    const gn = normName(g.name);
+    return gn.length > 3 && n.length > 3 && (gn.indexOf(n) !== -1 || n.indexOf(gn) !== -1);
+  });
+  if(inside) return inside;
+  // Score on DISTINCTIVE words only, against the shorter name. "RCC" has to
+  // reach "RCC Gym (Spring Branch)" - one word out of four - while "Lakewood
+  // Country Club" must not land on any of them just because both say "club".
+  const distinct = s => mediaTokens(s).filter(t => !GYM_STOPWORDS.has(t));
+  const want = distinct(name);
+  if(!want.length) return null;
+  let best = null, bestScore = 0;
+  for(const g of gyms){
+    const have = distinct(g.name);
+    if(!have.length) continue;
+    let hit = 0;
+    for(const t of want) if(have.indexOf(t) !== -1) hit++;
+    if(!hit) continue;
+    const score = hit / Math.min(want.length, have.length);
+    if(score > bestScore){ bestScore = score; best = g; }
+  }
+  return bestScore >= 0.6 ? best : null;
+}
+// Words that name no particular gym.
+const GYM_STOPWORDS = new Set(["gym","club","fitness","center","centre","health","the","and","at","a"]);
+
 function nameSuggestion(idx, lib, name){
   const inLib = !!lib[normName(name)];
   const m = idx ? matchMediaScored(idx, name) : null;
@@ -593,6 +629,19 @@ function topSet(sets){
     if(bw === aw && (Number(b.reps)||0) > (Number(a.reps)||0)) return b;
     return a;
   }, ss[0]);
+}
+/* Every set in order, not a summary. A single "top" figure hides the whole
+   shape of a session - 20x25, 16x30, 12x35, 8x40, 6x45 is a descending
+   pyramid, and "top 20 x 25" tells you none of that. */
+function setsLine(sets, units){
+  const ss = sets || [];
+  // The unit rides the LAST weight so the line does not repeat "lb" five
+  // times, and effort markers sit in brackets after it rather than between
+  // the number and its unit.
+  return ss.map((s,i) => {
+    const mark = s.effort==="fail" ? " (fail)" : (s.effort==="hard" ? " (hard)" : "");
+    return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "") + mark;
+  }).join(", ");
 }
 // How a set felt. Optional - logging never waits on it. Drives the
 // progression nudge: a set that was hard or failed never suggests more weight.
@@ -3020,7 +3069,7 @@ function ImportLayer({ store, onClose, onImported }){
       const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
       const mediaIdx = await loadMediaIndex();
       const review = ws.map(w => {
-        const gym = (store.gyms||[]).find(g => normName(g.name) === normName(w.gym||"")) || null;
+        const gym = matchGym(store.gyms||[], w.gym);
         return {
         include: true,
         date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
@@ -3150,12 +3199,13 @@ function ImportLayer({ store, onClose, onImported }){
                   <div className="row" style={{gap:8}}>
                     <span className="set-main" style={{fontWeight:500}}>
                       {chosenName(e)}
-                      {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")+
-                        " (top "+topSet(e.sets).reps+" x "+fmtW(topSet(e.sets).weight)+" "+units+")"}
+                      {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")}
                       {e.cardio && " - "+e.cardio.minutes+" min"+(e.cardio.distance>0?" / "+fmtW(e.cardio.distance)+" "+e.cardio.unit:"")}
                     </span>
                     {!libHas(chosenName(e)) && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
                   </div>
+                  {e.sets.length>0 &&
+                    <div style={{marginTop:2,fontSize:13,color:"var(--ink-2)"}}>{setsLine(e.sets, units)}</div>}
                   {e.settings && <div className="hint" style={{marginTop:2}}>{e.settings}</div>}
                   {e.suggestName &&
                     <button className="pill" style={{marginTop:6}} onClick={()=>toggleSuggest(i,j)}>
