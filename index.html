@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.2";
+const APP_VERSION = "0.27.3";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.18";
+const BUILD = "2026-07-28.19";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -724,7 +724,9 @@ async function authToken(){
 async function collGet(file){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
-  const r = await fetch(API_BASE + "/api/collection/" + file, { headers: { "Authorization":"Bearer "+token } });
+  let r;
+  try{ r = await fetch(API_BASE + "/api/collection/" + file, { headers: { "Authorization":"Bearer "+token } }); }
+  catch(e){ throw transportError(e); }
   if(!r.ok){ const t=await r.text(); log("ERROR","GET "+file+" "+r.status+" "+t.slice(0,140));
     if(r.status===401) throw new Error("Session expired - sign in again.");
     throw new Error("Load failed ("+r.status+")"); }
@@ -736,11 +738,14 @@ async function collGet(file){
 async function collPut(file, data){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
-  const r = await fetch(API_BASE + "/api/collection/" + file, {
-    method:"PUT",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify(data)
-  });
+  let r;
+  try{
+    r = await fetch(API_BASE + "/api/collection/" + file, {
+      method:"PUT",
+      headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+      body: JSON.stringify(data)
+    });
+  }catch(e){ throw transportError(e); }
   if(!r.ok){ const t=await r.text(); log("ERROR","PUT "+file+" "+r.status+" "+t.slice(0,140));
     if(r.status===401) throw new Error("Session expired - sign in again.");
     throw new Error("Save failed ("+r.status+")"); }
@@ -772,21 +777,38 @@ async function metaPut(obj){
    Wired for: progress_summary, routine_suggest, explain_exercise (build
    order step 6 uses these; the plumbing ships with the shell).
    ============================================================ */
+/* A fetch that never completes rejects with the BROWSER's wording - Safari
+   says "Load failed", Chrome "Failed to fetch" - and that was reaching the
+   user verbatim. These calls can run a minute (a five-day program is a lot
+   of tokens), so a locked screen or a blip in signal lands here often
+   enough to deserve a sentence that says what to do. */
+function transportError(e){
+  const m = String((e && e.message) || "");
+  if(/load failed|failed to fetch|networkerror|network request failed/i.test(m))
+    return new Error("Couldn't reach the server - check your connection and try again. Nothing was saved.");
+  return e;
+}
+
 async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   const token = await authToken();
   if(!token) throw new Error("Not signed in.");
-  const r = await fetch(API_BASE + "/api/ai/relay",{
-    method:"POST",
-    headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
-    body: JSON.stringify({ task, model:"claude-sonnet-5", max_tokens:maxTokens, system, messages })
-  });
+  let r;
+  try{
+    r = await fetch(API_BASE + "/api/ai/relay",{
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+      body: JSON.stringify({ task, model:"claude-sonnet-5", max_tokens:maxTokens, system, messages })
+    });
+  }catch(e){ log("ERROR","relay transport: "+(e&&e.message)); throw transportError(e); }
   if(!r.ok){
     if(r.status===401) throw new Error("Session expired - sign in again.");
     if(r.status===402 || r.status===429) throw new Error("AI is at its limit for now. Try again later.");
     if(r.status===503) throw new Error("AI is temporarily unavailable.");
     throw new Error("AI error "+r.status+".");
   }
-  const j = await r.json();
+  let j;
+  try{ j = await r.json(); }
+  catch(e){ throw transportError(e); }
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
 }
 function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g,"").trim(); }
