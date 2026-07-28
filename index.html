@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.29.0";
+const APP_VERSION = "0.30.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.24";
+const BUILD = "2026-07-28.25";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -816,6 +816,24 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
 }
 function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g,"").trim(); }
+
+/* Resolve a movement name to one YouTube video id. The key lives on the
+   backend; the answer is cached on the exercise record by the caller, so a
+   movement costs one lookup ever. */
+async function findDemoVideo(query){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  let r;
+  try{
+    r = await fetch(API_BASE + "/api/media/demo?q=" + encodeURIComponent(query),
+      { headers: { "Authorization":"Bearer "+token } });
+  }catch(e){ throw transportError(e); }
+  if(r.status === 404) throw new Error("No demo found - try the YouTube search instead.");
+  if(r.status === 429) throw new Error("Video lookups are maxed out for today.");
+  if(r.status === 503) throw new Error("Video lookup isn't switched on yet.");
+  if(!r.ok) throw new Error("Couldn't fetch a demo (" + r.status + ").");
+  return await r.json();
+}
 
 /* ============================================================
    DOMAIN CONSTANTS
@@ -2768,6 +2786,8 @@ function ExerciseHelp({ store, name, exerciseId, onClose }){
   const [frame, setFrame] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [vidBusy, setVidBusy] = useState(false);
+  const [vidErr, setVidErr] = useState("");
   const ex = (store.data.exercises||[]).find(x => x.id === exerciseId)
           || (store.data.exercises||[]).find(x => normName(x.name) === normName(name));
   const notes = ex && ex.notes ? ex.notes : "";
@@ -2800,6 +2820,25 @@ function ExerciseHelp({ store, name, exerciseId, onClose }){
   };
 
   const imgUrl = media && MEDIA_INDEX ? MEDIA_INDEX.base + media.f + "/" + frame + ".jpg" : null;
+  // Cached on the exercise, so a movement is looked up once and then plays
+  // straight away for good - and offline, the id is already here.
+  const videoId = ex && ex.demoVideoId ? ex.demoVideoId : null;
+
+  const findVideo = async () => {
+    setVidBusy(true); setVidErr("");
+    try{
+      const v = await findDemoVideo(name + " exercise form");
+      if(!v || !v.videoId) throw new Error("No demo found.");
+      if(ex){
+        store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+          x.id===ex.id ? { ...x, demoVideoId: v.videoId, updatedAt: nowISO() } : x));
+      }else{
+        setVidErr("Found one, but this movement isn't in your library yet so it can't be saved.");
+      }
+      log("VIDEO","demo for "+name+" -> "+v.videoId);
+    }catch(e){ setVidErr(e.message||"Couldn't find a demo."); log("ERROR","demo video: "+e.message); }
+    finally{ setVidBusy(false); }
+  };
 
   return (
     <div className="layer" style={{zIndex:88}}>
@@ -2848,10 +2887,30 @@ function ExerciseHelp({ store, name, exerciseId, onClose }){
           </button>
         </div>
 
-        <a className="btn btn-primary btn-block" style={{marginTop:12,textDecoration:"none"}}
-          href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
-          Watch a demo
-        </a>
+        <div className="set-group">Demo</div>
+        {videoId
+          ? <div className="card" style={{padding:8}}>
+              <div style={{position:"relative",width:"100%",paddingTop:"56.25%",borderRadius:10,overflow:"hidden"}}>
+                <iframe src={"https://www.youtube-nocookie.com/embed/"+videoId}
+                  title={name+" demo"} allowFullScreen
+                  allow="accelerometer; encrypted-media; gyroscope; picture-in-picture"
+                  style={{position:"absolute",inset:0,width:"100%",height:"100%",border:0}} />
+              </div>
+              <a className="btn btn-ghost btn-sm btn-block" style={{marginTop:8,textDecoration:"none"}}
+                href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
+                See other demos
+              </a>
+            </div>
+          : <div className="card">
+              {vidErr && <div className="auth-msg err" style={{marginBottom:10}}>{vidErr}</div>}
+              <button className="btn btn-primary btn-block" disabled={vidBusy} onClick={findVideo}>
+                {vidBusy ? <span className="spin"></span> : "Find a demo video"}
+              </button>
+              <a className="btn btn-ghost btn-sm btn-block" style={{marginTop:8,textDecoration:"none"}}
+                href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
+                Search YouTube instead
+              </a>
+            </div>}
         {media &&
           <p className="hint center" style={{marginTop:14,opacity:.7}}>
             Illustrations: free-exercise-db (MIT)
