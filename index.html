@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.23.0";
+const APP_VERSION = "0.24.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.11";
+const BUILD = "2026-07-28.12";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2603,6 +2603,12 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
               </button>
             ))}
           </div>
+          {/* Seat heights and arm positions are the thing you rediscover by
+              trial and error on every club-gym visit. Save on blur. */}
+          <input className="input" style={{marginTop:10}} defaultValue={entry.settings||""}
+            placeholder="Machine setup (Seat 3, Arm 2)"
+            onBlur={ev=>{ const v = ev.target.value.slice(0,80);
+              if(v !== (entry.settings||"")) onUpdate(e => ({ ...e, settings: v || undefined })); }} />
           <button className="btn btn-primary btn-block log-set-btn" style={{marginTop:12}} onClick={logSet}>
             {selIdx>=0 ? "Update set "+(selIdx+1) : "Log set "+(sets.length+1)}
           </button>
@@ -2798,6 +2804,10 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
+  // Finished workouts open read-only, then unlock. Nothing logged weeks ago
+  // should be one stray tap from changing, but everything must be fixable -
+  // an import that mis-read a set can't be a delete-and-start-over.
+  const [editing, setEditing] = useState(false);
   const [restUntil, setRestUntil] = useState(0);
   const [, setTick] = useState(0);
   useEffect(()=>{ const iv=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(iv); },[]);
@@ -2846,6 +2856,9 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     return null;
   };
 
+  // Logging controls answer to canEdit; the clock, rest timer and Finish
+  // button stay tied to a workout that is genuinely in progress.
+  const canEdit = active || editing;
   const elapsed = active
     ? fmtClock((Date.now() - new Date(workout.startedAt).getTime())/1000)
     : null;
@@ -2869,12 +2882,24 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
               {active ? elapsed+" elapsed" : fmtDate(workout.date) + (workout.durationMin>0 ? " - "+workout.durationMin+" min" : "")}
             </div>
           </div>
-          {active &&
-            <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}}
-              onClick={()=>{ if(confirm("Finish this workout?")) onFinish(workout); }}>
-              Finish
-            </button>}
+          {active
+            ? <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}}
+                onClick={()=>{ if(confirm("Finish this workout?")) onFinish(workout); }}>
+                Finish
+              </button>
+            : <button className={"btn btn-sm "+(editing?"btn-primary":"btn-ghost")} style={{flex:"0 0 auto"}}
+                onClick={()=>setEditing(v=>!v)}>
+                {editing ? "Done" : "Edit"}
+              </button>}
         </div>
+
+        {!active && editing &&
+          <div className="card" style={{marginTop:10,marginBottom:2}}>
+            <label className="label">Date</label>
+            <input className="input" type="date" value={workout.date||todayStr()}
+              onChange={e=>{ if(e.target.value) patch({ date: e.target.value,
+                startedAt: e.target.value+"T12:00:00.000Z", endedAt: e.target.value+"T12:00:00.000Z" }); }} />
+          </div>}
 
         {(store.gyms||[]).length>0 &&
           <div className="pills-row">
@@ -2892,12 +2917,12 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
           </div>}
 
         {(workout.entries||[]).map(e => (
-          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={active}
+          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
         ))}
 
-        {active &&
+        {canEdit &&
           <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
             <Icon d={ICONS.plus} size={15}/> Add exercise
           </button>}
