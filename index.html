@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.21.0";
+const APP_VERSION = "0.22.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.9";
+const BUILD = "2026-07-28.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -502,6 +502,21 @@ function matchMediaScored(idx, name){
   }
   return best ? { item: best, score: bestScore } : null;
 }
+
+/* Address-verification pattern, borrowed from checkout forms: when the
+   reference database has a standard title for what was parsed, offer it and
+   let the user accept or keep their own. Doing this AT IMPORT is what stops
+   variant spellings entering the library at all - far better than renaming
+   duplicates afterwards, which cannot un-split the history. A name the user
+   already has is never second-guessed. */
+function nameSuggestion(idx, lib, name){
+  const inLib = !!lib[normName(name)];
+  const m = idx ? matchMediaScored(idx, name) : null;
+  const suggest = (m && m.score >= RENAME_THRESHOLD && normName(m.item.n) !== normName(name))
+    ? m.item.n : null;
+  return { name, suggestName: inLib ? null : suggest, useSuggest: inLib ? false : !!suggest };
+}
+const chosenName = (e) => (e && e.useSuggest && e.suggestName) ? e.suggestName : (e ? e.name : "");
 
 /* PROGRAMS - an ordered list of routine ids plus a cursor. Rolling, never
    calendar-bound: skip three days and the next session is still the next
@@ -2919,6 +2934,7 @@ function ImportLayer({ store, onClose, onImported }){
       const ws = Array.isArray(obj && obj.workouts) ? obj.workouts : [];
       if(!ws.length) throw new Error("No workouts found in that text. Try a different chunk.");
       const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+      const mediaIdx = await loadMediaIndex();
       const review = ws.map(w => ({
         include: true,
         date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
@@ -2936,7 +2952,7 @@ function ImportLayer({ store, onClose, onImported }){
             : null;
           const name = String(e.exercise||"Exercise").slice(0,60);
           const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
-          return { name, type, group, sets, cardio, matched: !!lib[normName(name)] };
+          return { name, type, group, sets, cardio, ...nameSuggestion(mediaIdx, lib, name) };
         }).filter(e => e.sets.length || e.cardio),
       })).filter(w => w.entries.length);
       if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
@@ -2952,6 +2968,9 @@ function ImportLayer({ store, onClose, onImported }){
 
   const toggle = (i) => setParsed(p => p.map((w,j)=> j===i ? {...w, include:!w.include} : w));
   const setDate = (i, d) => setParsed(p => p.map((w,j)=> j===i ? {...w, date:d} : w));
+  const toggleSuggest = (i, j) => setParsed(p => p.map((w,wi)=> wi!==i ? w
+    : { ...w, entries: w.entries.map((e,ei)=> ei!==j ? e : { ...e, useSuggest: !e.useSuggest }) }));
+  const libHas = (n) => (store.data.exercises||[]).some(x => normName(x.name) === normName(n));
 
   const importAll = () => {
     const inc = parsed.filter(p=>p.include);
@@ -2960,9 +2979,9 @@ function ImportLayer({ store, onClose, onImported }){
     const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
     const created = [];
     inc.forEach(w => w.entries.forEach(e => {
-      const key = normName(e.name);
+      const key = normName(chosenName(e));
       if(!lib[key]){
-        const x = { id: uid(), name: e.name, type: e.type, muscleGroup: e.group || "Full body",
+        const x = { id: uid(), name: chosenName(e), type: e.type, muscleGroup: e.group || "Full body",
                     equipment: "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
@@ -2975,7 +2994,7 @@ function ImportLayer({ store, onClose, onImported }){
       startedAt: w.date + "T12:00:00.000Z", endedAt: w.date + "T12:00:00.000Z",
       durationMin: 0, notes: w.notes, imported: true,
       entries: w.entries.map(e => ({
-        id: uid(), exerciseId: lib[normName(e.name)].id, name: lib[normName(e.name)].name,
+        id: uid(), exerciseId: lib[normName(chosenName(e))].id, name: lib[normName(chosenName(e))].name,
         type: e.type, sets: e.sets, cardio: e.cardio,
       })),
     }));
@@ -3032,14 +3051,22 @@ function ImportLayer({ store, onClose, onImported }){
                 </button>
               </div>
               {w.entries.map((e,j) => (
-                <div key={j} className="set-row" style={{cursor:"default"}}>
-                  <span className="set-main" style={{fontWeight:500}}>
-                    {e.name}
-                    {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")+
-                      " (top "+topSet(e.sets).reps+" x "+fmtW(topSet(e.sets).weight)+" "+units+")"}
-                    {e.cardio && " - "+e.cardio.minutes+" min"+(e.cardio.distance>0?" / "+fmtW(e.cardio.distance)+" "+e.cardio.unit:"")}
-                  </span>
-                  {!e.matched && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                <div key={j} className="set-row" style={{cursor:"default",display:"block"}}>
+                  <div className="row" style={{gap:8}}>
+                    <span className="set-main" style={{fontWeight:500}}>
+                      {chosenName(e)}
+                      {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")+
+                        " (top "+topSet(e.sets).reps+" x "+fmtW(topSet(e.sets).weight)+" "+units+")"}
+                      {e.cardio && " - "+e.cardio.minutes+" min"+(e.cardio.distance>0?" / "+fmtW(e.cardio.distance)+" "+e.cardio.unit:"")}
+                    </span>
+                    {!libHas(chosenName(e)) && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                  </div>
+                  {e.suggestName &&
+                    <button className="pill" style={{marginTop:6}} onClick={()=>toggleSuggest(i,j)}>
+                      {e.useSuggest
+                        ? "standard name - tap to keep \""+e.name+"\""
+                        : "use standard name \""+e.suggestName+"\"?"}
+                    </button>}
                 </div>
               ))}
             </div>
@@ -3238,7 +3265,8 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
 
   // Shared: model output -> review rows. forcedGym pins every routine to one
   // gym (builder); undefined means "trust the per-routine gym name" (paste).
-  const toReview = (out, forcedGym) => {
+  const toReview = async (out, forcedGym) => {
+    const mediaIdx = await loadMediaIndex();
     let obj;
     try{ obj = JSON.parse(stripFences(out)); }
     catch(e){ throw new Error(build ? "Couldn't read the result - try again." : "Couldn't read the result. Try a smaller chunk."); }
@@ -3253,12 +3281,11 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         name: (r.name||"Routine").slice(0,60),
         gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
         items: (Array.isArray(r.items)?r.items:[]).map(it => ({
-          name: String(it.exercise||"Exercise").slice(0,60),
           type: EXERCISE_TYPES.includes(it.type) ? it.type : "strength",
           group: MUSCLE_GROUPS.includes(it.group) ? it.group : "Full body",
           targetSets: Math.max(0, Math.min(10, Math.round(Number(it.targetSets)||0))),
           targetReps: Math.max(0, Math.min(100, Math.round(Number(it.targetReps)||0))),
-          matched: !!lib[normName(String(it.exercise||""))],
+          ...nameSuggestion(mediaIdx, lib, String(it.exercise||"Exercise").slice(0,60)),
         })).filter(it=>it.name),
       };
     }).filter(r => r.items.length);
@@ -3294,7 +3321,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const out = await aiRelay("import_routines",
         [{ role:"user", content: t.slice(0, 20000) }],
         { system, maxTokens: 8000 });
-      toReview(out, undefined);
+      await toReview(out, undefined);
       log("IMPORT","parsed routines from paste");
     }catch(e){
       setErr(e.message||"Import failed."); setPhase("paste");
@@ -3339,7 +3366,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const out = await aiRelay("routine_suggest",
         [{ role:"user", content: user }],
         { system, maxTokens: 8000 });
-      toReview(out, gym);
+      await toReview(out, gym);
       log("BUILD","program built ("+bDays+"d x "+bMins+"min)");
     }catch(e){
       setErr(e.message||"Couldn't build the program."); setPhase("intake");
@@ -3348,6 +3375,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
   };
 
   const toggle = (i) => setParsed(p => p.map((r,j)=> j===i ? {...r, include:!r.include} : r));
+  const toggleSuggest = (i, j) => setParsed(p => p.map((r,ri)=> ri!==i ? r
+    : { ...r, items: r.items.map((it,ii)=> ii!==j ? it : { ...it, useSuggest: !it.useSuggest }) }));
+  const libHas = (n) => (store.data.exercises||[]).some(x => normName(x.name) === normName(n));
 
   const importAll = () => {
     const inc = parsed.filter(r=>r.include);
@@ -3355,9 +3385,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
     const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
     const created = [];
     inc.forEach(r => r.items.forEach(it => {
-      const key = normName(it.name);
+      const key = normName(chosenName(it));
       if(!lib[key]){
-        const x = { id: uid(), name: it.name, type: it.type, muscleGroup: it.group || "Full body",
+        const x = { id: uid(), name: chosenName(it), type: it.type, muscleGroup: it.group || "Full body",
                     equipment: "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
@@ -3367,7 +3397,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
     const routines = inc.map(r => ({
       id: uid(), name: r.name, gymId: r.gymId, gymName: r.gymName,
       items: r.items.map(it => ({
-        id: uid(), exerciseId: lib[normName(it.name)].id, name: lib[normName(it.name)].name,
+        id: uid(), exerciseId: lib[normName(chosenName(it))].id, name: lib[normName(chosenName(it))].name,
         type: it.type,
         targetSets: it.type==="strength" ? (it.targetSets||3) : 0,
         targetReps: it.type==="strength" ? (it.targetReps||10) : 0,
@@ -3470,13 +3500,21 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
                 </button>
               </div>
               {r.items.map((it,j) => (
-                <div key={j} className="set-row" style={{cursor:"default"}}>
-                  <span className="set-main" style={{fontWeight:500}}>
-                    {it.name}
-                    {it.type==="strength" && it.targetSets>0 && " - "+it.targetSets+" x "+it.targetReps}
-                    {it.type!=="strength" && " - "+it.type}
-                  </span>
-                  {!it.matched && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                <div key={j} className="set-row" style={{cursor:"default",display:"block"}}>
+                  <div className="row" style={{gap:8}}>
+                    <span className="set-main" style={{fontWeight:500}}>
+                      {chosenName(it)}
+                      {it.type==="strength" && it.targetSets>0 && " - "+it.targetSets+" x "+it.targetReps}
+                      {it.type!=="strength" && " - "+it.type}
+                    </span>
+                    {!libHas(chosenName(it)) && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
+                  </div>
+                  {it.suggestName &&
+                    <button className="pill" style={{marginTop:6}} onClick={()=>toggleSuggest(i,j)}>
+                      {it.useSuggest
+                        ? "standard name - tap to keep \""+it.name+"\""
+                        : "use standard name \""+it.suggestName+"\"?"}
+                    </button>}
                 </div>
               ))}
             </div>
