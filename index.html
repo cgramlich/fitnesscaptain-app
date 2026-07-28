@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.26.0";
+const APP_VERSION = "0.27.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.15";
+const BUILD = "2026-07-28.16";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -461,6 +461,16 @@ async function fetchReference(folder){
 function refInstructions(ref){
   const lines = ref && Array.isArray(ref.instructions) ? ref.instructions : [];
   return lines.map((s,i)=>(i+1)+". "+String(s).trim()).join("\n");
+}
+// The reference database has its own equipment vocabulary; fold it onto ours.
+const REF_EQUIPMENT = {
+  "body only":"bodyweight", "machine":"machine", "dumbbell":"dumbbell", "cable":"cable",
+  "barbell":"barbell", "kettlebells":"kettlebell", "bands":"band", "e-z curl bar":"barbell",
+  "medicine ball":"other", "exercise ball":"other", "foam roll":"other", "other":"other",
+};
+function refEquipment(ref){
+  const raw = ref && ref.equipment ? String(ref.equipment).toLowerCase() : "";
+  return REF_EQUIPMENT[raw] || null;
 }
 /* Renaming is higher stakes than showing a picture: a wrong picture is
    merely unhelpful, a wrong rename rewrites the user's own history. So
@@ -1682,18 +1692,25 @@ async function normalizeLibrary(store){
     if(!m || m.score < RENAME_THRESHOLD) return;
     const rename = normName(m.item.n) !== normName(x.name);
     const desc = !String(x.notes||"").trim();
-    if(!rename && !desc) return;
+    // Imports used to stamp every exercise "none", so a whole library can be
+    // equipment-blind - which quietly breaks gym coverage and the picker's
+    // "not at this gym" flag.
+    const equip = !x.equipment || x.equipment === "none";
+    if(!rename && !desc && !equip) return;
     changes.push({ id:x.id, fromName:x.name, toName:m.item.n, folder:m.item.f,
-                   rename, desc, fromNotes:x.notes||"", newNotes:"" });
+                   rename, desc, equip, fromNotes:x.notes||"", newNotes:"",
+                   fromEquip:x.equipment||"none", newEquip:"" });
   });
   if(!changes.length) throw new Error("Everything already lines up with the reference database.");
 
-  const need = changes.filter(c=>c.desc);
+  const need = changes.filter(c => c.desc || c.equip);
   let cursor = 0;
   const worker = async () => {
     while(cursor < need.length){
       const c = need[cursor++];
-      c.newNotes = refInstructions(await fetchReference(c.folder));
+      const ref = await fetchReference(c.folder);
+      if(c.desc) c.newNotes = refInstructions(ref);
+      if(c.equip) c.newEquip = refEquipment(ref) || "";
     }
   };
   await Promise.all([worker(),worker(),worker(),worker()]);
@@ -1705,6 +1722,7 @@ async function normalizeLibrary(store){
     const next = { ...x, updatedAt: nowISO() };
     if(c.rename) next.name = c.toName;
     if(c.desc && c.newNotes) next.notes = c.newNotes;
+    if(c.equip && c.newEquip) next.equipment = c.newEquip;
     return next;
   }));
   const renamed = {}; changes.filter(c=>c.rename).forEach(c => { renamed[c.id] = c.toName; });
@@ -1744,7 +1762,7 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
     const byId = {}; list.forEach(c => { byId[c.id] = c; });
     store.saveCollection("exercises", (store.data.exercises||[]).map(x => {
       const c = byId[x.id];
-      return c ? { ...x, name: c.fromName, notes: c.fromNotes, updatedAt: nowISO() } : x;
+      return c ? { ...x, name: c.fromName, notes: c.fromNotes, equipment: c.fromEquip, updatedAt: nowISO() } : x;
     }));
     const back = {}; list.filter(c=>c.rename).forEach(c => { back[c.id] = c.fromName; });
     if(Object.keys(back).length){
@@ -1826,7 +1844,12 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
                 <div style={{fontWeight:500,fontSize:14.5}}>
                   {c.rename ? c.fromName+" -> "+c.toName : c.toName}
                 </div>
-                {c.desc && c.newNotes && <div className="hint" style={{marginTop:1}}>description added</div>}
+                {(c.desc && c.newNotes) || (c.equip && c.newEquip)
+                  ? <div className="hint" style={{marginTop:1}}>
+                      {[c.desc && c.newNotes ? "description added" : null,
+                        c.equip && c.newEquip ? c.newEquip : null].filter(Boolean).join(" - ")}
+                    </div>
+                  : null}
               </div>
             ))}
             {normed.length>12 && <div className="hint">and {normed.length-12} more</div>}
@@ -1838,9 +1861,9 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
         : <div className="card" style={{marginBottom:12}}>
             <div style={{fontWeight:600,marginBottom:4}}>Match the reference database</div>
             <p className="hint" style={{marginTop:0}}>
-              Renames your exercises to the standard titles and fills in any
-              missing descriptions from the reference instructions. Your own
-              notes are left alone.
+              Renames your exercises to the standard titles, and fills in any
+              missing descriptions and equipment from the reference database.
+              Your own notes are left alone.
             </p>
             {normErr && <div className="auth-msg err" style={{marginTop:8}}>{normErr}</div>}
             <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
@@ -3035,12 +3058,15 @@ function importSystemPrompt(units, libraryNames, gymNames){
     "no prose and no markdown fences, shaped exactly like this: " +
     '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","gym":"gym name or null","notes":"",' +
     '"entries":[{"exercise":"name","type":"strength|cardio|mobility","group":"muscle group",' +
-    '"settings":"machine settings or empty",' +
+    '"equipment":"what it is performed on","settings":"machine settings or empty",' +
     '"sets":[{"reps":N,"weight":N,"effort":"fail|up or omitted"}] (strength only, else null),' +
     '"cardio":{"minutes":N,"distance":N} (cardio/mobility only, else null)}]}],' +
     '"skipped":["input lines you could not interpret"]}. ' +
     "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
     '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
+    "equipment must be exactly one of: " + EQUIPMENT.join(", ") + ". Selectorised or plate-loaded " +
+    'gym stations are "machine"; anything on a cable stack is "cable"; free weights get their ' +
+    'implement (barbell/dumbbell/kettlebell). Use "none" only when you genuinely cannot tell. ' +
     "Rules: weights are in " + units + " unless the text clearly says otherwise (convert if needed); " +
     "bodyweight movements use weight 0; numbers are plain with no units. " +
     'effort: ONLY when the text marks the set - "fail"/"f"/"failed"/"missed" -> "fail"; ' +
@@ -3107,7 +3133,8 @@ function ImportLayer({ store, onClose, onImported }){
           const name = String(e.exercise||"Exercise").slice(0,60);
           const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
           const settings = String(e.settings||"").slice(0,80);
-          return { name, type, group, sets, cardio, settings, ...nameSuggestion(mediaIdx, lib, name) };
+          const equip = EQUIPMENT.includes(e.equipment) ? e.equipment : "none";
+          return { name, type, group, equip, sets, cardio, settings, ...nameSuggestion(mediaIdx, lib, name) };
         }).filter(e => e.sets.length || e.cardio),
         };
       }).filter(w => w.entries.length);
@@ -3138,7 +3165,7 @@ function ImportLayer({ store, onClose, onImported }){
       const key = normName(chosenName(e));
       if(!lib[key]){
         const x = { id: uid(), name: chosenName(e), type: e.type, muscleGroup: e.group || "Full body",
-                    equipment: "none", notes: "", custom: true,
+                    equipment: e.equip || "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
       }
@@ -3444,6 +3471,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         items: (Array.isArray(r.items)?r.items:[]).map(it => ({
           type: EXERCISE_TYPES.includes(it.type) ? it.type : "strength",
           group: MUSCLE_GROUPS.includes(it.group) ? it.group : "Full body",
+          equip: EQUIPMENT.includes(it.equipment) ? it.equipment : "none",
           targetSets: Math.max(0, Math.min(10, Math.round(Number(it.targetSets)||0))),
           targetReps: Math.max(0, Math.min(100, Math.round(Number(it.targetReps)||0))),
           ...nameSuggestion(mediaIdx, lib, String(it.exercise||"Exercise").slice(0,60)),
@@ -3466,10 +3494,13 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const system = "You convert a pasted training program into strict JSON. Return ONLY a JSON " +
         "object, no prose and no markdown fences: " +
         '{"routines":[{"name":"...","gym":"gym name or null","items":[{"exercise":"name",' +
-        '"type":"strength|cardio|mobility","group":"muscle group","targetSets":N,"targetReps":N}]}],' +
+        '"type":"strength|cardio|mobility","group":"muscle group","equipment":"what it is performed on",' +
+        '"targetSets":N,"targetReps":N}]}],' +
         '"skipped":["lines you could not interpret"]}. ' +
         "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
         '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
+        "equipment must be exactly one of: " + EQUIPMENT.join(", ") + ' - gym stations are "machine", ' +
+        'cable stacks "cable", free weights get their implement. ' +
         "Rules: one routine per named day/section, keep the section's name. " +
         "When an exercise clearly matches one of the user's library names use the library name EXACTLY: " +
         names.join(", ") + ". Otherwise use a clean title-case name. " +
@@ -3549,7 +3580,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const key = normName(chosenName(it));
       if(!lib[key]){
         const x = { id: uid(), name: chosenName(it), type: it.type, muscleGroup: it.group || "Full body",
-                    equipment: "none", notes: "", custom: true,
+                    equipment: it.equip || "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
       }
