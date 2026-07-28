@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.30.0";
+const APP_VERSION = "0.30.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.25";
+const BUILD = "2026-07-28.26";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3487,6 +3487,7 @@ function ProgramCard({ store }){
 function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDelete }){
   const routines = (store.data.routines||[]).slice()
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const activeW = (store.data.workouts||[]).find(w=>!w.endedAt) || null;
   if(!routines.length){
     return (
       <div className="empty">
@@ -3528,7 +3529,7 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
             <button className="btn btn-ghost btn-sm"
               style={{flex:"0 0 auto",color:"var(--amber-2)",borderColor:"var(--amber-line)"}}
               onClick={(e)=>{ e.stopPropagation(); onStart(r); }}>
-              Start
+              {activeW && activeW.routineId===r.id ? "Resume" : "Start"}
             </button>
           </div>
         </SwipeRow>
@@ -4653,7 +4654,17 @@ function App(){
   // Instantiate a routine into a pre-filled workout (the whole point).
   const startRoutine = (r) => {
     const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
-    if(existing){ showToast("Finish the workout in progress first"); setWorkoutId(existing.id); setRoutineId(null); return; }
+    if(existing){
+      // Silently jumping to a DIFFERENT workout looks like the button did the
+      // wrong thing - the toast explaining it is easy to miss mid-gym. Resume
+      // without ceremony when it IS this routine; otherwise say what is open.
+      const same = existing.routineId === r.id;
+      if(same || confirm('"' + (existing.name || "A workout") + '" is already in progress.\n\n' +
+                         'Open it? Finish or discard it first to start ' + r.name + '.')){
+        setWorkoutId(existing.id); setRoutineId(null);
+      }
+      return;
+    }
     const gym = (store.gyms||[]).find(g=>g.id===r.gymId)
              || (store.gyms||[]).find(g=>g.id===store.cfg.lastGymId) || null;
     const w = { id: uid(), name: r.name, date: todayStr(), startedAt: nowISO(),
