@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.25.0";
+const APP_VERSION = "0.26.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.14";
+const BUILD = "2026-07-28.15";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -639,19 +639,23 @@ function setsLine(sets, units){
   // times, and effort markers sit in brackets after it rather than between
   // the number and its unit.
   return ss.map((s,i) => {
-    const mark = s.effort==="fail" ? " (fail)" : (s.effort==="hard" ? " (hard)" : "");
-    return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "") + mark;
+    const e = effortOf(s.effort);
+    return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "") + (e ? " "+e.label : "");
   }).join(", ");
 }
-// How a set felt. Optional - logging never waits on it. Drives the
-// progression nudge: a set that was hard or failed never suggests more weight.
+/* What to do with this weight next time, not how it felt. Two marks and a
+   silence: green up = go heavier, red down = too heavy, nothing = hold.
+   Describing effort in four words was more vocabulary than the decision
+   needs, and the decision is the only part that changes what you lift. */
 const EFFORTS = [
-  { k:"easy",  label:"Easy",   cls:"green" },
-  { k:"solid", label:"Solid",  cls:"" },
-  { k:"hard",  label:"Hard",   cls:"amber" },
-  { k:"fail",  label:"Failed", cls:"red" },
+  { k:"up",   label:"↑", short:"Heavier", cls:"green" },
+  { k:"fail", label:"↓", short:"Lighter", cls:"red"   },
 ];
-const effortOf = k => EFFORTS.find(e=>e.k===k) || null;
+// Older records used easy/solid/hard/fail. Map them onto the two marks so
+// nothing already logged or imported loses meaning.
+const EFFORT_ALIAS = { easy:"up", up:"up", fail:"fail", solid:null, hard:null };
+const effortKey = k => (k && EFFORT_ALIAS[k]) || null;
+const effortOf = k => EFFORTS.find(e => e.k === effortKey(k)) || null;
 // Epley estimated one-rep max; at 1 rep the lift IS the max.
 function estMax(weight, reps){
   const w = Number(weight)||0, r = Number(reps)||0;
@@ -2561,21 +2565,27 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
   /* Progression nudge. Suggest more weight only when last time's heaviest set
      hit the target reps AND was not tagged hard or failed - the effort tag is
      what keeps this from cheerfully pushing you after a grinder. */
-  const suggestWeight = (() => {
+  const suggestion = (() => {
     if(isCardio || !active || selIdx>=0) return null;
     if(!prev || !prev.sets || !prev.sets.length) return null;
     const t = topSet(prev.sets);
     if(!t || !(Number(t.weight)>0)) return null;
     const heavy = Number(t.weight);
+    // Every set at that weight counts, not just the one topSet returned -
+    // sets tie on reps and the marked one can lose the tie-break.
     const atTop = prev.sets.filter(s => (Number(s.weight)||0) === heavy);
-    // ANY grinder at that weight vetoes the suggestion, not just the one set
-    // topSet happened to return - two sets at the same weight tie on reps and
-    // the tagged one can lose the tie-break.
-    if(atTop.some(s => s.effort==="hard" || s.effort==="fail")) return null;
+    const marks = atTop.map(s => effortKey(s.effort));
+    // A red down mark is a decision, so act on it: offer the lighter weight
+    // rather than merely declining to push.
+    if(marks.indexOf("fail") !== -1){
+      const down = heavy - wStep;
+      return down > 0 && weight !== down ? { weight: down, dir:"down" } : null;
+    }
     const goal = Number(entry.targetReps)>0 ? Number(entry.targetReps) : 12;
-    if(Math.max.apply(null, atTop.map(s=>Number(s.reps)||0)) < goal) return null;
+    const hitGoal = Math.max.apply(null, atTop.map(s=>Number(s.reps)||0)) >= goal;
+    if(marks.indexOf("up") === -1 && !hitGoal) return null;
     const up = heavy + wStep;
-    return weight >= up ? null : up;
+    return weight >= up ? null : { weight: up, dir:"up" };
   })();
   const removeSet = (i) => {
     onUpdate(e => ({ ...e, sets: (e.sets||[]).filter((_,j)=>j!==i) }));
@@ -2643,17 +2653,21 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
         <div className="logger">
           <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0}/>
           <Stepper label={"Weight ("+units+")"} value={weight} onChange={setWeight} step={wStep} min={0}/>
-          {suggestWeight &&
+          {suggestion &&
             <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10,
-              borderColor:"var(--amber-line)",color:"var(--amber-2)"}}
-              onClick={()=>setWeight(suggestWeight)}>
-              Ready for {fmtW(suggestWeight)} {units}?
+              borderColor: suggestion.dir==="up" ? "var(--amber-line)" : "#d1735c55",
+              color: suggestion.dir==="up" ? "var(--amber-2)" : "#e79b86"}}
+              onClick={()=>setWeight(suggestion.weight)}>
+              {suggestion.dir==="up"
+                ? "Ready for "+fmtW(suggestion.weight)+" "+units+"?"
+                : "Drop to "+fmtW(suggestion.weight)+" "+units+"?"}
             </button>}
+          {/* Optional. No mark means hold this weight. */}
           <div className="pills" style={{marginTop:10}}>
             {EFFORTS.map(e => (
               <button key={e.k} className={"pill "+(effort===e.k?"on":"")}
-                onClick={()=>setEffort(effort===e.k ? null : e.k)}>
-                {e.label}
+                aria-label={e.short} onClick={()=>setEffort(effort===e.k ? null : e.k)}>
+                {e.label} {e.short}
               </button>
             ))}
           </div>
@@ -3022,15 +3036,15 @@ function importSystemPrompt(units, libraryNames, gymNames){
     '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","gym":"gym name or null","notes":"",' +
     '"entries":[{"exercise":"name","type":"strength|cardio|mobility","group":"muscle group",' +
     '"settings":"machine settings or empty",' +
-    '"sets":[{"reps":N,"weight":N,"effort":"easy|solid|hard|fail or omitted"}] (strength only, else null),' +
+    '"sets":[{"reps":N,"weight":N,"effort":"fail|up or omitted"}] (strength only, else null),' +
     '"cardio":{"minutes":N,"distance":N} (cardio/mobility only, else null)}]}],' +
     '"skipped":["input lines you could not interpret"]}. ' +
     "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
     '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
     "Rules: weights are in " + units + " unless the text clearly says otherwise (convert if needed); " +
     "bodyweight movements use weight 0; numbers are plain with no units. " +
-    'effort: ONLY when the text marks the set - "fail"/"f"/"failed"/"missed" -> "fail", ' +
-    '"hard"/"grinder"/"tough" -> "hard", "easy" -> "easy". Omit it otherwise; never guess from the numbers. ' +
+    'effort: ONLY when the text marks the set - "fail"/"f"/"failed"/"missed" -> "fail"; ' +
+    '"easy"/"too light"/"go up" -> "up". Omit it otherwise; never guess from the numbers. ' +
     'settings: machine setup noted in brackets or after the reps ("Seat 3, Arm 2", "Height 2", ' +
     '"Level 3") copied verbatim, else "". Do NOT put set data in settings. ' +
     "When an exercise clearly matches one of the user's library names, use the library name EXACTLY. " +
@@ -3082,7 +3096,8 @@ function ImportLayer({ store, onClose, onImported }){
             ? e.sets.map(s=>{
                 const rec = { reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
                               weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) };
-                if(EFFORTS.some(x=>x.k===s.effort)) rec.effort = s.effort;
+                const mark = effortKey(s.effort);   // also folds legacy easy/hard
+                if(mark) rec.effort = mark;
                 return rec;
               }).filter(s=>s.reps>0)
             : [];
