@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.31.1";
+const APP_VERSION = "0.32.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.29";
+const BUILD = "2026-07-28.30";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -649,6 +649,21 @@ function topSet(sets){
     return a;
   }, ss[0]);
 }
+/* A routine item can prescribe EACH set - "20x25, 16x30, 12x35, 8x40, 6x45"
+   - instead of one uniform "3 sets of 12". Optional: with no `plan` the old
+   targetSets/targetReps behaviour is untouched, so nothing already saved
+   needs migrating. Six is the cap because past that you are describing a
+   circuit, not a set scheme. */
+const MAX_PLAN_SETS = 6;
+function planOf(x){
+  const p = x && Array.isArray(x.plan) ? x.plan : null;
+  return (p && p.length) ? p.slice(0, MAX_PLAN_SETS) : null;
+}
+function planLine(plan, units){
+  return (plan||[]).map((s,i) =>
+    s.reps + " x " + fmtW(s.weight) + (i===plan.length-1 ? " "+units : "")).join(", ");
+}
+
 /* Every set in order, not a summary. A single "top" figure hides the whole
    shape of a session - 20x25, 16x30, 12x35, 8x40, 6x45 is a descending
    pyramid, and "top 20 x 25" tells you none of that. */
@@ -2621,14 +2636,28 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
   const isCardio = entry.type!=="strength";
   const wStep = units==="kg" ? 2.5 : 5;
   const sets = entry.sets || [];
-  const seed = sets.length ? sets[sets.length-1]
-             : (prev && prev.sets && prev.sets.length ? prev.sets[prev.sets.length-1] : { reps:10, weight:0 });
+  const plan = planOf(entry);
+  // A plan prescribes THIS set, so it beats both "same as the last set you
+  // did" and "same as last session" - that is the whole point of writing a
+  // pyramid down. Falls through to the old behaviour once the plan runs out.
+  const planned = plan && plan[sets.length] ? plan[sets.length] : null;
+  const seed = planned
+             || (sets.length ? sets[sets.length-1]
+             : (prev && prev.sets && prev.sets.length ? prev.sets[prev.sets.length-1] : { reps:10, weight:0 }));
   const [reps, setReps]   = useState(Number(seed.reps)||0);
   const [weight, setWeight] = useState(Number(seed.weight)||0);
   const [mins, setMins]   = useState(entry.cardio ? Number(entry.cardio.minutes)||0 : 20);
   const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
   const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
   const [effort, setEffort] = useState(null); // optional tag for the set being logged
+
+  // Advance the steppers to the next prescribed set once one is logged.
+  // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
+  useEffect(() => {
+    if(!planned || selIdx >= 0) return;
+    setReps(Number(planned.reps)||0);
+    setWeight(Number(planned.weight)||0);
+  }, [sets.length]);
 
   const logSet = () => {
     const next = sets.slice();
@@ -2650,7 +2679,9 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
      hit the target reps AND was not tagged hard or failed - the effort tag is
      what keeps this from cheerfully pushing you after a grinder. */
   const suggestion = (() => {
-    if(isCardio || !active || selIdx>=0) return null;
+    // A written plan already says what to lift; second-guessing it from last
+    // session's numbers would just argue with the program.
+    if(isCardio || !active || selIdx>=0 || planned) return null;
     if(!prev || !prev.sets || !prev.sets.length) return null;
     const t = topSet(prev.sets);
     if(!t || !(Number(t.weight)>0)) return null;
@@ -2690,9 +2721,17 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
             {entry.name}
           </div>
           {/* Mobility carries targets too, so this can't be gated on strength. */}
-          {entry.targetSets>0 &&
-            <div className="entry-last" style={{color:"var(--amber-2)"}}>
-              Target: {entry.targetSets} x {entry.targetReps}
+          {plan
+            ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
+                Plan: {planLine(plan, units)}
+              </div>
+            : entry.targetSets>0 &&
+              <div className="entry-last" style={{color:"var(--amber-2)"}}>
+                Target: {entry.targetSets} x {entry.targetReps}
+              </div>}
+          {plan && planned &&
+            <div className="entry-last">
+              Up next: set {sets.length+1} of {plan.length} - {planned.reps} x {fmtW(planned.weight)} {units}
             </div>}
           {prev && !isCardio &&
             <div className="entry-last">
@@ -3572,6 +3611,7 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
    week (routine_suggest) -> the same review screen. */
 function ImportRoutinesLayer({ store, mode, onClose, onImported }){
   const build = mode === "build";
+  const units = store.cfg.units || "lb";
   const [phase, setPhase] = useState(build ? "intake" : "paste");   // intake | paste | busy | review
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
@@ -3609,6 +3649,12 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
           type: EXERCISE_TYPES.includes(it.type) ? it.type : "strength",
           group: MUSCLE_GROUPS.includes(it.group) ? it.group : "Full body",
           equip: EQUIPMENT.includes(it.equipment) ? it.equipment : "none",
+          plan: (Array.isArray(it.sets) && it.sets.length > 1)
+            ? it.sets.slice(0, MAX_PLAN_SETS).map(s => ({
+                reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
+                weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)),
+              })).filter(s=>s.reps>0)
+            : undefined,
           targetSets: Math.max(0, Math.min(10, Math.round(Number(it.targetSets)||0))),
           targetReps: Math.max(0, Math.min(100, Math.round(Number(it.targetReps)||0))),
           ...nameSuggestion(mediaIdx, lib, String(it.exercise||"Exercise").slice(0,60)),
@@ -3632,7 +3678,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         "object, no prose and no markdown fences: " +
         '{"routines":[{"name":"...","gym":"gym name or null","items":[{"exercise":"name",' +
         '"type":"strength|cardio|mobility","group":"muscle group","equipment":"what it is performed on",' +
-        '"targetSets":N,"targetReps":N}]}],' +
+        '"targetSets":N,"targetReps":N,"sets":[{"reps":N,"weight":N}] (only when sets differ)}]}],' +
         '"skipped":["lines you could not interpret"]}. ' +
         "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
         '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
@@ -3643,6 +3689,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         names.join(", ") + ". Otherwise use a clean title-case name. " +
         "type: lifts and carries = strength; running/bike/row intervals = cardio; stretches, holds and " +
         "mobility drills = mobility. targetSets/targetReps: for strength use the text's sets and reps " +
+        'When the text prescribes DIFFERENT numbers per set ("25x20, 30x16, 35x12"), also return ' +
+        '"sets":[{"reps":N,"weight":N}] in that order, max ' + MAX_PLAN_SETS + ', weight in the ' +
+        "user's units and 0 when bodyweight; omit \"sets\" entirely when every set is the same. " +
         "(per-side counts stay as written; default 3 and 10 if unstated). MOBILITY keeps whatever " +
         "sets and reps the text gives it - a drill written '1x8' is an instruction, not a suggestion - " +
         "and only uses 0 and 0 when the text states no count at all. Cardio always uses 0 and 0 " +
@@ -3734,6 +3783,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         // Mobility keeps whatever dose was written; only cardio is dose-free.
         targetSets: it.type==="cardio" ? 0 : (it.targetSets || (it.type==="strength" ? 3 : 0)),
         targetReps: it.type==="cardio" ? 0 : (it.targetReps || (it.type==="strength" ? 10 : 0)),
+        plan: (it.type!=="cardio" && planOf(it)) || undefined,
       })),
       createdAt: nowISO(), updatedAt: nowISO(),
     }));
@@ -3839,8 +3889,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
                   <div className="row" style={{gap:8}}>
                     <span className="set-main" style={{fontWeight:500}}>
                       {chosenName(it)}
-                      {it.type==="strength" && it.targetSets>0 && " - "+it.targetSets+" x "+it.targetReps}
-                      {it.type!=="strength" && " - "+it.type}
+                      {planOf(it)
+                        ? " - "+planLine(planOf(it), units)
+                        : (it.type==="strength" && it.targetSets>0 ? " - "+it.targetSets+" x "+it.targetReps : "")}
+                      {it.type!=="strength" && !planOf(it) && " - "+it.type}
                     </span>
                     {!libHas(chosenName(it)) && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
                   </div>
@@ -3905,6 +3957,7 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
   if(!routine) return null;
+  const units = store.cfg.units || "lb";
   const gym = (store.gyms||[]).find(g=>g.id===routine.gymId) || null;
 
   const patch = (p) => store.saveCollection("routines",
@@ -3926,6 +3979,42 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
   };
   const setGym = (g) => patch({ gymId: g ? g.id : null, gymName: g ? g.name : null });
   const bump = (it, field, delta, min, max) => patchItem(it.id, { [field]: Math.max(min, Math.min(max, (Number(it[field])||0) + delta)) });
+
+  // ---- per-set plans ----
+  // Switching on seeds the plan from the uniform target, so you start from
+  // what the exercise already said rather than from nothing.
+  const enablePlan = (it) => {
+    const n = Math.max(1, Math.min(MAX_PLAN_SETS, Number(it.targetSets)||3));
+    const reps = Math.max(1, Number(it.targetReps)||10);
+    const last = lastPerfWeight(it.exerciseId);
+    patchItem(it.id, { plan: Array.from({length:n}, () => ({ reps, weight: last })) });
+  };
+  const clearPlan = (it) => patchItem(it.id, { plan: undefined });
+  const bumpPlan = (it, idx, field, delta, min, max) => {
+    const p = (planOf(it)||[]).map((s,i) => i!==idx ? s
+      : { ...s, [field]: Math.max(min, Math.min(max, Math.round(((Number(s[field])||0)+delta)*100)/100)) });
+    patchItem(it.id, { plan: p });
+  };
+  const addPlanSet = (it) => {
+    const p = planOf(it) || [];
+    if(p.length >= MAX_PLAN_SETS) return;
+    patchItem(it.id, { plan: [...p, { ...(p[p.length-1] || { reps:10, weight:0 }) }] });
+  };
+  const removePlanSet = (it, idx) => {
+    const p = (planOf(it)||[]).filter((_,i)=>i!==idx);
+    patchItem(it.id, p.length ? { plan: p } : { plan: undefined });
+  };
+  // Seed a new plan's weight from whatever was last actually lifted, so the
+  // first thing you see is a real number rather than zero.
+  function lastPerfWeight(exerciseId){
+    const ws = (store.data.workouts||[]).slice()
+      .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+    for(const w of ws){
+      const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
+      if(e){ const t = topSet(e.sets); if(t) return Number(t.weight)||0; }
+    }
+    return 0;
+  }
 
   const sBtn = { width:34, height:34, borderRadius:"50%", background:"var(--bg-4)", border:"1px solid var(--line-2)",
                  display:"inline-flex", alignItems:"center", justifyContent:"center", fontSize:17, fontWeight:700, flex:"0 0 auto" };
@@ -3978,16 +4067,48 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
             {/* Mobility drills have doses too - "90/90 Hip Switch 1x8" is an
                 instruction, not a suggestion. Only cardio is genuinely
                 dose-free here, since it carries its duration in the name. */}
-            {it.type!=="cardio" &&
-              <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8,flexWrap:"wrap"}}>
-                <button style={sBtn} onClick={()=>bump(it,"targetSets",-1,1,10)} aria-label="Fewer sets">-</button>
-                <span style={{fontWeight:700,fontSize:17,minWidth:20,textAlign:"center"}}>{it.targetSets}</span>
-                <button style={sBtn} onClick={()=>bump(it,"targetSets",1,1,10)} aria-label="More sets">+</button>
-                <span className="subtle">sets of</span>
-                <button style={sBtn} onClick={()=>bump(it,"targetReps",-1,1,100)} aria-label="Fewer reps">-</button>
-                <span style={{fontWeight:700,fontSize:17,minWidth:24,textAlign:"center"}}>{it.targetReps}</span>
-                <button style={sBtn} onClick={()=>bump(it,"targetReps",1,1,100)} aria-label="More reps">+</button>
-                <span className="subtle">reps</span>
+            {it.type!=="cardio" && !planOf(it) &&
+              <>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8,flexWrap:"wrap"}}>
+                  <button style={sBtn} onClick={()=>bump(it,"targetSets",-1,1,10)} aria-label="Fewer sets">-</button>
+                  <span style={{fontWeight:700,fontSize:17,minWidth:20,textAlign:"center"}}>{it.targetSets}</span>
+                  <button style={sBtn} onClick={()=>bump(it,"targetSets",1,1,10)} aria-label="More sets">+</button>
+                  <span className="subtle">sets of</span>
+                  <button style={sBtn} onClick={()=>bump(it,"targetReps",-1,1,100)} aria-label="Fewer reps">-</button>
+                  <span style={{fontWeight:700,fontSize:17,minWidth:24,textAlign:"center"}}>{it.targetReps}</span>
+                  <button style={sBtn} onClick={()=>bump(it,"targetReps",1,1,100)} aria-label="More reps">+</button>
+                  <span className="subtle">reps</span>
+                </div>
+                <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={()=>enablePlan(it)}>
+                  Set each set separately
+                </button>
+              </>}
+
+            {/* Per-set prescription: a pyramid written down, one row per set. */}
+            {it.type!=="cardio" && planOf(it) &&
+              <div style={{marginTop:8}}>
+                {planOf(it).map((s,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginTop:6,flexWrap:"wrap"}}>
+                    <span className="set-num" style={{minWidth:44}}>SET {i+1}</span>
+                    <button style={sBtn} onClick={()=>bumpPlan(it,i,"reps",-1,1,100)} aria-label="Fewer reps">-</button>
+                    <span style={{fontWeight:700,fontSize:16,minWidth:22,textAlign:"center"}}>{s.reps}</span>
+                    <button style={sBtn} onClick={()=>bumpPlan(it,i,"reps",1,1,100)} aria-label="More reps">+</button>
+                    <span className="subtle">x</span>
+                    <button style={sBtn} onClick={()=>bumpPlan(it,i,"weight",-(units==="kg"?2.5:5),0,2000)} aria-label="Less weight">-</button>
+                    <span style={{fontWeight:700,fontSize:16,minWidth:34,textAlign:"center"}}>{fmtW(s.weight)}</span>
+                    <button style={sBtn} onClick={()=>bumpPlan(it,i,"weight",(units==="kg"?2.5:5),0,2000)} aria-label="More weight">+</button>
+                    <button className="pill" style={{marginLeft:"auto"}} onClick={()=>removePlanSet(it,i)}>Remove</button>
+                  </div>
+                ))}
+                <div className="row" style={{marginTop:10}}>
+                  {planOf(it).length < MAX_PLAN_SETS &&
+                    <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>addPlanSet(it)}>
+                      <Icon d={ICONS.plus} size={14}/> Add set
+                    </button>}
+                  <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>clearPlan(it)}>
+                    Same for every set
+                  </button>
+                </div>
               </div>}
           </div>
         ))}
@@ -4702,6 +4823,9 @@ function App(){
                   id: uid(), exerciseId: it.exerciseId, name: it.name, type: it.type,
                   sets: [], cardio: null,
                   targetSets: it.targetSets, targetReps: it.targetReps,
+                  // A per-set plan rides along so the editor can pre-fill each
+                  // set with its own numbers rather than one figure for all.
+                  plan: planOf(it) || undefined,
                 })) };
     store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
     setRoutineId(null); setTab("workouts"); setWorkoutId(w.id);
@@ -4710,10 +4834,20 @@ function App(){
   const saveAsRoutine = (w) => {
     const items = (w.entries||[]).filter(e => (e.sets||[]).length || e.cardio || e.type!=="strength")
       .map(e => {
-        const reps = (e.sets||[]).map(s=>Number(s.reps)||0).filter(Boolean);
-        const mode = reps.length ? reps.sort((a,b)=> reps.filter(v=>v===a).length - reps.filter(v=>v===b).length).pop() : 10;
-        return { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
-                 targetSets: (e.sets||[]).length || 3, targetReps: mode };
+        const done = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0);
+        const reps = done.map(s=>Number(s.reps)||0);
+        const mode = reps.length ? reps.slice().sort((a,b)=> reps.filter(v=>v===a).length - reps.filter(v=>v===b).length).pop() : 10;
+        // If the sets actually differed, keep them set by set - flattening a
+        // pyramid to "5 sets of 12" throws away the whole scheme. Uniform
+        // work still collapses to the simpler form.
+        const varied = done.length > 1 &&
+          done.some(s => (Number(s.reps)||0) !== (Number(done[0].reps)||0) ||
+                         (Number(s.weight)||0) !== (Number(done[0].weight)||0));
+        const item = { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
+                       targetSets: done.length || 3, targetReps: mode };
+        if(varied) item.plan = done.slice(0, MAX_PLAN_SETS)
+          .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+        return item;
       });
     if(!items.length){ showToast("Nothing to capture from this workout"); return; }
     const r = { id: uid(), name: w.name || "Routine", items,
