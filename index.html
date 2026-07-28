@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.18.0";
+const APP_VERSION = "0.18.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.5";
+const BUILD = "2026-07-28.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2116,7 +2116,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
                 </div>
                 <button className={"pill "+(it.include?"on":"")} style={{flex:"0 0 auto"}}
                   onClick={()=>setItems(p=>p.map((x,j)=>j===i?{...x,include:!x.include}:x))}>
-                  {it.include ? "Include" : "Skip"}
+                  {it.include ? "Included" : "Skipped"}
                 </button>
               </div>
             </div>
@@ -2656,7 +2656,7 @@ function ImportLayer({ store, onClose, onImported }){
                     onChange={e=>setDate(i, e.target.value||todayStr())} />
                 </div>
                 <button className={"pill "+(w.include?"on":"")} style={{flex:"0 0 auto"}} onClick={()=>toggle(i)}>
-                  {w.include ? "Include" : "Skip"}
+                  {w.include ? "Included" : "Skipped"}
                 </button>
               </div>
               {w.entries.map((e,j) => (
@@ -2985,7 +2985,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
                   {r.gymName && <div className="entry-last">{r.gymName}</div>}
                 </div>
                 <button className={"pill "+(r.include?"on":"")} style={{flex:"0 0 auto"}} onClick={()=>toggle(i)}>
-                  {r.include ? "Include" : "Skip"}
+                  {r.include ? "Included" : "Skipped"}
                 </button>
               </div>
               {r.items.map((it,j) => (
