@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.19.0";
+const APP_VERSION = "0.20.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.7";
+const BUILD = "2026-07-28.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -410,6 +410,54 @@ function weekStartStr(dateStr){
   const p = n => String(n).padStart(2,"0");
   return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
 }
+/* EXERCISE ILLUSTRATIONS - free-exercise-db (MIT), 873 movements with a
+   start and finish frame each. We ship only a slim name -> folder index
+   (exercise-media.json); the images themselves stream from jsDelivr and the
+   service worker caches them, so a movement you have looked at once works
+   offline. Names rarely match exactly ("DB Flat Bench" vs "Dumbbell Bench
+   Press"), so exact match falls back to token overlap with a few lifter
+   abbreviations expanded. Below 0.5 overlap we show nothing rather than a
+   confidently wrong picture. */
+let MEDIA_INDEX = null, MEDIA_TRIED = false;
+async function loadMediaIndex(){
+  if(MEDIA_INDEX || MEDIA_TRIED) return MEDIA_INDEX;
+  MEDIA_TRIED = true;
+  try{
+    const r = await fetch("exercise-media.json");
+    if(r.ok) MEDIA_INDEX = await r.json();
+  }catch(e){ log("ERROR","media index: "+e.message); }
+  return MEDIA_INDEX;
+}
+const MEDIA_SYNONYMS = {
+  db:"dumbbell", dbs:"dumbbell", dumbbells:"dumbbell", bb:"barbell", kb:"kettlebell",
+  kettlebells:"kettlebell", bw:"bodyweight", ohp:"overhead", db_:"dumbbell",
+  pushdown:"pushdown", pushdowns:"pushdown", curls:"curl", rows:"row", raises:"raise",
+  presses:"press", squats:"squat", swings:"swing", extensions:"extension", flyes:"fly",
+  pullups:"pullup", chinups:"chinup", situps:"situp", tricep:"triceps", bicep:"biceps",
+};
+function mediaTokens(s){
+  return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ")
+    .filter(Boolean).map(t => MEDIA_SYNONYMS[t] || t);
+}
+function matchMedia(idx, name){
+  if(!idx || !idx.items) return null;
+  const exact = idx.items[normName(name)];
+  if(exact) return exact;
+  const want = mediaTokens(name);
+  if(!want.length) return null;
+  let best = null, bestScore = 0;
+  for(const k in idx.items){
+    const it = idx.items[k];
+    const have = mediaTokens(it.n);
+    let hit = 0;
+    for(const t of want) if(have.indexOf(t) !== -1) hit++;
+    if(!hit) continue;
+    const score = hit / Math.max(want.length, have.length);
+    if(score > bestScore){ bestScore = score; best = it; }
+  }
+  return bestScore >= 0.5 ? best : null;
+}
+
 /* PROGRAMS - an ordered list of routine ids plus a cursor. Rolling, never
    calendar-bound: skip three days and the next session is still the next
    session. Deleted routines are stepped over rather than blocking. */
@@ -2215,9 +2263,8 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSetLogged }){
+function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onSetLogged }){
   const isCardio = entry.type!=="strength";
-  const [showHow, setShowHow] = useState(false);
   const wStep = units==="kg" ? 2.5 : 5;
   const sets = entry.sets || [];
   const seed = sets.length ? sets[sets.length-1]
@@ -2276,21 +2323,12 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
     <div className="entry">
       <div className="entry-head">
         <div style={{flex:1,minWidth:0}}>
-          {/* Tapping the name reveals form cues (when cached) + a demo link. */}
-          <div className="entry-name" onClick={()=>setShowHow(s=>!s)}
+          {/* Tapping the name opens the full "show me" panel: illustration,
+              written how-to, demo link. */}
+          <div className="entry-name" onClick={()=>onHelp && onHelp(entry)}
             style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
             {entry.name}
           </div>
-          {showHow &&
-            <div className="hint" style={{marginTop:6,whiteSpace:"pre-wrap",background:"var(--bg-3)",
-              border:"1px solid var(--line-2)",borderRadius:10,padding:"9px 11px"}}>
-              {howTo || "No form cues saved yet - add them from the Exercises tab."}
-              {"\n"}
-              <a href={demoUrl(entry.name)} target="_blank" rel="noopener noreferrer"
-                style={{display:"inline-block",marginTop:8,fontWeight:600}}>
-                Watch a demo
-              </a>
-            </div>}
           {entry.targetSets>0 && !isCardio &&
             <div className="entry-last" style={{color:"var(--amber-2)"}}>
               Target: {entry.targetSets} x {entry.targetReps}
@@ -2367,10 +2405,113 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
   );
 }
 
+/* "Show me" - everything the app knows about how to perform a movement, in
+   one place: the illustration frames, the written how-to (generated on
+   demand and cached on the exercise), and a demo link. Reachable from the
+   picker and from any exercise name mid-workout, because the moment you
+   need it is the moment you meet a name you don't recognize. */
+function ExerciseHelp({ store, name, exerciseId, onClose }){
+  const [media, setMedia] = useState(undefined);   // undefined = looking, null = none
+  const [frame, setFrame] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const ex = (store.data.exercises||[]).find(x => x.id === exerciseId)
+          || (store.data.exercises||[]).find(x => normName(x.name) === normName(name));
+  const notes = ex && ex.notes ? ex.notes : "";
+
+  useEffect(() => {
+    let alive = true;
+    loadMediaIndex().then(idx => { if(alive) setMedia(matchMedia(idx, name)); });
+    return () => { alive = false; };
+  }, [name]);
+
+  const writeCues = async () => {
+    setBusy(true); setErr("");
+    try{
+      const system = "You write concise exercise instructions as plain text (no markdown, no headers). " +
+        "Structure: one setup line; 2-4 numbered execution steps; then 'Cues:' with 2-3 short cues; " +
+        "then 'Avoid:' with 1-2 common mistakes. Under 130 words total. No introduction or closing.";
+      const out = await aiRelay("explain_exercise",
+        [{ role:"user", content: "Exercise: "+name+"." +
+            (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." +
+                  " Equipment: "+(ex.equipment||"none")+"." : "") }],
+        { system, maxTokens: 1000 });
+      const text = (out||"").trim();
+      if(!text) throw new Error("Nothing came back - try again.");
+      if(ex){
+        store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+          x.id===ex.id ? { ...x, notes: text, updatedAt: nowISO() } : x));
+      }else{ setErr("Saved nowhere - this movement isn't in your library yet."); }
+    }catch(e){ setErr(e.message||"Couldn't write it."); log("ERROR","explain_exercise: "+e.message); }
+    finally{ setBusy(false); }
+  };
+
+  const imgUrl = media && MEDIA_INDEX ? MEDIA_INDEX.base + media.f + "/" + frame + ".jpg" : null;
+
+  return (
+    <div className="layer" style={{zIndex:88}}>
+      <div className="layer-inner">
+        <div className="layer-top" style={{zIndex:89}}>
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>{name}</h2>
+        </div>
+
+        {media === undefined &&
+          <div className="card" style={{textAlign:"center",padding:"28px 16px"}}>
+            <span className="spin"></span>
+          </div>}
+
+        {media &&
+          <div className="card" style={{padding:10}}>
+            <img src={imgUrl} alt={name+" - "+(frame===0?"start":"finish")+" position"}
+              style={{width:"100%",borderRadius:10,display:"block",background:"var(--bg-3)"}} />
+            <div className="updrow" style={{marginTop:8}}>
+              <div className="pills" style={{marginTop:0}}>
+                <button className={"pill "+(frame===0?"on":"")} onClick={()=>setFrame(0)}>Start</button>
+                <button className={"pill "+(frame===1?"on":"")} onClick={()=>setFrame(1)}>Finish</button>
+              </div>
+              {normName(media.n) !== normName(name) &&
+                <span className="subtle" style={{fontSize:11.5}}>shown: {media.n}</span>}
+            </div>
+          </div>}
+
+        {media === null &&
+          <div className="card">
+            <p className="hint" style={{margin:0}}>
+              No illustration on file for this one. The written how-to and the
+              demo video below still work.
+            </p>
+          </div>}
+
+        <div className="set-group">How to do it</div>
+        <div className="card">
+          {notes
+            ? <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5}}>{notes}</div>
+            : <p className="hint" style={{marginTop:0}}>Nothing written down yet.</p>}
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+            disabled={busy} onClick={writeCues}>
+            {busy ? <span className="spin"></span> : (notes ? "Write it again" : "Write it for me")}
+          </button>
+        </div>
+
+        <a className="btn btn-primary btn-block" style={{marginTop:12,textDecoration:"none"}}
+          href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
+          Watch a demo
+        </a>
+        {media &&
+          <p className="hint center" style={{marginTop:14,opacity:.7}}>
+            Illustrations: free-exercise-db (MIT)
+          </p>}
+      </div>
+    </div>
+  );
+}
+
 /* Nested full-screen layer: pick an exercise from the library (or create one
    on the spot). Rendered INSIDE the editor at a higher z-index so the editor
    keeps its state (playbook rule: no two screens on one overlay variable). */
-function ExercisePicker({ store, gym, onPick, onCreate, onClose }){
+function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
   const [q, setQ] = useState("");
   const [groupF, setGroupF] = useState("all");
   const needle = q.trim().toLowerCase();
@@ -2409,16 +2550,23 @@ function ExercisePicker({ store, gym, onPick, onCreate, onClose }){
           </button>}
         <div className="list">
           {list.map(x => (
-            <button key={x.id} className="item" onClick={()=>onPick(x)}>
-              <div className="item-body">
+            <div key={x.id} className="item" style={{alignItems:"center"}}>
+              <button style={{flex:1,minWidth:0,textAlign:"left",display:"block"}} onClick={()=>onPick(x)}>
                 <div className="item-title">{x.name}</div>
                 <div className="item-meta">
                   <span className={"chip "+typeClass(x.type)}>{x.type}</span>
                   {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
                   {notHere(x) && <span className="chip red">not at this gym</span>}
                 </div>
-              </div>
-            </button>
+              </button>
+              {/* The moment you meet a name you don't know is the moment you
+                  need the picture - so the way in lives right here. */}
+              {onHelp &&
+                <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}}
+                  onClick={(e)=>{ e.stopPropagation(); onHelp(x); }}>
+                  Show me
+                </button>}
+            </div>
           ))}
         </div>
       </div>
@@ -2431,6 +2579,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onClose }){
 function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
+  const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
   const [restUntil, setRestUntil] = useState(0);
   const [, setTick] = useState(0);
   useEffect(()=>{ const iv=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(iv); },[]);
@@ -2524,14 +2673,11 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             {active && <p>Pick from the library; sets pre-fill from your last session.</p>}
           </div>}
 
-        {(workout.entries||[]).map(e => {
-          const ex = (store.data.exercises||[]).find(x=>x.id===e.exerciseId);
-          return (
-            <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={active}
-              howTo={ex && ex.notes ? ex.notes : null}
-              onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
-          );
-        })}
+        {(workout.entries||[]).map(e => (
+          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={active}
+            onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
+            onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
+        ))}
 
         {active &&
           <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
@@ -2555,7 +2701,12 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         </button>}
 
       {picker &&
-        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
+        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
+          onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })} onClose={()=>setPicker(false)} />}
+
+      {help &&
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+          onClose={()=>setHelp(null)} />}
     </div>
   );
 }
@@ -3209,6 +3360,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
 function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
   const routine = (store.data.routines||[]).find(r=>r.id===routineId);
   const [picker, setPicker] = useState(false);
+  const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
   if(!routine) return null;
   const gym = (store.gyms||[]).find(g=>g.id===routine.gymId) || null;
 
@@ -3303,7 +3455,12 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
       </div>
 
       {picker &&
-        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd} onClose={()=>setPicker(false)} />}
+        <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
+          onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })} onClose={()=>setPicker(false)} />}
+
+      {help &&
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+          onClose={()=>setHelp(null)} />}
     </div>
   );
 }

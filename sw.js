@@ -17,7 +17,7 @@
      bytes is what makes the browser install the new worker.
 */
 
-const VERSION      = "0.19.0";                  // keep in lockstep with APP_VERSION
+const VERSION      = "0.20.0";                  // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "fc-shell-" + VERSION;
 const ASSET_CACHE  = "fc-assets-" + VERSION;
 const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versioned so it
@@ -83,6 +83,10 @@ function isImmutableAsset(url) {
   if (url.hostname === "fonts.gstatic.com") return true;         // font files
   if (url.origin === self.location.origin &&
       /\.(png|jpe?g|webp|gif|svg|ico|woff2?)$/i.test(url.pathname)) return true;  // our icons
+  // The exercise illustration index ships with the build, so it rolls with
+  // the versioned asset cache like any other static file.
+  if (url.origin === self.location.origin &&
+      /exercise-media\.json$/i.test(url.pathname)) return true;
   return false;
 }
 
