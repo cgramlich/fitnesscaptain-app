@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.30.2";
+const APP_VERSION = "0.31.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.27";
+const BUILD = "2026-07-28.28";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2689,7 +2689,8 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
             style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
             {entry.name}
           </div>
-          {entry.targetSets>0 && !isCardio &&
+          {/* Mobility carries targets too, so this can't be gated on strength. */}
+          {entry.targetSets>0 &&
             <div className="entry-last" style={{color:"var(--amber-2)"}}>
               Target: {entry.targetSets} x {entry.targetReps}
             </div>}
@@ -3071,9 +3072,18 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             {/* Save on blur, not per keystroke - each save is a whole-collection PUT. */}
             <input defaultValue={workout.name||""} onBlur={e=>{ if(e.target.value!==workout.name) patch({name:e.target.value}); }}
               placeholder="Workout name" />
-            <div className="elapsed">
-              {active ? elapsed+" elapsed" : fmtDate(workout.date) + (workout.durationMin>0 ? " - "+workout.durationMin+" min" : "")}
-            </div>
+            {/* The clock starts when the workout is created, so a stray tap
+                two hours before you actually lift would bank a two-hour
+                session. Tap it to start counting from now. */}
+            {active
+              ? <button className="elapsed" style={{textDecorationLine:"underline",
+                  textDecorationColor:"var(--line-2)",textUnderlineOffset:3,padding:0}}
+                  onClick={()=>{ if(confirm("Start the clock from now?")) patch({ startedAt: nowISO() }); }}>
+                  {elapsed} elapsed - tap to reset
+                </button>
+              : <div className="elapsed">
+                  {fmtDate(workout.date) + (workout.durationMin>0 ? " - "+workout.durationMin+" min" : "")}
+                </div>}
           </div>
           {active
             ? <button className="btn btn-primary btn-sm" style={{flex:"0 0 auto"}}
@@ -3092,6 +3102,10 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             <input className="input" type="date" value={workout.date||todayStr()}
               onChange={e=>{ if(e.target.value) patch({ date: e.target.value,
                 startedAt: e.target.value+"T12:00:00.000Z", endedAt: e.target.value+"T12:00:00.000Z" }); }} />
+            <label className="label" style={{marginTop:12}}>Duration (minutes)</label>
+            <input className="input" inputMode="numeric" defaultValue={workout.durationMin||0}
+              onBlur={e=>{ const v = Math.max(0, Math.min(600, Math.round(Number(e.target.value)||0)));
+                if(v !== (workout.durationMin||0)) patch({ durationMin: v }); }} />
           </div>}
 
         {(store.gyms||[]).length>0 &&
@@ -3629,7 +3643,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         names.join(", ") + ". Otherwise use a clean title-case name. " +
         "type: lifts and carries = strength; running/bike/row intervals = cardio; stretches, holds and " +
         "mobility drills = mobility. targetSets/targetReps: for strength use the text's sets and reps " +
-        "(per-side counts stay as written; default 3 and 10 if unstated); for cardio/mobility use 0 and 0. " +
+        "(per-side counts stay as written; default 3 and 10 if unstated). MOBILITY keeps whatever " +
+        "sets and reps the text gives it - a drill written '1x8' is an instruction, not a suggestion - " +
+        "and only uses 0 and 0 when the text states no count at all. Cardio always uses 0 and 0 " +
+        "because its duration rides in the name. " +
         "Supersets become separate consecutive items. " +
         (gymNames.length ? 'gym: one of "'+gymNames.join('", "')+'" when the text names it, else null. ' : "gym: always null. ") +
         "Never invent routines or exercises not in the text.";
@@ -3714,8 +3731,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       items: r.items.map(it => ({
         id: uid(), exerciseId: lib[normName(chosenName(it))].id, name: lib[normName(chosenName(it))].name,
         type: it.type,
-        targetSets: it.type==="strength" ? (it.targetSets||3) : 0,
-        targetReps: it.type==="strength" ? (it.targetReps||10) : 0,
+        // Mobility keeps whatever dose was written; only cardio is dose-free.
+        targetSets: it.type==="cardio" ? 0 : (it.targetSets || (it.type==="strength" ? 3 : 0)),
+        targetReps: it.type==="cardio" ? 0 : (it.targetReps || (it.type==="strength" ? 10 : 0)),
       })),
       createdAt: nowISO(), updatedAt: nowISO(),
     }));
@@ -3950,12 +3968,17 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
               <div style={{flex:1,minWidth:0}}>
                 <div className="entry-name">{it.name}</div>
                 {it.type!=="strength" && <div className="entry-last">{it.type}</div>}
+                {it.type==="mobility" && !(it.targetSets>0) &&
+                  <div className="entry-last" style={{color:"var(--amber-2)"}}>no reps set</div>}
               </div>
               <button className="entry-x" onClick={()=>removeItem(it.id)} aria-label={"Remove "+it.name}>
                 <Icon d={ICONS.x} size={15}/>
               </button>
             </div>
-            {it.type==="strength" &&
+            {/* Mobility drills have doses too - "90/90 Hip Switch 1x8" is an
+                instruction, not a suggestion. Only cardio is genuinely
+                dose-free here, since it carries its duration in the name. */}
+            {it.type!=="cardio" &&
               <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8,flexWrap:"wrap"}}>
                 <button style={sBtn} onClick={()=>bump(it,"targetSets",-1,1,10)} aria-label="Fewer sets">-</button>
                 <span style={{fontWeight:700,fontSize:17,minWidth:20,textAlign:"center"}}>{it.targetSets}</span>
