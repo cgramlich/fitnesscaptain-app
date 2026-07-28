@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.17.1";
+const APP_VERSION = "0.17.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.3";
+const BUILD = "2026-07-28.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -689,8 +689,16 @@ function useStore(){
   const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
   const authedRef = useRef(false);
 
+  // dirtyRef is written SYNCHRONOUSLY, not left to the re-render (same class of
+  // bug as the saveCollection dataRef fix): pullAll sets the seed's flag and then
+  // reads dirtyRef in the SAME tick (sync status + the push loop), so a flag set
+  // via setState alone was invisible until the re-render - the fresh seed's push
+  // was skipped and the status read "idle" while a file sat dirty.
   const setDirtyFlag = useCallback((file, on) => {
-    setDirty(prev => { const next = {...prev}; if(on) next[file]=true; else delete next[file]; lsSet("dirty", next); return next; });
+    const next = {...dirtyRef.current};
+    if(on) next[file]=true; else delete next[file];
+    dirtyRef.current = next;
+    setDirty(next); lsSet("dirty", next);
   }, []);
 
   // Push one collection to the backend. Leaves its dirty flag set on failure so
