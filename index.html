@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.4";
+const APP_VERSION = "0.27.5";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.20";
+const BUILD = "2026-07-28.21";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3744,11 +3744,13 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
             </div>}
           {parsed.filter(r=>r.include).length > 1 &&
             <div className="card" style={{marginTop:12}}>
-              <div className="updrow">
-                <span style={{fontWeight:600}}>Run these as a program</span>
-                <button className={"pill "+(asProgram?"on":"")} onClick={()=>setAsProgram(a=>!a)}>
-                  {asProgram ? "Yes" : "No"}
-                </button>
+              {/* Two pills, not one that flips. A lone pill reading "Yes" is
+                  indistinguishable from a button that MEANS yes - Chris
+                  pressed it to confirm and turned the program off. */}
+              <div style={{fontWeight:600,marginBottom:8}}>Run these as a program</div>
+              <div className="pills" style={{marginTop:0}}>
+                <button className={"pill "+(asProgram?"on":"")} onClick={()=>setAsProgram(true)}>Yes</button>
+                <button className={"pill "+(!asProgram?"on":"")} onClick={()=>setAsProgram(false)}>No</button>
               </div>
               {asProgram && <>
                 <input className="input" style={{marginTop:10}} value={progLabel}
