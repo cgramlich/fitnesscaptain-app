@@ -160,6 +160,10 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;border-radius:var(--radius-sm);
   font-weight:600;font-size:15px;transition:.18s var(--ease);border:1px solid transparent;}
 .btn:active{transform:scale(.97);}
+/* A disabled button used to look identical to a live one, so a dead control
+   still invited the tap. Nothing here had a disabled style at all. */
+.btn:disabled,.pill:disabled{opacity:.45;cursor:default;}
+.btn:disabled:active,.pill:disabled:active{transform:none;}
 .btn svg{width:15px;height:15px;flex:0 0 auto;}
 .btn-primary{background:var(--amber);color:#241505;}
 .btn-primary:active{background:var(--amber-2);}
@@ -330,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.28.0";
+const APP_VERSION = "0.28.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.22";
+const BUILD = "2026-07-28.23";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1557,11 +1561,11 @@ function DailyCard({ store }){
 
 /* NEXT UP - the answer to "what do I do today" with zero thinking. Sits
    above everything on the home tab whenever a program is active. */
-function NextUpCard({ store, onStartRoutine }){
+function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
   const prog = activeProgram(store);
   const next = programNext(prog, store.data.routines||[]);
   if(!next) return null;
-  const busy = (store.data.workouts||[]).some(w=>!w.endedAt);
+  const busy = (store.data.workouts||[]).find(w=>!w.endedAt) || null;
   return (
     <div className="card" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}}>
       <div className="updrow" style={{marginBottom:6}}>
@@ -1573,10 +1577,17 @@ function NextUpCard({ store, onStartRoutine }){
         <span className="chip">{(next.routine.items||[]).length} exercise{(next.routine.items||[]).length===1?"":"s"}</span>
         {next.routine.gymName && <span className="chip blue">{next.routine.gymName}</span>}
       </div>
+      {/* With a workout already open this used to be a DISABLED button styled
+          exactly like a live one, worded as an instruction - so it read as
+          "press me" and did nothing. It now goes where it points. */}
       <button className="btn btn-primary btn-block" style={{marginTop:12}}
-        disabled={busy} onClick={()=>onStartRoutine(next.routine)}>
-        {busy ? "Finish the workout in progress" : "Start "+next.routine.name}
+        onClick={()=> busy ? onOpenWorkout(busy) : onStartRoutine(next.routine)}>
+        {busy ? "Go to your workout in progress" : "Start "+next.routine.name}
       </button>
+      {busy &&
+        <p className="hint center" style={{marginTop:8,marginBottom:0}}>
+          Finish or delete it and {next.routine.name} is ready here.
+        </p>}
     </div>
   );
 }
@@ -1602,7 +1613,7 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRou
             Import past workouts
           </button>
         </div>
-        <NextUpCard store={store} onStartRoutine={onStartRoutine} />
+        <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
         <DailyCard store={store} />
       </div>
     );
@@ -1610,7 +1621,7 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRou
 
   return (
     <div>
-      <NextUpCard store={store} onStartRoutine={onStartRoutine} />
+      <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
       <DailyCard store={store} />
       {activeW
         ? <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
@@ -3048,6 +3059,19 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
           <button className="btn btn-danger btn-block" style={{marginTop:10}}
             onClick={()=>{ if(confirm("Delete this workout from your history?")) onDelete(workout.id); }}>
             Delete workout
+          </button>}
+        {/* An in-progress workout could only be FINISHED, so a mis-tapped
+            empty one had to be saved to history and then deleted - and while
+            it sat there it blocked the program from starting. */}
+        {active &&
+          <button className="btn btn-danger btn-block" style={{marginTop:18}}
+            onClick={()=>{
+              const empty = !(workout.entries||[]).length;
+              if(confirm(empty ? "Discard this empty workout?"
+                               : "Discard this workout? Nothing will be saved to your history."))
+                onDelete(workout.id);
+            }}>
+            Discard workout
           </button>}
       </div>
 
