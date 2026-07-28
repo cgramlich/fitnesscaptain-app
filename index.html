@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.17.2";
+const APP_VERSION = "0.18.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.4";
+const BUILD = "2026-07-28.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -410,6 +410,29 @@ function weekStartStr(dateStr){
   const p = n => String(n).padStart(2,"0");
   return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
 }
+/* The "top" set of an entry = the HEAVIEST one, ties broken by reps. One
+   definition everywhere (import review, mid-workout "last time", Progress
+   bests) - volume-based "top" used to disagree with weight-based "best" on
+   every descending pyramid, which is most of how people actually lift. */
+function topSet(sets){
+  const ss = (sets||[]).filter(Boolean);
+  if(!ss.length) return null;
+  return ss.reduce((a,b) => {
+    const aw = Number(a.weight)||0, bw = Number(b.weight)||0;
+    if(bw > aw) return b;
+    if(bw === aw && (Number(b.reps)||0) > (Number(a.reps)||0)) return b;
+    return a;
+  }, ss[0]);
+}
+// How a set felt. Optional - logging never waits on it. Drives the
+// progression nudge: a set that was hard or failed never suggests more weight.
+const EFFORTS = [
+  { k:"easy",  label:"Easy",   cls:"green" },
+  { k:"solid", label:"Solid",  cls:"" },
+  { k:"hard",  label:"Hard",   cls:"amber" },
+  { k:"fail",  label:"Failed", cls:"red" },
+];
+const effortOf = k => EFFORTS.find(e=>e.k===k) || null;
 // Epley estimated one-rep max; at 1 rep the lift IS the max.
 function estMax(weight, reps){
   const w = Number(weight)||0, r = Number(reps)||0;
@@ -2142,18 +2165,43 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
   const [mins, setMins]   = useState(entry.cardio ? Number(entry.cardio.minutes)||0 : 20);
   const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
   const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
+  const [effort, setEffort] = useState(null); // optional tag for the set being logged
 
   const logSet = () => {
     const next = sets.slice();
-    if(selIdx>=0 && selIdx<next.length){ next[selIdx] = { reps, weight }; setSelIdx(-1); }
-    else { next.push({ reps, weight }); onSetLogged(); }
+    const rec = { reps, weight };
+    if(effort) rec.effort = effort;
+    if(selIdx>=0 && selIdx<next.length){ next[selIdx] = rec; setSelIdx(-1); }
+    else { next.push(rec); onSetLogged(); }
+    setEffort(null);                          // next set starts untagged
     onUpdate(e => ({ ...e, sets: next }));
   };
   const pickSet = (i) => {
     if(!active) return;
-    if(selIdx===i){ setSelIdx(-1); return; }
+    if(selIdx===i){ setSelIdx(-1); setEffort(null); return; }
     setSelIdx(i); setReps(Number(sets[i].reps)||0); setWeight(Number(sets[i].weight)||0);
+    setEffort(sets[i].effort || null);
   };
+
+  /* Progression nudge. Suggest more weight only when last time's heaviest set
+     hit the target reps AND was not tagged hard or failed - the effort tag is
+     what keeps this from cheerfully pushing you after a grinder. */
+  const suggestWeight = (() => {
+    if(isCardio || !active || selIdx>=0) return null;
+    if(!prev || !prev.sets || !prev.sets.length) return null;
+    const t = topSet(prev.sets);
+    if(!t || !(Number(t.weight)>0)) return null;
+    const heavy = Number(t.weight);
+    const atTop = prev.sets.filter(s => (Number(s.weight)||0) === heavy);
+    // ANY grinder at that weight vetoes the suggestion, not just the one set
+    // topSet happened to return - two sets at the same weight tie on reps and
+    // the tagged one can lose the tie-break.
+    if(atTop.some(s => s.effort==="hard" || s.effort==="fail")) return null;
+    const goal = Number(entry.targetReps)>0 ? Number(entry.targetReps) : 12;
+    if(Math.max.apply(null, atTop.map(s=>Number(s.reps)||0)) < goal) return null;
+    const up = heavy + wStep;
+    return weight >= up ? null : up;
+  })();
   const removeSet = (i) => {
     onUpdate(e => ({ ...e, sets: (e.sets||[]).filter((_,j)=>j!==i) }));
     if(selIdx===i) setSelIdx(-1);
@@ -2201,6 +2249,10 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
           <button className={"set-row "+(selIdx===i?"sel":"")} onClick={()=>pickSet(i)}>
             <span className="set-num">SET {i+1}</span>
             <span className="set-main">{s.reps} x {fmtW(s.weight)} {units}</span>
+            {effortOf(s.effort) &&
+              <span className={"chip "+effortOf(s.effort).cls} style={{flex:"0 0 auto"}}>
+                {effortOf(s.effort).label}
+              </span>}
           </button>;
         // Swipe left to delete a set (portfolio standard); finished workouts stay read-only.
         return active
@@ -2219,6 +2271,20 @@ function EntryCard({ entry, prev, units, active, howTo, onUpdate, onRemove, onSe
         <div className="logger">
           <Stepper label="Reps" value={reps} onChange={setReps} step={1} min={0}/>
           <Stepper label={"Weight ("+units+")"} value={weight} onChange={setWeight} step={wStep} min={0}/>
+          {suggestWeight &&
+            <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10,
+              borderColor:"var(--amber-line)",color:"var(--amber-2)"}}
+              onClick={()=>setWeight(suggestWeight)}>
+              Ready for {fmtW(suggestWeight)} {units}?
+            </button>}
+          <div className="pills" style={{marginTop:10}}>
+            {EFFORTS.map(e => (
+              <button key={e.k} className={"pill "+(effort===e.k?"on":"")}
+                onClick={()=>setEffort(effort===e.k ? null : e.k)}>
+                {e.label}
+              </button>
+            ))}
+          </div>
           <button className="btn btn-primary btn-block log-set-btn" style={{marginTop:12}} onClick={logSet}>
             {selIdx>=0 ? "Update set "+(selIdx+1) : "Log set "+(sets.length+1)}
           </button>
@@ -2345,8 +2411,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       if(w.id===workout.id) continue;
       const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
       if(e){
-        const best = e.sets.reduce((a,b)=>((Number(b.reps)||0)*(Number(b.weight)||0) > (Number(a.reps)||0)*(Number(a.weight)||0) ? b : a), e.sets[0]);
-        return { sets: e.sets, best };
+        return { sets: e.sets, best: topSet(e.sets) };
       }
     }
     return null;
@@ -2599,8 +2664,7 @@ function ImportLayer({ store, onClose, onImported }){
                   <span className="set-main" style={{fontWeight:500}}>
                     {e.name}
                     {e.sets.length>0 && " - "+e.sets.length+" set"+(e.sets.length===1?"":"s")+
-                      " (top "+e.sets.reduce((a,b)=>b.reps*b.weight>=a.reps*a.weight?b:a,e.sets[0]).reps+
-                      " x "+fmtW(e.sets.reduce((a,b)=>b.reps*b.weight>=a.reps*a.weight?b:a,e.sets[0]).weight)+" "+units+")"}
+                      " (top "+topSet(e.sets).reps+" x "+fmtW(topSet(e.sets).weight)+" "+units+")"}
                     {e.cardio && " - "+e.cardio.minutes+" min"+(e.cardio.distance>0?" / "+fmtW(e.cardio.distance)+" "+e.cardio.unit:"")}
                   </span>
                   {!e.matched && <span className="chip violet" style={{flex:"0 0 auto"}}>new</span>}
