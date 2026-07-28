@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.0";
+const APP_VERSION = "0.27.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.16";
+const BUILD = "2026-07-28.17";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3618,7 +3618,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       <div className="layer-inner">
         <div className="layer-top">
           <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
-          <h2>{build ? "Build a program" : "Import routines"}</h2>
+          {/* Title matches the button that opened it - the screen used to say
+              "Import routines" while every way in said "Import a program". */}
+          <h2>{build ? "Build a program" : "Import a program"}</h2>
         </div>
 
         {phase==="intake" && <>
