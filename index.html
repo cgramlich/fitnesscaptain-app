@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.30.1";
+const APP_VERSION = "0.30.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.26";
+const BUILD = "2026-07-28.27";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -443,11 +443,16 @@ function mediaTokens(s){
   return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(" ")
     .filter(Boolean).map(t => MEDIA_SYNONYMS[t] || t);
 }
-// Illustrations tolerate a looser match than renaming does, but run through
-// the same scorer so a modifier mismatch can never show the wrong movement.
+/* Illustrations tolerate a looser match than renaming, but 0.5 was far too
+   loose: on a two-word name it means ONE word in common, which showed a Drag
+   Curl for a Nordic Curl and a Cat Stretch for a Couch Stretch. Calibrated
+   against Chris's real library - every wrong match sat at exactly 0.5, every
+   acceptable one (Calf Raise -> Donkey Calf Raises, Bench Press -> Bench
+   Press - Powerlifting) at 0.67 or above. Fewer pictures, all of them right. */
+const MEDIA_THRESHOLD = 0.65;
 function matchMedia(idx, name){
   const m = matchMediaScored(idx, name);
-  return (m && m.score >= 0.5) ? m.item : null;
+  return (m && m.score >= MEDIA_THRESHOLD) ? m.item : null;
 }
 
 /* Full reference record for one movement (instructions, equipment, muscles).
