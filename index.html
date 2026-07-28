@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.3";
+const APP_VERSION = "0.27.4";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.19";
+const BUILD = "2026-07-28.20";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3484,8 +3484,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
     if(!rs.length) throw new Error(build ? "No program came back - try again." : "No routines found in that text.");
     const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
     const review = rs.map(r => {
-      const gym = forcedGym !== undefined ? forcedGym
-        : ((store.gyms||[]).find(g => g.name === r.gym) || null);
+      // Same loose matching as the history importer - fixing one and leaving
+      // the other on exact-match meant a pasted "Gym: Dallas Home Gym" landed
+      // on a workout but not on a routine.
+      const gym = forcedGym !== undefined ? forcedGym : matchGym(store.gyms||[], r.gym);
       return {
         include: true,
         name: (r.name||"Routine").slice(0,60),
