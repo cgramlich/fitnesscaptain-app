@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.15.0";
+const APP_VERSION = "0.16.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-24.2";
+const BUILD = "2026-07-28.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -382,6 +382,24 @@ function workoutVolume(w){
 function workoutSets(w){
   let n = 0;
   for(const e of (w.entries||[])) n += (e.sets||[]).length;
+  return n;
+}
+// Shift a YYYY-MM-DD string by N days (negative = back).
+function shiftDay(dateStr, n){
+  const d = new Date(String(dateStr||"").slice(0,10) + "T00:00:00");
+  if(isNaN(d)) return null;
+  d.setDate(d.getDate() + n);
+  const p = x => String(x).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());
+}
+// Consecutive days (ending today, or yesterday if today isn't ticked yet) that
+// a habit was checked. Today being blank doesn't kill a live streak.
+function habitStreak(log, habitId){
+  const has = d => Array.isArray(log[d]) && log[d].indexOf(habitId) !== -1;
+  let day = todayStr();
+  if(!has(day)) day = shiftDay(day, -1);
+  let n = 0;
+  while(day && has(day) && n < 3650){ n++; day = shiftDay(day, -1); }
   return n;
 }
 // Monday-based week start for a YYYY-MM-DD date string (progress buckets).
@@ -525,6 +543,17 @@ function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g
 // deletes everything stays empty).
 const DEFAULT_CFG = { appName:"FitnessCaptain", units:"lb" };
 
+/* Daily checklist starters. NOT applied automatically - they are one-tap
+   suggestions on the setup card, so a new user builds their own list (and
+   anyone's plan fits: supplements, steps, sleep, sauna, mobility). */
+const HABIT_SUGGESTIONS = [
+  "Hit protein target", "Creatine", "Mobility work", "10,000 steps",
+  "7+ hours sleep", "Sauna", "Vitamin D", "Fish oil", "Water", "Walk after dinner",
+];
+// Trailing window + default guard for the rate-of-loss check.
+const LOSS_WINDOW_DAYS = 28;
+const DEFAULT_LOSS_GUARD = 1.0;        // % of bodyweight per week
+
 const EXERCISE_TYPES = ["strength","cardio","mobility"];
 const GYM_KINDS = ["home","club","hotel","other"];
 const CATALOG_CATEGORIES = ["Racks & stations","Free weights","Machines & cables","Cardio","Conditioning","Mobility & recovery","Other"];
@@ -632,6 +661,10 @@ function useStore(){
   // Gyms ride on the synced meta object (the PriorityCaptain Spaces/Templates
   // pattern): a small per-user list, NO backend change needed.
   const [gyms, setGyms] = useState(() => lsGet("gyms", []));
+  // Daily checklist ({habits:[{id,label}], log:{"YYYY-MM-DD":[habitId]}}) and
+  // body metrics ([{id,date,weight,waist,bodyFat}]) ride meta the same way.
+  const [daily, setDaily] = useState(() => lsGet("daily", { habits:[], log:{} }));
+  const [metrics, setMetrics] = useState(() => lsGet("metrics", []));
   const [data, setData] = useState(() => {
     const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
   });
@@ -649,6 +682,8 @@ function useStore(){
   const dirtyRef = useRef(dirty); dirtyRef.current = dirty;
   const cfgRef = useRef(cfg); cfgRef.current = cfg;
   const gymsRef = useRef(gyms); gymsRef.current = gyms;
+  const dailyRef = useRef(daily); dailyRef.current = daily;
+  const metricsRef = useRef(metrics); metricsRef.current = metrics;
   // Last-pulled meta object, so pushes preserve keys other builds may add.
   const metaBaseRef = useRef({});
   const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
@@ -675,7 +710,8 @@ function useStore(){
     if(!cfgDirtyRef.current || !authedRef.current) return;
     if(!navigator.onLine){ setSync("pending"); return; }
     try{
-      await metaPut({ ...metaBaseRef.current, cfg: cfgRef.current, gyms: gymsRef.current });
+      await metaPut({ ...metaBaseRef.current, cfg: cfgRef.current, gyms: gymsRef.current,
+                      daily: dailyRef.current, metrics: metricsRef.current });
       cfgDirtyRef.current=false; lsSet("cfgDirty", false);
     }
     catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushCfg: "+e.message); }
@@ -701,6 +737,14 @@ function useStore(){
       }
       if(m && Array.isArray(m.gyms) && !cfgDirtyRef.current){
         setGyms(m.gyms); lsSet("gyms", m.gyms); gymsRef.current = m.gyms;
+      }
+      if(m && m.daily && typeof m.daily==="object" && !cfgDirtyRef.current){
+        const d = { habits: Array.isArray(m.daily.habits)?m.daily.habits:[],
+                    log: (m.daily.log && typeof m.daily.log==="object") ? m.daily.log : {} };
+        setDaily(d); lsSet("daily", d); dailyRef.current = d;
+      }
+      if(m && Array.isArray(m.metrics) && !cfgDirtyRef.current){
+        setMetrics(m.metrics); lsSet("metrics", m.metrics); metricsRef.current = m.metrics;
       }
       // One-time starter seed: an empty library after a clean pull gets the
       // ~55 common movements. The cfg flag makes it once-per-account, so a
@@ -747,6 +791,18 @@ function useStore(){
 
   const saveGyms = useCallback((next) => {
     setGyms(next); lsSet("gyms", next); gymsRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  const saveDaily = useCallback((next) => {
+    setDaily(next); lsSet("daily", next); dailyRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  const saveMetrics = useCallback((next) => {
+    setMetrics(next); lsSet("metrics", next); metricsRef.current = next;
     cfgDirtyRef.current = true; lsSet("cfgDirty", true);
     pushCfg();
   }, [pushCfg]);
@@ -824,6 +880,10 @@ function useStore(){
         setDirty({}); dirtyRef.current = {};
         setCfg(DEFAULT_CFG); cfgRef.current = DEFAULT_CFG;
         setGyms([]); gymsRef.current = []; metaBaseRef.current = {};
+        lsDel("daily"); lsDel("metrics");
+        const blankDaily = { habits:[], log:{} };
+        setDaily(blankDaily); dailyRef.current = blankDaily;
+        setMetrics([]); metricsRef.current = [];
         cfgDirtyRef.current = false;
         log("AUTH","signed out (local cache + config cleared)");
       }
@@ -840,8 +900,8 @@ function useStore(){
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, [flush]);
 
-  return { data, cfg, gyms, sync, syncMsg, online, authed, authEmail, authReady, recovery,
-           saveCollection, saveCfg, saveGyms, pullAll, flush,
+  return { data, cfg, gyms, daily, metrics, sync, syncMsg, online, authed, authEmail, authReady, recovery,
+           saveCollection, saveCfg, saveGyms, saveDaily, saveMetrics, pullAll, flush,
            signIn, signUp, signOut, requestReset, updatePassword };
 }
 
@@ -1085,6 +1145,108 @@ function SwipeRow({ onDelete, className, children }){
    SCREENS - step-1 shell. Domain features land in build-order steps
    2 (exercise library), 3 (workout logging), 4 (routines), 5 (progress).
    ============================================================ */
+/* DAILY CHECKLIST - the non-training inputs that decide whether training
+   works (protein, creatine, sleep, steps, sauna, mobility...). Deliberately
+   NOT food tracking: the user defines their own items and ticks them off.
+   Lives at the top of the home tab because that is the screen opened daily. */
+function DailyCard({ store }){
+  const [editing, setEditing] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const daily = store.daily || { habits:[], log:{} };
+  const habits = daily.habits || [];
+  const log = daily.log || {};
+  const today = todayStr();
+  const doneToday = log[today] || [];
+
+  const save = (next) => {
+    // Bound meta growth: keep roughly a year of history.
+    const cutoff = shiftDay(today, -400);
+    const log2 = {};
+    Object.keys(next.log||{}).forEach(d => { if(!cutoff || d >= cutoff) log2[d] = next.log[d]; });
+    store.saveDaily({ habits: next.habits, log: log2 });
+  };
+  const toggle = (id) => {
+    const on = doneToday.indexOf(id) !== -1;
+    const list = on ? doneToday.filter(x=>x!==id) : [...doneToday, id];
+    save({ habits, log: { ...log, [today]: list } });
+  };
+  const addHabit = (label) => {
+    const l = String(label||"").trim().slice(0,40);
+    if(!l || habits.some(h=>h.label.toLowerCase()===l.toLowerCase())) return;
+    save({ habits: [...habits, { id: uid(), label: l }], log });
+    setNewLabel("");
+  };
+  const removeHabit = (id) => {
+    const log2 = {};
+    Object.keys(log).forEach(d => { log2[d] = (log[d]||[]).filter(x=>x!==id); });
+    save({ habits: habits.filter(h=>h.id!==id), log: log2 });
+  };
+
+  if(!habits.length && !editing){
+    return (
+      <div className="card" style={{marginTop:14}}>
+        <div style={{fontWeight:600,marginBottom:4}}>Daily checklist</div>
+        <p className="hint" style={{marginTop:0}}>
+          Track the things outside the gym that decide whether the training
+          works - protein, supplements, sleep, steps, recovery. Your list, your rules.
+        </p>
+        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>setEditing(true)}>
+          Set up my checklist
+        </button>
+      </div>
+    );
+  }
+
+  const unused = HABIT_SUGGESTIONS.filter(s => !habits.some(h=>h.label.toLowerCase()===s.toLowerCase()));
+
+  return (
+    <div className="card" style={{marginTop:14}}>
+      <div className="updrow" style={{marginBottom:8}}>
+        <span style={{fontWeight:600}}>Today</span>
+        <span className="subtle" style={{fontSize:12.5}}>
+          {habits.length ? doneToday.filter(id=>habits.some(h=>h.id===id)).length+" of "+habits.length : ""}
+        </span>
+      </div>
+
+      {habits.map(h => {
+        const on = doneToday.indexOf(h.id) !== -1;
+        const st = habitStreak(log, h.id);
+        return (
+          <div key={h.id} className="set-row" style={{cursor:"default",alignItems:"center",gap:10}}>
+            <button onClick={()=>toggle(h.id)} aria-label={(on?"Uncheck ":"Check ")+h.label}
+              style={{flex:"0 0 auto",width:24,height:24,borderRadius:12,padding:0,
+                      border:"1px solid "+(on?"var(--amber-line)":"var(--line-2)"),
+                      background:on?"var(--amber-dim)":"transparent",
+                      color:"var(--amber-2)",fontSize:13,lineHeight:"22px"}}>
+              {on ? "✓" : ""}
+            </button>
+            <span className="set-main" style={{fontWeight:500, opacity:on?1:.75}}>{h.label}</span>
+            {st>1 && <span className="chip" style={{flex:"0 0 auto"}}>{st}d</span>}
+            {editing &&
+              <button className="pill" style={{flex:"0 0 auto"}} onClick={()=>removeHabit(h.id)}>Remove</button>}
+          </div>
+        );
+      })}
+
+      {editing && <>
+        {unused.length>0 &&
+          <div className="pills" style={{marginTop:10}}>
+            {unused.map(s => <button key={s} className="pill" onClick={()=>addHabit(s)}>+ {s}</button>)}
+          </div>}
+        <div className="row" style={{marginTop:10}}>
+          <input className="input" style={{flex:1}} value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+            placeholder="Add your own" onKeyDown={e=>{ if(e.key==="Enter") addHabit(newLabel); }} />
+          <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}} onClick={()=>addHabit(newLabel)}>Add</button>
+        </div>
+      </>}
+
+      <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={()=>setEditing(e=>!e)}>
+        {editing ? "Done" : "Edit list"}
+      </button>
+    </div>
+  );
+}
+
 function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete }){
   const units = store.cfg.units || "lb";
   const workouts = (store.data.workouts||[]).slice()
@@ -1094,22 +1256,26 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete }){
 
   if(!workouts.length){
     return (
-      <div className="empty">
-        <div className="glyph">FC</div>
-        <h3 className="title-sm">Your training log starts here</h3>
-        <p>Start a workout, add exercises, and log sets with two taps. Everything pre-fills from last time.</p>
-        <button className="btn btn-primary" style={{marginTop:18}} onClick={onStart}>
-          <Icon d={ICONS.plus} size={16}/> Start a workout
-        </button>
-        <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={onImport}>
-          Import past workouts
-        </button>
+      <div>
+        <div className="empty" style={{paddingBottom:10}}>
+          <div className="glyph">FC</div>
+          <h3 className="title-sm">Your training log starts here</h3>
+          <p>Start a workout, add exercises, and log sets with two taps. Everything pre-fills from last time.</p>
+          <button className="btn btn-primary" style={{marginTop:18}} onClick={onStart}>
+            <Icon d={ICONS.plus} size={16}/> Start a workout
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{marginTop:12}} onClick={onImport}>
+            Import past workouts
+          </button>
+        </div>
+        <DailyCard store={store} />
       </div>
     );
   }
 
   return (
     <div>
+      <DailyCard store={store} />
       {activeW
         ? <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
             <div className="item-body">
@@ -2787,6 +2953,150 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
 /* Step 5: PROGRESS - computed entirely client-side from finished workouts.
    Three lenses: this week, 12-week volume bars, per-exercise trends
    (top-set line chart + session history + best-lift records). */
+/* BODY METRICS - weight / waist / body fat, plus the rate-of-loss guard.
+   The guard exists because losing weight too fast costs muscle: it compares
+   the trailing 4-week trend against a threshold THE USER sets, and only ever
+   suggests they look at it. Waist is here because it is the honest non-scale
+   signal when the scale stalls. */
+function BodySection({ store }){
+  const units = store.cfg.units || "lb";
+  const [sheet, setSheet] = useState(false);
+  const rows = (store.metrics||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const withW = rows.filter(r => Number(r.weight)>0);
+  const latest = rows.length ? rows[rows.length-1] : null;
+  const lastW = withW.length ? withW[withW.length-1] : null;
+
+  // Trailing-window rate of change, in % of bodyweight per week.
+  let pctPerWeek = null, spanDays = 0;
+  if(withW.length >= 2){
+    const cutoff = shiftDay(todayStr(), -LOSS_WINDOW_DAYS);
+    const win = withW.filter(r => !cutoff || r.date >= cutoff);
+    if(win.length >= 2){
+      const a = win[0], b = win[win.length-1];
+      spanDays = Math.round((new Date(b.date+"T00:00:00") - new Date(a.date+"T00:00:00"))/86400000);
+      if(spanDays >= 7){
+        const pctTotal = ((Number(a.weight)-Number(b.weight))/Number(a.weight))*100;
+        pctPerWeek = pctTotal / (spanDays/7);
+      }
+    }
+  }
+  const guard = Number(store.cfg.lossGuardPct);
+  const guardPct = guard>0 ? guard : DEFAULT_LOSS_GUARD;
+  const tooFast = pctPerWeek !== null && pctPerWeek > guardPct;
+
+  // 90-day weight sparkline.
+  const chartCut = shiftDay(todayStr(), -90);
+  const ch = withW.filter(r => !chartCut || r.date >= chartCut);
+  const W=288, H=90, PAD=10;
+  let pts = null;
+  if(ch.length >= 2){
+    const ws = ch.map(r=>Number(r.weight));
+    const lo = Math.min(...ws), hi = Math.max(...ws), span = Math.max(0.1, hi-lo);
+    pts = ch.map((r,i)=>[
+      PAD + (W-2*PAD)*i/(ch.length-1),
+      H-PAD - (H-2*PAD)*(Number(r.weight)-lo)/span
+    ]);
+  }
+
+  return (
+    <>
+      <div className="set-group">Body</div>
+      {!rows.length
+        ? <div className="card">
+            <p className="hint" style={{marginTop:0}}>
+              Log your weight (and waist, if you want the honest signal when the
+              scale stalls). Two entries a week is plenty - the trend matters, not the day.
+            </p>
+            <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>setSheet(true)}>
+              Log a measurement
+            </button>
+          </div>
+        : <div className="card">
+            <div className="item-meta" style={{marginTop:0}}>
+              {lastW && <span className="chip amber">{fmtW(lastW.weight)} {units}</span>}
+              {latest && Number(latest.waist)>0 && <span className="chip blue">waist {fmtW(latest.waist)}</span>}
+              {latest && Number(latest.bodyFat)>0 && <span className="chip">{fmtW(latest.bodyFat)}% fat</span>}
+              {latest && <span className="chip">{fmtDate(latest.date)}</span>}
+            </div>
+            {pts &&
+              <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",height:"auto",display:"block",marginTop:10}} aria-hidden="true">
+                <polyline points={pts.map(p=>p[0].toFixed(1)+","+p[1].toFixed(1)).join(" ")}
+                  fill="none" stroke="var(--amber)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                {pts.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r={i===pts.length-1?4:2} fill="var(--amber-2)" />)}
+              </svg>}
+            {pctPerWeek !== null &&
+              <div className="subtle" style={{marginTop:8,fontSize:12.5}}>
+                {pctPerWeek > 0
+                  ? "Down "+pctPerWeek.toFixed(2)+"% of bodyweight per week over the last "+spanDays+" days."
+                  : (pctPerWeek < 0
+                      ? "Up "+Math.abs(pctPerWeek).toFixed(2)+"% per week over the last "+spanDays+" days."
+                      : "Holding steady over the last "+spanDays+" days.")}
+              </div>}
+            {tooFast &&
+              <div className="auth-msg err" style={{marginTop:10}}>
+                That is faster than your {guardPct}%/week guard. Rapid loss tends to
+                take muscle with the fat - worth a look at protein and calories,
+                and a word with your doctor if you are on a medication that
+                suppresses appetite.
+              </div>}
+            <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={()=>setSheet(true)}>
+              Log a measurement
+            </button>
+          </div>}
+      {sheet && <MetricSheet store={store} onClose={()=>setSheet(false)} />}
+    </>
+  );
+}
+
+function MetricSheet({ store, onClose }){
+  const units = store.cfg.units || "lb";
+  const rows = store.metrics || [];
+  const [date, setDate] = useState(todayStr());
+  const existing = rows.find(r => r.date === date);
+  const [weight, setWeight] = useState(existing ? String(existing.weight||"") : "");
+  const [waist, setWaist]   = useState(existing ? String(existing.waist||"") : "");
+  const [fat, setFat]       = useState(existing ? String(existing.bodyFat||"") : "");
+  const [err, setErr] = useState("");
+
+  const save = () => {
+    const w = Number(weight)||0, ws = Number(waist)||0, bf = Number(fat)||0;
+    if(!w && !ws && !bf){ setErr("Enter at least one measurement."); return; }
+    const rec = { id: (existing && existing.id) || uid(), date,
+                  weight: w||undefined, waist: ws||undefined, bodyFat: bf||undefined,
+                  updatedAt: nowISO() };
+    const next = rows.filter(r => r.date !== date).concat([rec])
+      .sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+    store.saveMetrics(next);
+    log("BODY","measurement saved "+date);
+    onClose();
+  };
+  const del = () => {
+    store.saveMetrics(rows.filter(r => r.date !== date));
+    onClose();
+  };
+
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div className="sheet" onClick={e=>e.stopPropagation()}>
+        <h3 className="title-sm" style={{marginBottom:12}}>Measurement</h3>
+        {err && <div className="auth-msg err" style={{marginBottom:10}}>{err}</div>}
+        <label className="label">Date</label>
+        <input className="input" type="date" value={date} onChange={e=>{ setDate(e.target.value); setErr(""); }} />
+        <label className="label" style={{marginTop:12}}>Weight ({units})</label>
+        <input className="input" inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="optional" />
+        <label className="label" style={{marginTop:12}}>Waist ({units==="kg"?"cm":"in"})</label>
+        <input className="input" inputMode="decimal" value={waist} onChange={e=>setWaist(e.target.value)} placeholder="optional" />
+        <label className="label" style={{marginTop:12}}>Body fat %</label>
+        <input className="input" inputMode="decimal" value={fat} onChange={e=>setFat(e.target.value)} placeholder="optional" />
+        <button className="btn btn-primary btn-block" style={{marginTop:16}} onClick={save}>Save</button>
+        {existing &&
+          <button className="btn btn-danger btn-block" style={{marginTop:8}} onClick={del}>Delete this entry</button>}
+        <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function ProgressScreen({ store }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
@@ -2795,10 +3105,13 @@ function ProgressScreen({ store }){
 
   if(!done.length){
     return (
-      <div className="empty">
-        <div className="glyph">^</div>
-        <h3 className="title-sm">Progress</h3>
-        <p>Finish a workout (or import your history) and your trends, records, and weekly volume build themselves - nothing to set up.</p>
+      <div>
+        <BodySection store={store} />
+        <div className="empty">
+          <div className="glyph">^</div>
+          <h3 className="title-sm">Training progress</h3>
+          <p>Finish a workout (or import your history) and your trends, records, and weekly volume build themselves - nothing to set up.</p>
+        </div>
       </div>
     );
   }
@@ -2858,6 +3171,8 @@ function ProgressScreen({ store }){
           {cur.mins>0 && <span className="chip blue">{cur.mins} cardio min</span>}
         </div>
       </div>
+
+      <BodySection store={store} />
 
       <div className="set-group">Weekly volume - last 12 weeks</div>
       <div className="card">
@@ -2987,6 +3302,18 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
             </button>
           ))}
         </div>
+        <div className="subtle" style={{marginTop:14}}>Flag weight loss faster than</div>
+        <div className="pills">
+          {[0.5,0.75,1,1.5,0].map(p => (
+            <button key={p} className={"pill "+((store.cfg.lossGuardPct===undefined?DEFAULT_LOSS_GUARD:store.cfg.lossGuardPct)===p?"on":"")}
+              onClick={()=>store.saveCfg({ ...store.cfg, lossGuardPct: p })}>
+              {p===0 ? "Off" : p+"%/wk"}
+            </button>
+          ))}
+        </div>
+        <p className="hint" style={{marginTop:6}}>
+          Losing faster than this usually costs muscle as well as fat. Shown on the Progress tab.
+        </p>
       </div>
 
       <div className="set-group">About</div>
