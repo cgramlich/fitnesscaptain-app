@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.16.0";
+const APP_VERSION = "0.17.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.1";
+const BUILD = "2026-07-28.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1325,11 +1325,114 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete }){
   );
 }
 
+/* CLASSIFY - assign a primary muscle group to library exercises that never
+   got one. Imported exercises land as "Full body" by default, which makes
+   per-muscle-group volume meaningless; this proposes a group for each and
+   the user reviews. "Full body" IS correct for swings and carries, so the
+   review only lists rows the AI would actually change. */
+function ClassifyLayer({ store, onClose, onDone }){
+  const [phase, setPhase] = useState("busy");     // busy | review
+  const [err, setErr] = useState("");
+  const [rows, setRows] = useState([]);
+  const candidates = (store.data.exercises||[]).filter(x => (x.muscleGroup||"Full body")==="Full body");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try{
+        const list = candidates.slice(0,120);
+        if(!list.length) throw new Error("Nothing to classify.");
+        const system = 'You assign each exercise its PRIMARY muscle group. Return ONLY strict JSON, ' +
+          'no prose and no markdown fences: {"items":[{"name":"exact name given","group":"..."}]}. ' +
+          'group must be exactly one of: ' + MUSCLE_GROUPS.join(", ") + '. ' +
+          'Use "Full body" ONLY for genuine whole-body movements (swings, carries, sled work, ' +
+          'burpees, general conditioning). Mobility drills get the area they target ' +
+          '(a thoracic rotation drill is Back, a hip stretch is Legs). Return every name exactly ' +
+          'as given, once.';
+        const out = await aiRelay("classify_exercises",
+          [{ role:"user", content: list.map(x=>x.name+" ("+(x.type||"strength")+")").join("\n") }],
+          { system, maxTokens: 4000 });
+        if(!alive) return;
+        let obj;
+        try{ obj = JSON.parse(stripFences(out)); }
+        catch(e){ throw new Error("Couldn't read the result - try again."); }
+        const byName = {}; list.forEach(x => { byName[normName(x.name)] = x; });
+        const proposed = (Array.isArray(obj && obj.items)?obj.items:[])
+          .map(it => {
+            const ex = byName[normName(it.name)];
+            if(!ex || !MUSCLE_GROUPS.includes(it.group)) return null;
+            if(it.group === (ex.muscleGroup||"Full body")) return null;   // no change to show
+            return { id: ex.id, name: ex.name, group: it.group, include: true };
+          }).filter(Boolean);
+        if(!proposed.length) throw new Error("Everything already looks right - no changes suggested.");
+        setRows(proposed); setPhase("review");
+        log("CLASSIFY","proposed "+proposed.length+" changes");
+      }catch(e){
+        if(alive){ setErr(e.message||"Classify failed."); setPhase("review"); }
+        log("ERROR","classify_exercises: "+e.message);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const save = () => {
+    const inc = rows.filter(r=>r.include);
+    if(!inc.length){ onClose(); return; }
+    const map = {}; inc.forEach(r => { map[r.id] = r.group; });
+    store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+      map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
+    log("CLASSIFY","applied "+inc.length+" muscle groups");
+    onDone(inc.length);
+  };
+
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2>Muscle groups</h2>
+        </div>
+        {phase==="busy" &&
+          <div className="empty" style={{padding:"60px 20px"}}>
+            <span className="spin spin-lg" style={{margin:"0 auto 16px",display:"block"}}></span>
+            <p>Reading {candidates.length} exercise{candidates.length===1?"":"s"}...</p>
+          </div>}
+        {phase==="review" && <>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          {rows.length>0 && <>
+            <p className="hint" style={{marginTop:4}}>
+              Proposed changes only. Skip anything you disagree with - "Full body"
+              is right for swings and carries, so those stay as they are.
+            </p>
+            {rows.map((r,i)=>(
+              <div key={r.id} className="set-row" style={{cursor:"default",opacity:r.include?1:.45}}>
+                <span className="set-main" style={{fontWeight:500}}>{r.name}</span>
+                <span className="chip amber" style={{flex:"0 0 auto"}}>{r.group}</span>
+                <button className={"pill "+(r.include?"on":"")} style={{flex:"0 0 auto"}}
+                  onClick={()=>setRows(p=>p.map((x,j)=>j===i?{...x,include:!x.include}:x))}>
+                  {r.include ? "Apply" : "Skip"}
+                </button>
+              </div>
+            ))}
+            <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={save}>
+              Apply {rows.filter(r=>r.include).length} change{rows.filter(r=>r.include).length===1?"":"s"}
+            </button>
+          </>}
+          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={onClose}>Close</button>
+        </>}
+      </div>
+    </div>
+  );
+}
+
 function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("all");
   const [groupF, setGroupF] = useState("all");
+  const [classify, setClassify] = useState(false);
+  const [toast, setToast] = useState("");
   const exercises = store.data.exercises || [];
+  const unclassified = exercises.filter(x => (x.muscleGroup||"Full body")==="Full body");
 
   if(!exercises.length){
     return (
@@ -1374,6 +1477,17 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
             {g==="all" ? "All muscles" : g}
           </button>)}
       </div>
+      {toast && <div className="auth-msg" style={{marginBottom:10}}>{toast}</div>}
+      {unclassified.length >= 3 &&
+        <div className="card" style={{marginBottom:12}}>
+          <div className="subtle" style={{marginBottom:8}}>
+            {unclassified.length} exercises have no muscle group. Weekly volume by
+            muscle group needs them sorted.
+          </div>
+          <button className="btn btn-ghost btn-sm btn-block" onClick={()=>setClassify(true)}>
+            Sort them into muscle groups
+          </button>
+        </div>}
       {!filtered.length
         ? <div className="empty" style={{padding:"36px 20px"}}>
             <h3 className="title-sm">No matches</h3>
@@ -1399,6 +1513,10 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
       <p className="hint center" style={{marginTop:14,opacity:.7}}>
         {filtered.length} of {exercises.length} exercises
       </p>
+      {classify &&
+        <ClassifyLayer store={store} onClose={()=>setClassify(false)}
+          onDone={(n)=>{ setClassify(false); setToast("Sorted "+n+" exercise"+(n===1?"":"s")+" into muscle groups.");
+            setTimeout(()=>setToast(""), 3000); }} />}
     </div>
   );
 }
@@ -2346,10 +2464,12 @@ function importSystemPrompt(units, libraryNames){
   return "You organize pasted workout history into strict JSON. Return ONLY a JSON object, " +
     "no prose and no markdown fences, shaped exactly like this: " +
     '{"workouts":[{"date":"YYYY-MM-DD or null","name":"short title","notes":"",' +
-    '"entries":[{"exercise":"name","type":"strength|cardio|mobility",' +
+    '"entries":[{"exercise":"name","type":"strength|cardio|mobility","group":"muscle group",' +
     '"sets":[{"reps":N,"weight":N}] (strength only, else null),' +
     '"cardio":{"minutes":N,"distance":N} (cardio/mobility only, else null)}]}],' +
     '"skipped":["input lines you could not interpret"]}. ' +
+    "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
+    '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
     "Rules: weights are in " + units + " unless the text clearly says otherwise (convert if needed); " +
     "bodyweight movements use weight 0; numbers are plain with no units. " +
     "When an exercise clearly matches one of the user's library names, use the library name EXACTLY. " +
@@ -2397,7 +2517,8 @@ function ImportLayer({ store, onClose, onImported }){
             ? { minutes: Math.round(Number(e.cardio.minutes)), distance: Math.max(0, Number(e.cardio.distance)||0), unit: units==="kg"?"km":"mi" }
             : null;
           const name = String(e.exercise||"Exercise").slice(0,60);
-          return { name, type, sets, cardio, matched: !!lib[normName(name)] };
+          const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
+          return { name, type, group, sets, cardio, matched: !!lib[normName(name)] };
         }).filter(e => e.sets.length || e.cardio),
       })).filter(w => w.entries.length);
       if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
@@ -2423,7 +2544,7 @@ function ImportLayer({ store, onClose, onImported }){
     inc.forEach(w => w.entries.forEach(e => {
       const key = normName(e.name);
       if(!lib[key]){
-        const x = { id: uid(), name: e.name, type: e.type, muscleGroup: "Full body",
+        const x = { id: uid(), name: e.name, type: e.type, muscleGroup: e.group || "Full body",
                     equipment: "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
@@ -2620,6 +2741,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         items: (Array.isArray(r.items)?r.items:[]).map(it => ({
           name: String(it.exercise||"Exercise").slice(0,60),
           type: EXERCISE_TYPES.includes(it.type) ? it.type : "strength",
+          group: MUSCLE_GROUPS.includes(it.group) ? it.group : "Full body",
           targetSets: Math.max(0, Math.min(10, Math.round(Number(it.targetSets)||0))),
           targetReps: Math.max(0, Math.min(100, Math.round(Number(it.targetReps)||0))),
           matched: !!lib[normName(String(it.exercise||""))],
@@ -2642,8 +2764,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const system = "You convert a pasted training program into strict JSON. Return ONLY a JSON " +
         "object, no prose and no markdown fences: " +
         '{"routines":[{"name":"...","gym":"gym name or null","items":[{"exercise":"name",' +
-        '"type":"strength|cardio|mobility","targetSets":N,"targetReps":N}]}],' +
+        '"type":"strength|cardio|mobility","group":"muscle group","targetSets":N,"targetReps":N}]}],' +
         '"skipped":["lines you could not interpret"]}. ' +
+        "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover " +
+        '(use "Full body" only for genuine whole-body movements like swings and carries). ' +
         "Rules: one routine per named day/section, keep the section's name. " +
         "When an exercise clearly matches one of the user's library names use the library name EXACTLY: " +
         names.join(", ") + ". Otherwise use a clean title-case name. " +
@@ -2679,7 +2803,8 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
       const system = "You are a careful strength and conditioning coach designing a weekly training " +
         "program. Return ONLY strict JSON, no prose and no markdown fences: " +
         '{"routines":[{"name":"...","items":[{"exercise":"name",' +
-        '"type":"strength|cardio|mobility","targetSets":N,"targetReps":N}]}],"skipped":[]}. ' +
+        '"type":"strength|cardio|mobility","group":"muscle group","targetSets":N,"targetReps":N}]}],"skipped":[]}. ' +
+        "group must be exactly one of: " + MUSCLE_GROUPS.join(", ") + " - the PRIMARY mover. " +
         "Rules: EXACTLY " + bDays + " routines, one per training day, each named 'P<n> - <focus>' " +
         "(e.g. 'P1 - Lower Strength'). Every day must genuinely fit in " + bMins + " minutes including " +
         "a short warm-up: budget about 3 minutes per strength set with rest, so keep each day to roughly " +
@@ -2718,7 +2843,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
     inc.forEach(r => r.items.forEach(it => {
       const key = normName(it.name);
       if(!lib[key]){
-        const x = { id: uid(), name: it.name, type: it.type, muscleGroup: "Full body",
+        const x = { id: uid(), name: it.name, type: it.type, muscleGroup: it.group || "Full body",
                     equipment: "none", notes: "", custom: true,
                     createdAt: nowISO(), updatedAt: nowISO() };
         lib[key] = x; created.push(x);
@@ -3097,6 +3222,108 @@ function MetricSheet({ store, onClose }){
   );
 }
 
+/* RETENTION LENS - the question that matters in a fat-loss phase: am I
+   keeping my strength while the scale drops? Crosses the bodyweight trend
+   against the estimated-max trend over the same window. Only compares
+   exercises trained in BOTH halves, so it can't be fooled by new lifts. */
+function RetentionLens({ store, exStats }){
+  const rows = (store.metrics||[]).filter(r=>Number(r.weight)>0)
+    .slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const cut = shiftDay(todayStr(), -56);                 // 8-week window
+  const win = rows.filter(r => !cut || r.date >= cut);
+  if(win.length < 2) return null;
+  const first = win[0], last = win[win.length-1];
+  const days = Math.round((new Date(last.date+"T00:00:00") - new Date(first.date+"T00:00:00"))/86400000);
+  if(days < 14) return null;
+
+  const mid = shiftDay(last.date, -Math.round(days/2));
+  const deltas = [];
+  Object.values(exStats||{}).forEach(st => {
+    const early = st.sessions.filter(s => s.date >= first.date && s.date <= mid);
+    const late  = st.sessions.filter(s => s.date > mid && s.date <= last.date);
+    if(!early.length || !late.length) return;
+    const a = Math.max(...early.map(s=>s.est)), b = Math.max(...late.map(s=>s.est));
+    if(a > 0) deltas.push(((b-a)/a)*100);
+  });
+  if(deltas.length < 2) return null;
+
+  const strengthPct = deltas.reduce((s,x)=>s+x,0)/deltas.length;
+  const weightPct = ((Number(last.weight)-Number(first.weight))/Number(first.weight))*100;
+  const lost = weightPct < -0.5, gainedStrength = strengthPct > -1;
+  const verdict = lost && gainedStrength
+    ? "Bodyweight is down and your lifts are holding. That is fat loss with the muscle intact - exactly the outcome you want."
+    : (lost && !gainedStrength
+        ? "Bodyweight is down but your lifts are sliding with it. That usually means protein or calories are too low, or recovery is short."
+        : (weightPct > 0.5 && strengthPct > 1
+            ? "Bodyweight and lifts are both up - you are gaining, and at least some of it is strength."
+            : "Bodyweight is roughly steady. Watch the lifts for the real signal."));
+
+  return (
+    <>
+      <div className="set-group">Strength vs bodyweight</div>
+      <div className="card">
+        <div className="item-meta" style={{marginTop:0}}>
+          <span className={"chip "+(weightPct<0?"green":"")}>
+            weight {weightPct>0?"+":""}{weightPct.toFixed(1)}%
+          </span>
+          <span className={"chip "+(strengthPct>=0?"green":"red")}>
+            lifts {strengthPct>0?"+":""}{strengthPct.toFixed(1)}%
+          </span>
+          <span className="chip">{days} days</span>
+          <span className="chip">{deltas.length} lifts compared</span>
+        </div>
+        <div className="subtle" style={{marginTop:8,fontSize:12.5}}>{verdict}</div>
+      </div>
+    </>
+  );
+}
+
+/* WEEKLY SETS BY MUSCLE GROUP - rolling 7 days so it reads fairly on a
+   Tuesday, checked against a set range the user picks in Settings. This is
+   what catches an under-trained group (a program heavy on pressing and
+   light on pulling reads it immediately). */
+function GroupVolume({ store }){
+  const target = store.cfg.setsTarget === undefined ? "8-15" : store.cfg.setsTarget;
+  if(target === "off") return null;
+  const [min, max] = target.split("-").map(Number);
+  const byId = {}; (store.data.exercises||[]).forEach(x => { byId[x.id] = x; });
+  const byName = {}; (store.data.exercises||[]).forEach(x => { byName[normName(x.name)] = x; });
+  const cut = shiftDay(todayStr(), -6);
+  const counts = {};
+  (store.data.workouts||[]).forEach(w => {
+    if(!w.endedAt || !w.date || (cut && w.date < cut)) return;
+    (w.entries||[]).forEach(e => {
+      const hard = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0).length;
+      if(!hard) return;
+      const ex = byId[e.exerciseId] || byName[normName(e.name)];
+      const g = (ex && ex.muscleGroup) ? ex.muscleGroup : "Full body";
+      counts[g] = (counts[g]||0) + hard;
+    });
+  });
+  const total = Object.values(counts).reduce((s,n)=>s+n,0);
+  if(!total) return null;
+
+  return (
+    <>
+      <div className="set-group">Sets by muscle - last 7 days</div>
+      <div className="card">
+        <div className="pills" style={{marginTop:0}}>
+          {MUSCLE_GROUPS.map(g => {
+            const n = counts[g]||0;
+            if(g==="Full body" && !n) return null;
+            const cls = n>=min && n<=max ? "green" : (n<min ? "amber" : "blue");
+            return <span key={g} className={"chip "+cls}>{g} {n}</span>;
+          })}
+        </div>
+        <div className="subtle" style={{marginTop:8,fontSize:12.5}}>
+          Green sits in your {min}-{max} set range. Amber is under it, blue is over.
+          Full body counts toward everything it trains, so treat it as a bonus rather than a total.
+        </div>
+      </div>
+    </>
+  );
+}
+
 function ProgressScreen({ store }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
@@ -3173,6 +3400,10 @@ function ProgressScreen({ store }){
       </div>
 
       <BodySection store={store} />
+
+      <RetentionLens store={store} exStats={exStats} />
+
+      <GroupVolume store={store} />
 
       <div className="set-group">Weekly volume - last 12 weeks</div>
       <div className="card">
@@ -3314,6 +3545,15 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
         <p className="hint" style={{marginTop:6}}>
           Losing faster than this usually costs muscle as well as fat. Shown on the Progress tab.
         </p>
+        <div className="subtle" style={{marginTop:14}}>Weekly sets per muscle group</div>
+        <div className="pills">
+          {["6-12","8-15","10-20","off"].map(t => (
+            <button key={t} className={"pill "+((store.cfg.setsTarget===undefined?"8-15":store.cfg.setsTarget)===t?"on":"")}
+              onClick={()=>store.saveCfg({ ...store.cfg, setsTarget: t })}>
+              {t==="off" ? "Off" : t}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="set-group">About</div>
