@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.27.1";
+const APP_VERSION = "0.27.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.17";
+const BUILD = "2026-07-28.18";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3735,8 +3735,17 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
                 </p>
               </>}
             </div>}
+          {/* Name the thing being created. Saying "Import 5 routines" while
+              the user is plainly setting up a program reads like a different
+              action - it made Chris stop and ask whether it was the right
+              button. */}
           <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={importAll}>
-            {build ? "Save" : "Import"} {parsed.filter(r=>r.include).length} routine{parsed.filter(r=>r.include).length===1?"":"s"}
+            {(() => {
+              const n = parsed.filter(r=>r.include).length;
+              if(asProgram && n > 1)
+                return "Start " + (progLabel.trim() || "this program") + " - " + n + " days";
+              return (build ? "Save " : "Import ") + n + " routine" + (n===1?"":"s");
+            })()}
           </button>
           <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={()=>{ setPhase(build ? "intake" : "paste"); setErr(""); }}>
             {build ? "Change the answers" : "Back to paste"}
