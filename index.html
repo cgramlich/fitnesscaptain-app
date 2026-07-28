@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.32.0";
+const APP_VERSION = "0.33.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.30";
+const BUILD = "2026-07-28.31";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -779,7 +779,9 @@ async function collPut(file, data){
 async function metaGet(){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
-  const r = await fetch(API_BASE + "/api/collection/meta", { headers:{ "Authorization":"Bearer "+token } });
+  let r;
+  try{ r = await fetch(API_BASE + "/api/collection/meta", { headers:{ "Authorization":"Bearer "+token } }); }
+  catch(e){ throw transportError(e); }
   if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Load failed ("+r.status+")"); }
   const j = await r.json();
   return (j && typeof j==="object" && !Array.isArray(j)) ? j : {};
@@ -787,11 +789,14 @@ async function metaGet(){
 async function metaPut(obj){
   const token = await authToken();
   if(!token) throw new Error("Not signed in");
-  const r = await fetch(API_BASE + "/api/collection/meta", {
-    method:"PUT",
-    headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
-    body: JSON.stringify(obj)
-  });
+  let r;
+  try{
+    r = await fetch(API_BASE + "/api/collection/meta", {
+      method:"PUT",
+      headers:{ "Authorization":"Bearer "+token, "Content-Type":"application/json" },
+      body: JSON.stringify(obj)
+    });
+  }catch(e){ throw transportError(e); }
   if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Save failed ("+r.status+")"); }
   return true;
 }
@@ -3468,7 +3473,18 @@ function ProgramCard({ store }){
     setPicking(false); setOrder([]); setName("");
     log("PROGRAM","created "+p.name+" ("+p.routineIds.length+" days)");
   };
-  const stepOff = () => store.saveCfg({ ...store.cfg, activeProgramId: null });
+  /* "Step off" used to only clear cfg.activeProgramId, leaving the program
+     stored with no way to see or resume it - an unreachable record and a
+     vague label. It deletes now, which is what the button was already
+     effectively doing. Routines are untouched: the program owns the running
+     order, not the workouts. */
+  const deleteProgram = () => {
+    if(!confirm('Delete "' + prog.name + '"?\n\nYour routines are kept - only the running order and ' +
+                'your place in it go away.')) return;
+    store.savePrograms((store.programs||[]).filter(p => p.id !== prog.id));
+    store.saveCfg({ ...store.cfg, activeProgramId: null });
+    log("PROGRAM","deleted "+prog.name);
+  };
   const setNextTo = (idx) => store.savePrograms((store.programs||[]).map(p =>
     p.id===prog.id ? { ...p, cursor: idx, updatedAt: nowISO() } : p));
 
@@ -3493,8 +3509,8 @@ function ProgramCard({ store }){
           );
         })}
         <p className="hint" style={{marginTop:8}}>Tap any day to make it the next one.</p>
-        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:6}} onClick={stepOff}>
-          Step off this program
+        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:6}} onClick={deleteProgram}>
+          Delete this program
         </button>
       </div>
     );
