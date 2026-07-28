@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.17.0";
+const APP_VERSION = "0.17.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.2";
+const BUILD = "2026-07-28.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -777,7 +777,14 @@ function useStore(){
 
   // Mutate a collection: optimistic local write + persist + push.
   const saveCollection = useCallback((file, items) => {
-    setData(prev => { const next = {...prev, [file]: items}; dataRef.current = next; return next; });
+    // dataRef is updated SYNCHRONOUSLY, before pushFile reads it. Doing this
+    // inside a setData(prev => ...) updater instead let React defer the write,
+    // so a save fired straight from a click handler pushed the PREVIOUS
+    // contents to the server and then cleared the dirty flag - the change
+    // survived locally but could be undone by the next pull.
+    const next = {...dataRef.current, [file]: items};
+    dataRef.current = next;
+    setData(next);
     lsSet("cache:"+file, items);
     setDirtyFlag(file, true);
     pushFile(file);
@@ -1325,114 +1332,67 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete }){
   );
 }
 
-/* CLASSIFY - assign a primary muscle group to library exercises that never
-   got one. Imported exercises land as "Full body" by default, which makes
-   per-muscle-group volume meaningless; this proposes a group for each and
-   the user reviews. "Full body" IS correct for swings and carries, so the
-   review only lists rows the AI would actually change. */
-function ClassifyLayer({ store, onClose, onDone }){
-  const [phase, setPhase] = useState("busy");     // busy | review
-  const [err, setErr] = useState("");
-  const [rows, setRows] = useState([]);
-  const candidates = (store.data.exercises||[]).filter(x => (x.muscleGroup||"Full body")==="Full body");
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try{
-        const list = candidates.slice(0,120);
-        if(!list.length) throw new Error("Nothing to classify.");
-        const system = 'You assign each exercise its PRIMARY muscle group. Return ONLY strict JSON, ' +
-          'no prose and no markdown fences: {"items":[{"name":"exact name given","group":"..."}]}. ' +
-          'group must be exactly one of: ' + MUSCLE_GROUPS.join(", ") + '. ' +
-          'Use "Full body" ONLY for genuine whole-body movements (swings, carries, sled work, ' +
-          'burpees, general conditioning). Mobility drills get the area they target ' +
-          '(a thoracic rotation drill is Back, a hip stretch is Legs). Return every name exactly ' +
-          'as given, once.';
-        const out = await aiRelay("classify_exercises",
-          [{ role:"user", content: list.map(x=>x.name+" ("+(x.type||"strength")+")").join("\n") }],
-          { system, maxTokens: 4000 });
-        if(!alive) return;
-        let obj;
-        try{ obj = JSON.parse(stripFences(out)); }
-        catch(e){ throw new Error("Couldn't read the result - try again."); }
-        const byName = {}; list.forEach(x => { byName[normName(x.name)] = x; });
-        const proposed = (Array.isArray(obj && obj.items)?obj.items:[])
-          .map(it => {
-            const ex = byName[normName(it.name)];
-            if(!ex || !MUSCLE_GROUPS.includes(it.group)) return null;
-            if(it.group === (ex.muscleGroup||"Full body")) return null;   // no change to show
-            return { id: ex.id, name: ex.name, group: it.group, include: true };
-          }).filter(Boolean);
-        if(!proposed.length) throw new Error("Everything already looks right - no changes suggested.");
-        setRows(proposed); setPhase("review");
-        log("CLASSIFY","proposed "+proposed.length+" changes");
-      }catch(e){
-        if(alive){ setErr(e.message||"Classify failed."); setPhase("review"); }
-        log("ERROR","classify_exercises: "+e.message);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
-
-  const save = () => {
-    const inc = rows.filter(r=>r.include);
-    if(!inc.length){ onClose(); return; }
-    const map = {}; inc.forEach(r => { map[r.id] = r.group; });
-    store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
-      map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
-    log("CLASSIFY","applied "+inc.length+" muscle groups");
-    onDone(inc.length);
-  };
-
-  return (
-    <div className="layer">
-      <div className="layer-inner">
-        <div className="layer-top">
-          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
-          <h2>Muscle groups</h2>
-        </div>
-        {phase==="busy" &&
-          <div className="empty" style={{padding:"60px 20px"}}>
-            <span className="spin spin-lg" style={{margin:"0 auto 16px",display:"block"}}></span>
-            <p>Reading {candidates.length} exercise{candidates.length===1?"":"s"}...</p>
-          </div>}
-        {phase==="review" && <>
-          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
-          {rows.length>0 && <>
-            <p className="hint" style={{marginTop:4}}>
-              Proposed changes only. Skip anything you disagree with - "Full body"
-              is right for swings and carries, so those stay as they are.
-            </p>
-            {rows.map((r,i)=>(
-              <div key={r.id} className="set-row" style={{cursor:"default",opacity:r.include?1:.45}}>
-                <span className="set-main" style={{fontWeight:500}}>{r.name}</span>
-                <span className="chip amber" style={{flex:"0 0 auto"}}>{r.group}</span>
-                <button className={"pill "+(r.include?"on":"")} style={{flex:"0 0 auto"}}
-                  onClick={()=>setRows(p=>p.map((x,j)=>j===i?{...x,include:!x.include}:x))}>
-                  {r.include ? "Apply" : "Skip"}
-                </button>
-              </div>
-            ))}
-            <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={save}>
-              Apply {rows.filter(r=>r.include).length} change{rows.filter(r=>r.include).length===1?"":"s"}
-            </button>
-          </>}
-          <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={onClose}>Close</button>
-        </>}
-      </div>
-    </div>
-  );
+/* Assign a primary muscle group to library exercises that never got one
+   (imports used to stamp everything "Full body"). Applies straight away and
+   returns what changed so the caller can offer an undo: which muscle a
+   bench press trains is not a judgement call, so making the user approve a
+   list was pure friction. Anything odd is still editable per exercise. */
+async function classifyExercises(store){
+  const list = (store.data.exercises||[])
+    .filter(x => (x.muscleGroup||"Full body")==="Full body").slice(0,120);
+  if(!list.length) throw new Error("Nothing to sort.");
+  const system = 'You assign each exercise its PRIMARY muscle group. Return ONLY strict JSON, ' +
+    'no prose and no markdown fences: {"items":[{"name":"exact name given","group":"..."}]}. ' +
+    'group must be exactly one of: ' + MUSCLE_GROUPS.join(", ") + '. ' +
+    'Use "Full body" ONLY for genuine whole-body movements (swings, carries, sled work, ' +
+    'burpees, general conditioning). Mobility drills get the area they target ' +
+    '(a thoracic rotation drill is Back, a hip stretch is Legs). Return every name exactly ' +
+    'as given, once.';
+  const out = await aiRelay("classify_exercises",
+    [{ role:"user", content: list.map(x=>x.name+" ("+(x.type||"strength")+")").join("\n") }],
+    { system, maxTokens: 4000 });
+  let obj;
+  try{ obj = JSON.parse(stripFences(out)); }
+  catch(e){ throw new Error("Couldn't read the result - try again."); }
+  const byName = {}; list.forEach(x => { byName[normName(x.name)] = x; });
+  const changes = (Array.isArray(obj && obj.items)?obj.items:[]).map(it => {
+    const ex = byName[normName(it.name)];
+    if(!ex || !MUSCLE_GROUPS.includes(it.group)) return null;
+    const from = ex.muscleGroup || "Full body";
+    if(it.group === from) return null;
+    return { id: ex.id, name: ex.name, from, to: it.group };
+  }).filter(Boolean);
+  if(!changes.length) throw new Error("Those all look right already - nothing to change.");
+  const map = {}; changes.forEach(c => { map[c.id] = c.to; });
+  store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+    map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
+  log("CLASSIFY","sorted "+changes.length+" exercises");
+  return changes;
 }
 
 function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("all");
   const [groupF, setGroupF] = useState("all");
-  const [classify, setClassify] = useState(false);
-  const [toast, setToast] = useState("");
+  const [sorting, setSorting] = useState(false);
+  const [sorted, setSorted] = useState(null);     // change list, for the undo card
+  const [sortErr, setSortErr] = useState("");
   const exercises = store.data.exercises || [];
   const unclassified = exercises.filter(x => (x.muscleGroup||"Full body")==="Full body");
+
+  const runSort = async () => {
+    setSorting(true); setSortErr("");
+    try{ setSorted(await classifyExercises(store)); }
+    catch(e){ setSortErr(e.message||"Couldn't sort them."); log("ERROR","classify: "+e.message); }
+    finally{ setSorting(false); }
+  };
+  const undoSort = () => {
+    const map = {}; (sorted||[]).forEach(c => { map[c.id] = c.from; });
+    store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+      map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
+    log("CLASSIFY","undo "+(sorted||[]).length+" changes");
+    setSorted(null);
+  };
 
   if(!exercises.length){
     return (
@@ -1477,17 +1437,34 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
             {g==="all" ? "All muscles" : g}
           </button>)}
       </div>
-      {toast && <div className="auth-msg" style={{marginBottom:10}}>{toast}</div>}
-      {unclassified.length >= 3 &&
-        <div className="card" style={{marginBottom:12}}>
-          <div className="subtle" style={{marginBottom:8}}>
-            {unclassified.length} exercises have no muscle group. Weekly volume by
-            muscle group needs them sorted.
+      {sorted
+        ? <div className="card" style={{marginBottom:12}}>
+            <div style={{fontWeight:600,marginBottom:6}}>
+              Sorted {sorted.length} exercise{sorted.length===1?"":"s"}
+            </div>
+            {sorted.slice(0,12).map(c => (
+              <div key={c.id} className="set-row" style={{cursor:"default"}}>
+                <span className="set-main" style={{fontWeight:500}}>{c.name}</span>
+                <span className="chip amber" style={{flex:"0 0 auto"}}>{c.to}</span>
+              </div>
+            ))}
+            {sorted.length>12 && <div className="hint">and {sorted.length-12} more</div>}
+            <div className="row" style={{marginTop:10}}>
+              <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={undoSort}>Undo</button>
+              <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setSorted(null)}>Done</button>
+            </div>
           </div>
-          <button className="btn btn-ghost btn-sm btn-block" onClick={()=>setClassify(true)}>
-            Sort them into muscle groups
-          </button>
-        </div>}
+        : (unclassified.length >= 3 &&
+            <div className="card" style={{marginBottom:12}}>
+              <div className="subtle" style={{marginBottom:8}}>
+                {unclassified.length} exercises have no muscle group. Sets by muscle
+                needs them sorted - tap once and it's done.
+              </div>
+              {sortErr && <div className="auth-msg err" style={{marginBottom:8}}>{sortErr}</div>}
+              <button className="btn btn-ghost btn-sm btn-block" disabled={sorting} onClick={runSort}>
+                {sorting ? <span className="spin"></span> : "Sort them into muscle groups"}
+              </button>
+            </div>)}
       {!filtered.length
         ? <div className="empty" style={{padding:"36px 20px"}}>
             <h3 className="title-sm">No matches</h3>
@@ -1513,10 +1490,6 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
       <p className="hint center" style={{marginTop:14,opacity:.7}}>
         {filtered.length} of {exercises.length} exercises
       </p>
-      {classify &&
-        <ClassifyLayer store={store} onClose={()=>setClassify(false)}
-          onDone={(n)=>{ setClassify(false); setToast("Sorted "+n+" exercise"+(n===1?"":"s")+" into muscle groups.");
-            setTimeout(()=>setToast(""), 3000); }} />}
     </div>
   );
 }
