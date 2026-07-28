@@ -176,6 +176,11 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;}
 .pill{padding:6px 13px;border-radius:999px;font-size:12.5px;font-weight:600;background:var(--bg-2);border:1px solid var(--line-2);color:var(--ink-3);transition:.15s;}
 .pill.on{background:var(--amber);color:#241505;border-color:var(--amber);}
+/* Actions that must stay reachable as a list grows. Sticks just above the
+   nav, with a fade so content scrolls under it rather than colliding. */
+.stick-actions{position:sticky;bottom:calc(env(safe-area-inset-bottom) + 6px);z-index:20;
+  margin-top:14px;padding:14px 0 6px;
+  background:linear-gradient(180deg,transparent 0%,var(--bg) 40%,var(--bg) 100%);}
 /* horizontal (scrolling) filter pill row + search field with clear (x) */
 .pills-row{display:flex;gap:7px;overflow-x:auto;margin-top:10px;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
 .pills-row::-webkit-scrollbar{display:none;}
@@ -317,7 +322,11 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .log .t{color:var(--ink-3);}
 .toast{position:fixed;bottom:calc(var(--nav-h) + 24px);left:50%;transform:translateX(-50%);z-index:90;
   background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;}
-.update-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--amber);color:#241505;border:none;text-align:left;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;font-size:13.5px;font-weight:600;}
+/* Sticky, not just first-in-the-flow: it used to scroll away with the
+   content, so it looked like it only existed on whichever screen happened
+   to be at the top. An update you can't reach is an update you don't take. */
+.update-bar{position:sticky;top:0;z-index:55;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:var(--amber);color:#241505;border:none;text-align:left;padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;font-size:13.5px;font-weight:600;}
 .update-go{flex:0 0 auto;background:#241505;color:var(--amber);border-radius:999px;padding:6px 15px;font-weight:800;font-size:12.5px;}
 </style>
 </head>
@@ -334,10 +343,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.33.0";
+const APP_VERSION = "0.34.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.31";
+const BUILD = "2026-07-28.32";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3488,12 +3497,35 @@ function ProgramCard({ store }){
   const setNextTo = (idx) => store.savePrograms((store.programs||[]).map(p =>
     p.id===prog.id ? { ...p, cursor: idx, updatedAt: nowISO() } : p));
 
+  /* You can keep several programs - a home block and a travel block, say -
+     but only one is being followed. Anything not active was previously
+     invisible and unreachable, which made "multiple programs" a fiction. */
+  const others = (store.programs||[]).filter(p => !prog || p.id !== prog.id);
+  const follow = (p) => store.saveCfg({ ...store.cfg, activeProgramId: p.id });
+  const OtherPrograms = () => !others.length ? null : (
+    <div className="card" style={{marginBottom:12}}>
+      <div className="subtle" style={{marginBottom:8}}>
+        {prog ? "Your other programs" : "Your programs"}
+      </div>
+      {others.map(p => (
+        <button key={p.id} className="set-row" onClick={()=>follow(p)}>
+          <span className="set-main" style={{fontWeight:500}}>{p.name}</span>
+          <span className="chip" style={{flex:"0 0 auto"}}>{(p.routineIds||[]).length} days</span>
+          <span className="chip amber" style={{flex:"0 0 auto"}}>follow</span>
+        </button>
+      ))}
+    </div>
+  );
+
   if(prog && next && !picking){
     return (
+      <>
       <div className="card" style={{marginBottom:12}}>
         <div className="updrow" style={{marginBottom:8}}>
           <span style={{fontWeight:700}}>{prog.name}</span>
-          <span className="subtle" style={{fontSize:12}}>{prog.routineIds.length} days</span>
+          <span className="subtle" style={{fontSize:12}}>
+            {prog.routineIds.length} days - following
+          </span>
         </div>
         {prog.routineIds.map((rid, i) => {
           const r = routines.find(x=>x.id===rid);
@@ -3513,22 +3545,28 @@ function ProgramCard({ store }){
           Delete this program
         </button>
       </div>
+      <OtherPrograms />
+      </>
     );
   }
 
   if(!picking){
-    if(routines.length < 2) return null;
+    if(routines.length < 2 && !others.length) return null;
     return (
-      <div className="card" style={{marginBottom:12}}>
-        <div style={{fontWeight:600,marginBottom:4}}>Run a program</div>
-        <p className="hint" style={{marginTop:0}}>
-          Put your routines in order once and the home screen tells you which
-          day is next - no counting, no calendar.
-        </p>
-        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>setPicking(true)}>
-          Set up a program
-        </button>
-      </div>
+      <>
+      <OtherPrograms />
+      {routines.length >= 2 &&
+        <div className="card" style={{marginBottom:12}}>
+          <div style={{fontWeight:600,marginBottom:4}}>Run a program</div>
+          <p className="hint" style={{marginTop:0}}>
+            Put your routines in order once and the home screen tells you which
+            day is next - no counting, no calendar.
+          </p>
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>setPicking(true)}>
+            Set up a program
+          </button>
+        </div>}
+      </>
     );
   }
 
@@ -3608,13 +3646,17 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
           </div>
         </SwipeRow>
       ))}
-      <div className="row" style={{marginTop:4}}>
-        <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={onBuild}>
-          Build me a program
-        </button>
-        <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={onImport}>
-          Import a program
-        </button>
+      {/* Anchored: these sink out of reach at the foot of a growing list,
+          which is exactly when you want another program. */}
+      <div className="stick-actions">
+        <div className="row">
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={onBuild}>
+            Build me a program
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={onImport}>
+            Import a program
+          </button>
+        </div>
       </div>
     </div>
   );
