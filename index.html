@@ -334,10 +334,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.31.0";
+const APP_VERSION = "0.31.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.28";
+const BUILD = "2026-07-28.29";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2759,7 +2759,7 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
           {/* Seat heights and arm positions are the thing you rediscover by
               trial and error on every club-gym visit. Save on blur. */}
           <input className="input" style={{marginTop:10}} defaultValue={entry.settings||""}
-            placeholder="Machine setup (Seat 3, Arm 2)"
+            placeholder="Machine setup - optional"
             onBlur={ev=>{ const v = ev.target.value.slice(0,80);
               if(v !== (entry.settings||"")) onUpdate(e => ({ ...e, settings: v || undefined })); }} />
           <button className="btn btn-primary btn-block log-set-btn" style={{marginTop:12}} onClick={logSet}>
