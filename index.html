@@ -162,6 +162,9 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .btn:active{transform:scale(.97);}
 /* A disabled button used to look identical to a live one, so a dead control
    still invited the tap. Nothing here had a disabled style at all. */
+.info-btn{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:50%;background:transparent;border:none;color:var(--ink-3);}
+.info-btn:active{background:var(--bg-3);color:var(--amber-2);}
 .btn:disabled,.pill:disabled{opacity:.45;cursor:default;}
 .btn:disabled:active,.pill:disabled:active{transform:none;}
 .btn svg{width:15px;height:15px;flex:0 0 auto;}
@@ -343,10 +346,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.35.0";
+const APP_VERSION = "0.36.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.33";
+const BUILD = "2026-07-28.34";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1295,7 +1298,20 @@ const ICONS = {
   edit:    ["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7","M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"],
   eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
+  info:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M12 16v-4","M12 8h.01"],
 };
+
+/* The same affordance everywhere an exercise name is written down: tap the
+   (i) to see how it is done. One component so it looks and behaves
+   identically in the library, in a routine, and mid-workout. */
+function InfoBtn({ name, onClick, style }){
+  return (
+    <button className="info-btn" style={style} aria-label={"How to do "+name}
+      onClick={(e)=>{ e.stopPropagation(); onClick(); }}>
+      <Icon d={ICONS.info} size={17}/>
+    </button>
+  );
+}
 
 /* ============================================================
    PASSWORD INPUT with reveal eyeball - the shared-shell STANDARD
@@ -1850,6 +1866,7 @@ async function normalizeLibrary(store){
 }
 
 function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
+  const [help, setHelp] = useState(null);          // {name, exerciseId} for the (i) panel
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("all");
   const [groupF, setGroupF] = useState("all");
@@ -2018,23 +2035,33 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
         : <div className="list">
             {filtered.map(x => (
               <SwipeRow key={x.id} onDelete={()=>onDelete(x)}>
-                <button className="item" onClick={()=>onEdit(x)}>
-                  <div className="item-body">
-                    <div className="item-title">{x.name}</div>
-                    <div className="item-meta">
-                      <span className={"chip "+typeClass(x.type)}>{x.type}</span>
-                      {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
-                      {x.equipment && x.equipment!=="none" && <span className="chip">{x.equipment}</span>}
-                      {x.custom && <span className="chip violet">custom</span>}
+                <div className="row" style={{gap:0,alignItems:"stretch"}}>
+                  <button className="item" style={{flex:1,minWidth:0}} onClick={()=>onEdit(x)}>
+                    <div className="item-body">
+                      <div className="item-title">{x.name}</div>
+                      <div className="item-meta">
+                        <span className={"chip "+typeClass(x.type)}>{x.type}</span>
+                        {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+                        {x.equipment && x.equipment!=="none" && <span className="chip">{x.equipment}</span>}
+                        {x.custom && <span className="chip violet">custom</span>}
+                      </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  <InfoBtn name={x.name} style={{alignSelf:"center",marginLeft:2}}
+                    onClick={()=>setHelp({ name: x.name, exerciseId: x.id })} />
+                </div>
               </SwipeRow>
             ))}
           </div>}
       <p className="hint center" style={{marginTop:14,opacity:.7}}>
         {filtered.length} of {exercises.length} exercises
       </p>
+
+      {/* No gym in scope here - the library is gym-agnostic, so the help
+          panel offers its own picker instead of defaulting to one. */}
+      {help &&
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+          onClose={()=>setHelp(null)} />}
     </div>
   );
 }
@@ -2861,13 +2888,21 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
    demand and cached on the exercise), and a demo link. Reachable from the
    picker and from any exercise name mid-workout, because the moment you
    need it is the moment you meet a name you don't recognize. */
-function ExerciseHelp({ store, name, exerciseId, onClose }){
+function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
   const [media, setMedia] = useState(undefined);   // undefined = looking, null = none
   const [frame, setFrame] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [vidBusy, setVidBusy] = useState(false);
   const [vidErr, setVidErr] = useState("");
+  // "How do I do a Nordic curl HERE" - the gym you are standing in decides
+  // the answer, so the inventory is the input, not a generic substitution
+  // list. Cached per gym on the exercise: asked once, then instant.
+  const gyms = (store.gyms||[]).filter(g => (g.equipment||[]).length);
+  const [setupGym, setSetupGym] = useState(
+    (gym && (gym.equipment||[]).length) ? gym.id : (gyms.length===1 ? gyms[0].id : null));
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupErr, setSetupErr] = useState("");
   const ex = (store.data.exercises||[]).find(x => x.id === exerciseId)
           || (store.data.exercises||[]).find(x => normName(x.name) === normName(name));
   const notes = ex && ex.notes ? ex.notes : "";
@@ -2897,6 +2932,36 @@ function ExerciseHelp({ store, name, exerciseId, onClose }){
       }else{ setErr("Saved nowhere - this movement isn't in your library yet."); }
     }catch(e){ setErr(e.message||"Couldn't write it."); log("ERROR","explain_exercise: "+e.message); }
     finally{ setBusy(false); }
+  };
+
+  const chosenGym = gyms.find(g => g.id === setupGym) || null;
+  const setups = (ex && ex.setups) ? ex.setups : {};
+  const setupText = chosenGym ? setups[chosenGym.id] : null;
+
+  const findSetup = async () => {
+    if(!chosenGym) return;
+    setSetupBusy(true); setSetupErr("");
+    try{
+      const system = "You adapt one exercise to the equipment a gym actually has. " +
+        "You are given an inventory list. Use ONLY items on that list - never assume anything else is there. " +
+        "Give 2-3 options as plain text (no markdown), each on its own line as " +
+        "'Option N - <equipment>: <one sentence setup>'. Order them best-first, closest to the real movement first. " +
+        "If the inventory genuinely cannot support this movement or anything close, say so in one sentence and " +
+        "name the single nearest substitute instead. Under 120 words. No introduction or closing.";
+      const out = await aiRelay("adapt_exercise",
+        [{ role:"user", content: "Exercise: "+name+"." +
+            (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." : "") +
+            " Gym: "+chosenGym.name+". Inventory: "+(chosenGym.equipment||[]).join(", ")+"." }],
+        { system, maxTokens: 900 });
+      const text = (out||"").trim();
+      if(!text) throw new Error("Nothing came back - try again.");
+      if(ex){
+        store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+          x.id===ex.id ? { ...x, setups: {...(x.setups||{}), [chosenGym.id]: text}, updatedAt: nowISO() } : x));
+      }else{ setSetupErr("This movement isn't in your library yet, so the answer can't be saved."); }
+      log("SETUP", name+" @ "+chosenGym.name);
+    }catch(e){ setSetupErr(e.message||"Couldn't work it out."); log("ERROR","adapt_exercise: "+e.message); }
+    finally{ setSetupBusy(false); }
   };
 
   const imgUrl = media && MEDIA_INDEX ? MEDIA_INDEX.base + media.f + "/" + frame + ".jpg" : null;
@@ -2966,6 +3031,32 @@ function ExerciseHelp({ store, name, exerciseId, onClose }){
             {busy ? <span className="spin"></span> : (notes ? "Write it again" : "Write it for me")}
           </button>
         </div>
+
+        {gyms.length>0 && <>
+          <div className="set-group">Set it up where you are</div>
+          <div className="card">
+            {gyms.length>1 &&
+              <div className="pills-row" style={{marginTop:0,marginBottom:10}}>
+                {gyms.map(g =>
+                  <button key={g.id} className={"pill "+(setupGym===g.id?"on":"")}
+                    onClick={()=>setSetupGym(g.id)}>{g.name}</button>)}
+              </div>}
+            {!chosenGym
+              ? <p className="hint" style={{margin:0}}>Pick a gym and I'll work it out from what's actually there.</p>
+              : setupText
+                ? <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5}}>{setupText}</div>
+                : <p className="hint" style={{marginTop:0}}>
+                    {chosenGym.name} has {(chosenGym.equipment||[]).length} pieces of kit on file.
+                  </p>}
+            {setupErr && <div className="auth-msg err" style={{marginTop:10}}>{setupErr}</div>}
+            {chosenGym &&
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+                disabled={setupBusy} onClick={findSetup}>
+                {setupBusy ? <span className="spin"></span>
+                  : (setupText ? "Work it out again" : "How do I do this at "+chosenGym.name+"?")}
+              </button>}
+          </div>
+        </>}
 
         <div className="set-group">Demo</div>
         {videoId
@@ -3242,7 +3333,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
           onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })} onClose={()=>setPicker(false)} />}
 
       {help &&
-        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId} gym={gym}
           onClose={()=>setHelp(null)} />}
     </div>
   );
@@ -4139,6 +4230,7 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
                 {it.type==="mobility" && !(it.targetSets>0) &&
                   <div className="entry-last" style={{color:"var(--amber-2)"}}>no reps set</div>}
               </div>
+              <InfoBtn name={it.name} onClick={()=>setHelp({ name: it.name, exerciseId: it.exerciseId })} />
               <button className="entry-x" onClick={()=>removeItem(it.id)} aria-label={"Remove "+it.name}>
                 <Icon d={ICONS.x} size={15}/>
               </button>
@@ -4207,7 +4299,7 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
           onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })} onClose={()=>setPicker(false)} />}
 
       {help &&
-        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId} gym={gym}
           onClose={()=>setHelp(null)} />}
     </div>
   );
