@@ -330,10 +330,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.24.0";
+const APP_VERSION = "0.24.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.12";
+const BUILD = "2026-07-28.13";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -483,7 +483,8 @@ const NAME_MODIFIERS = new Set([
   "reverse","incline","decline","hammer","preacher","concentration","spider","zottman",
   "sumo","deficit","romanian","stiff","behind","overhead","close","wide","narrow",
   "single","one","alternating","bulgarian","split","pause","paused","negative","assisted",
-  "jump","plyo","smith","landmine","cable","machine","band","banded","kettlebell",
+  "jump","plyo","smith","landmine","cable","machine","band","banded","kettlebell","dumbbell",
+  "leverage","lever","sled","suspended","stability","bosu","swiss","medicine","slam",
   "barbell","goblet","trap","hex","safety","front","walking","lying","kneeling","bent",
   "upright","seated","standing","chest","rear","side","bulgarian",
   // Body parts change the movement as surely as any qualifier does: a leg
@@ -512,8 +513,12 @@ const MOVEMENT_NOUNS = new Set([
 ]);
 function sameMovement(a, b){
   const na = a.filter(t => MOVEMENT_NOUNS.has(t));
+  if(!na.length) return true;            // user's name names no movement - let score decide
+  // If the user DID name a movement, the candidate has to share it. Requiring
+  // both sides to have one left a hole: "Seated Leg Extension" matched
+  // "Seated Leg Tucks" because "tucks" is not a word we recognise, so the
+  // check waved it through.
   const nb = b.filter(t => MOVEMENT_NOUNS.has(t));
-  if(!na.length || !nb.length) return true;          // nothing to compare
   return na.some(t => nb.indexOf(t) !== -1);
 }
 function matchMediaScored(idx, name){
