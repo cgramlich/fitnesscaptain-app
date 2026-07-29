@@ -336,7 +336,7 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 /* ============================================================
    LOGGING - module-level ring buffer, ASCII-only bracketed tags.
@@ -346,10 +346,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.36.0";
+const APP_VERSION = "0.37.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-28.34";
+const BUILD = "2026-07-29.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4554,6 +4554,260 @@ function GroupVolume({ store }){
   );
 }
 
+/* ============================================================
+   THE WEEKLY CHECK-IN
+   The Progress charts say WHAT HAPPENED. This is the layer that says what
+   it means. Two halves on purpose:
+
+   1. buildDigest() computes the numbers CLIENT-SIDE, free and
+      deterministic. The card is useful the moment it renders, before any
+      AI is involved.
+   2. One deliberate tap sends that digest - numbers, never raw workout
+      records - for a reading. A year of history therefore costs the same
+      as a month, and the answer is cached for the week.
+   ============================================================ */
+const CHECKIN_MIN_SESSIONS = 4;   // below this a "trend" is noise, not a trend
+const CHECKIN_WEEKS = 6;
+
+function buildDigest(store){
+  const units = store.cfg.units || "lb";
+  const done = (store.data.workouts||[]).filter(w => w.endedAt && w.date);
+  const cut28 = shiftDay(todayStr(), -27);
+  const recent = done.filter(w => w.date >= cut28);
+
+  // ---- sessions + volume, by week, most recent last ----
+  const thisWeek = weekStartStr(todayStr());
+  const weeks = [];
+  { const d = new Date(thisWeek+"T00:00:00");
+    d.setDate(d.getDate() - 7*(CHECKIN_WEEKS-1));
+    const p = n => String(n).padStart(2,"0");
+    for(let i=0;i<CHECKIN_WEEKS;i++){
+      weeks.push(d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()));
+      d.setDate(d.getDate()+7);
+    } }
+  const byWeek = {};
+  weeks.forEach(k => { byWeek[k] = {sessions:0, sets:0, volume:0}; });
+  done.forEach(w => {
+    const k = weekStartStr(w.date);
+    if(!byWeek[k]) return;
+    byWeek[k].sessions++; byWeek[k].sets += workoutSets(w); byWeek[k].volume += workoutVolume(w);
+  });
+  const weekly = weeks.map(k => ({ week:k, ...byWeek[k] }));
+
+  // ---- sets per muscle group, rolling 7 days, against the user's range ----
+  const byId = {}, byNm = {};
+  (store.data.exercises||[]).forEach(x => { byId[x.id] = x; byNm[normName(x.name)] = x; });
+  const target = store.cfg.setsTarget === undefined ? "8-15" : store.cfg.setsTarget;
+  const cut7 = shiftDay(todayStr(), -6);
+  const groups = {};
+  done.filter(w => w.date >= cut7).forEach(w => {
+    (w.entries||[]).forEach(e => {
+      const hard = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0).length;
+      if(!hard) return;
+      const ex = byId[e.exerciseId] || byNm[normName(e.name)];
+      const g = (ex && ex.muscleGroup) ? ex.muscleGroup : "Full body";
+      groups[g] = (groups[g]||0) + hard;
+    });
+  });
+
+  // ---- per-lift movement: best estimated 1RM, first half vs second half
+  //      of the window. Only lifts trained in BOTH halves can be compared;
+  //      anything else would report a change that never happened. ----
+  const cut56 = shiftDay(todayStr(), -55);
+  const mid = shiftDay(todayStr(), -27);
+  const halves = {};
+  done.filter(w => w.date >= cut56).forEach(w => {
+    (w.entries||[]).forEach(e => {
+      const sets = (e.sets||[]).filter(s => (Number(s.weight)||0)>0 && (Number(s.reps)||0)>0);
+      if(!sets.length) return;
+      const key = e.exerciseId || normName(e.name);
+      const h = halves[key] || (halves[key] = {name:e.name, early:0, late:0});
+      if(e.name) h.name = e.name;
+      let best = 0;
+      sets.forEach(s => { best = Math.max(best, estMax(s.weight, s.reps)); });
+      const slot = w.date < mid ? "early" : "late";
+      h[slot] = Math.max(h[slot], best);
+    });
+  });
+  const lifts = Object.values(halves)
+    .filter(h => h.early > 0 && h.late > 0)
+    .map(h => ({ name:h.name, from:Math.round(h.early), to:Math.round(h.late),
+                 pct: Math.round(((h.late-h.early)/h.early)*1000)/10 }))
+    .sort((a,b) => b.pct - a.pct);
+
+  // ---- effort marks, last 28 days (direction, not feeling) ----
+  let up = 0, down = 0;
+  recent.forEach(w => (w.entries||[]).forEach(e => (e.sets||[]).forEach(s => {
+    const k = EFFORT_ALIAS[s.effort];
+    if(k === "up") up++; else if(k === "fail") down++;
+  })));
+
+  // ---- program adherence ----
+  const prog = activeProgram(store);
+  const nx = prog ? programNext(prog, store.data.routines||[]) : null;
+  const program = prog ? {
+    name: prog.name,
+    day: nx ? nx.position : null,
+    days: nx ? nx.total : (prog.routineIds||[]).length,
+    sessionsLast28: recent.filter(w => w.routineId).length,
+  } : null;
+
+  // ---- body: the guard already lives in BodySection; reuse its rule ----
+  const rows = (store.metrics||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const withW = rows.filter(r => Number(r.weight)>0);
+  let body = null;
+  if(withW.length){
+    const last = withW[withW.length-1];
+    body = { weight:Number(last.weight), units, on:last.date, pctPerWeek:null, guardPct:null, tooFast:false };
+    const gc = Number(store.cfg.lossGuardPct);
+    body.guardPct = gc>0 ? gc : DEFAULT_LOSS_GUARD;
+    const cutL = shiftDay(todayStr(), -LOSS_WINDOW_DAYS);
+    const win = withW.filter(r => !cutL || r.date >= cutL);
+    if(win.length >= 2){
+      const a = win[0], b = win[win.length-1];
+      const days = Math.round((new Date(b.date+"T00:00:00") - new Date(a.date+"T00:00:00"))/86400000);
+      if(days >= 7){
+        const pct = ((Number(a.weight)-Number(b.weight))/Number(a.weight))*100;
+        body.pctPerWeek = Math.round((pct/(days/7))*100)/100;
+        body.tooFast = body.pctPerWeek > body.guardPct;
+      }
+    }
+  }
+
+  // ---- daily checklist, last 14 days ----
+  const daily = store.daily || {habits:[], log:{}};
+  let habits = null;
+  if((daily.habits||[]).length){
+    habits = (daily.habits||[]).map(h => {
+      let hit = 0;
+      for(let i=0;i<14;i++){
+        const d = shiftDay(todayStr(), -i);
+        if(((daily.log||{})[d]||[]).indexOf(h.id) !== -1) hit++;
+      }
+      return { label:h.label, days:hit, of:14 };
+    });
+  }
+
+  const gyms = [...new Set(recent.map(w => w.gymName).filter(Boolean))];
+
+  return {
+    units, generatedFor: thisWeek,
+    sessionsLast28: recent.length,
+    enough: recent.length >= CHECKIN_MIN_SESSIONS,
+    weekly, setsTarget: target, groups, lifts, marks:{up, down},
+    program, body, habits, gyms,
+  };
+}
+
+/* The card. Deterministic facts render immediately and cost nothing; the
+   reading is one tap and cached for the week on cfg. */
+function CheckInCard({ store }){
+  const d = useMemo(() => buildDigest(store), [store.data.workouts, store.metrics, store.daily, store.cfg]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const saved = store.cfg.checkin || null;
+  const fresh = saved && saved.week === d.generatedFor ? saved : null;
+
+  const lastWeek = d.weekly[d.weekly.length-1] || {sessions:0,sets:0};
+  const prevWeek = d.weekly[d.weekly.length-2] || {sessions:0,sets:0};
+  const [gMin, gMax] = (d.setsTarget||"8-15").split("-").map(Number);
+  // Early in a week EVERY group is under the minimum, so the row would list
+  // all seven and tell you nothing. Only judge a week that has enough volume
+  // in it to be judged, and name the three worst rather than all of them.
+  const weekSets = Object.values(d.groups).reduce((s,n)=>s+n, 0);
+  const low = (d.setsTarget === "off" || weekSets < gMin) ? []
+    : MUSCLE_GROUPS.filter(g => g !== "Full body" && (d.groups[g]||0) < gMin)
+        .sort((a,b) => (d.groups[a]||0) - (d.groups[b]||0));
+  const lowShown = low.slice(0, 3);
+  const lowRest  = low.length - lowShown.length;
+  const best = d.lifts.length ? d.lifts[0] : null;
+  const worst = d.lifts.length > 1 ? d.lifts[d.lifts.length-1] : null;
+
+  const read = async () => {
+    setBusy(true); setErr("");
+    try{
+      const system =
+        "You are reading one person's training numbers and telling them what to change. " +
+        "Plain text, no markdown, no headers, no greeting, no sign-off. Under 150 words. " +
+        "Structure: what moved, what stalled, then ONE change to make next week. " +
+        "EVERY claim must cite the number it came from - say 'chest is at 7 sets against your 8-15 range', " +
+        "never 'consider more chest work'. If the data cannot support a claim, say so plainly instead of " +
+        "inventing a trend; too little data is a real answer. " +
+        "NEVER give calorie, protein, macro or medication advice, and never suggest a rate of weight loss - " +
+        "if bodyweight is falling faster than their guard, say that plainly, note that this is where muscle " +
+        "loss comes from, and tell them to raise it with their prescriber. Nothing more.";
+      const out = await aiRelay("progress_summary",
+        [{ role:"user", content: "My training numbers as JSON. Weights in " + d.units + ".\n" +
+            JSON.stringify(d) }],
+        { system, maxTokens: 900 });
+      const text = (out||"").trim();
+      if(!text) throw new Error("Nothing came back - try again.");
+      store.saveCfg({ ...store.cfg, checkin: { week: d.generatedFor, text, at: nowISO() } });
+      log("CHECKIN", "read for week " + d.generatedFor);
+    }catch(e){ setErr(e.message||"Couldn't read it."); log("ERROR","progress_summary: "+e.message); }
+    finally{ setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="set-group">Your last 4 weeks</div>
+      <div className="card">
+        <div className="item-meta" style={{marginBottom:8}}>
+          <span className="chip">{d.sessionsLast28} session{d.sessionsLast28===1?"":"s"}</span>
+          {d.program && <span className="chip amber">{d.program.name}</span>}
+          {d.program && d.program.day &&
+            <span className="chip">day {d.program.day} of {d.program.days}</span>}
+          {d.gyms.slice(0,2).map(g => <span key={g} className="chip blue">{g}</span>)}
+        </div>
+
+        <div className="set-row" style={{cursor:"default"}}>
+          <span className="set-main">This week vs last</span>
+          <span className="chip">{lastWeek.sets} vs {prevWeek.sets} sets</span>
+        </div>
+        {best && best.pct > 0 &&
+          <div className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">Moving most</span>
+            <span className="chip green">{best.name} +{best.pct}%</span>
+          </div>}
+        {worst && worst.pct < 0 &&
+          <div className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">Going backwards</span>
+            <span className="chip red">{worst.name} {worst.pct}%</span>
+          </div>}
+        {lowShown.length > 0 &&
+          <div className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">Under {gMin} sets this week</span>
+            <span className="chip amber">
+              {lowShown.map(g => g+" "+(d.groups[g]||0)).join(", ")}
+              {lowRest > 0 ? " +"+lowRest+" more" : ""}
+            </span>
+          </div>}
+        {d.body && d.body.tooFast &&
+          <div className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">Weight falling</span>
+            <span className="chip red">{d.body.pctPerWeek}%/wk vs {d.body.guardPct}% guard</span>
+          </div>}
+
+        {fresh &&
+          <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5,marginTop:12}}>{fresh.text}</div>}
+        {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+
+        {/* Below four sessions a "trend" is noise. Saying so is more useful
+            than a confident reading of three data points. */}
+        {!d.enough
+          ? <p className="hint" style={{marginBottom:0,marginTop:12}}>
+              Log {CHECKIN_MIN_SESSIONS - d.sessionsLast28} more session
+              {CHECKIN_MIN_SESSIONS - d.sessionsLast28 === 1 ? "" : "s"} and I can read the trend properly.
+            </p>
+          : <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:12}}
+              disabled={busy} onClick={read}>
+              {busy ? <span className="spin"></span> : (fresh ? "Read it again" : "What should I change?")}
+            </button>}
+      </div>
+    </>
+  );
+}
+
 function ProgressScreen({ store }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
@@ -4619,6 +4873,10 @@ function ProgressScreen({ store }){
 
   return (
     <div>
+      {/* The charts below say what happened; this says what it means, so it
+          leads. Its facts are computed locally - the card is useful before
+          any AI is involved. */}
+      <CheckInCard store={store} />
       <div className="set-group">This week</div>
       <div className="card">
         <div className="item-meta" style={{marginTop:0}}>
