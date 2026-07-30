@@ -347,10 +347,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.40.0";
+const APP_VERSION = "0.41.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-29.4";
+const BUILD = "2026-07-29.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5010,22 +5010,58 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
 
   // Only when the library has nothing that fits does this cost a call. It
   // reuses adapt_exercise, which already knows how to read an inventory.
+  /* Asked for STRUCTURED output rather than prose, because a named movement
+     you cannot select is only half an answer - the first version handed back
+     advice and left you to go create the exercise yourself. Now the
+     suggestion is acceptable in one tap and joins the library as a custom
+     exercise, so its history starts accumulating like any other. */
   const askAI = async (it, ex) => {
     setAsking(it.id); setAskErr("");
     try{
-      const system = "You suggest ONE replacement exercise. Plain text, no markdown, under 40 words. " +
-        "You are given a gym's full equipment inventory - use ONLY what is on it. " +
-        "Name the exercise, then one short clause on why it stands in. " +
-        "If nothing on the list can train the same thing, say exactly that and suggest nothing.";
+      const system = "You name ONE replacement exercise. Reply with STRICT JSON only, no markdown, " +
+        'no prose: {"name": "...", "equipment": "...", "why": "..."}. ' +
+        "equipment must be exactly one of: " + JSON.stringify(EQUIPMENT) + ", and must be something the " +
+        "gym's inventory actually supports - bodyweight is always allowed. " +
+        "why is one short clause, under 15 words, on what makes it a fair stand-in. " +
+        'If nothing can train the same thing here, reply {"name": null, "why": "<one sentence saying so>"}. ' +
+        "Never invent equipment that is not on the inventory.";
       const out = await aiRelay("adapt_exercise",
         [{ role:"user", content: "Replace: "+ex.name+" (trains "+(ex.muscleGroup||"?")+", needs "+
             (ex.equipment||"none")+"). Gym: "+gym.name+". Inventory: "+(gym.equipment||[]).join(", ")+"." }],
         { system, maxTokens: 300 });
-      const text = (out||"").trim();
-      if(!text) throw new Error("Nothing came back.");
-      setIdeas(prev => ({...prev, [it.id]: text}));
+      let obj = null;
+      try{
+        const m = String(out||"").match(/\{[\s\S]*\}/);
+        obj = m ? JSON.parse(m[0]) : null;
+      }catch(e){ obj = null; }
+      if(!obj) throw new Error("Couldn't read the answer - try again.");
+      setIdeas(prev => ({...prev, [it.id]: {
+        name: obj.name || null,
+        equipment: EQUIPMENT.indexOf(obj.equipment) !== -1 ? obj.equipment : "bodyweight",
+        why: String(obj.why||"").trim(),
+      }}));
     }catch(e){ setAskErr(e.message||"Couldn't get an option."); log("ERROR","substitute: "+e.message); }
     finally{ setAsking(null); }
+  };
+
+  /* Accepting a suggestion CREATES it, so the swap behaves like any other
+     exercise from here on - it shows in the library, gets an (i), collects
+     history. Inherits the blocked movement's muscle group so weekly sets by
+     muscle stay correct. */
+  const acceptIdea = (it, ex) => {
+    const idea = ideas[it.id];
+    if(!idea || !idea.name) return;
+    const existing = (store.data.exercises||[])
+      .find(x => normName(x.name) === normName(idea.name));
+    let rec = existing;
+    if(!rec){
+      rec = { id: uid(), name: idea.name.trim(), type: ex.type || "strength",
+              muscleGroup: ex.muscleGroup || "Full body", equipment: idea.equipment,
+              notes: "", custom: true, createdAt: nowISO(), updatedAt: nowISO() };
+      store.saveCollection("exercises", [...(store.data.exercises||[]), rec]);
+      log("SUBSTITUTE","created "+rec.name+" for "+ex.name);
+    }
+    setSubs(prev => ({...prev, [it.id]: rec}));
   };
 
   const swapCount = Object.keys(subs).length;
@@ -5107,8 +5143,18 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
                 </button>
               ))}
 
-              {ideas[it.id] &&
-                <p className="hint" style={{marginTop:8,marginBottom:0,whiteSpace:"pre-wrap"}}>{ideas[it.id]}</p>}
+              {ideas[it.id] && (ideas[it.id].name
+                ? <button className="set-row"
+                    style={chosen && chosen.name===ideas[it.id].name ? {borderColor:"var(--amber-line)"} : null}
+                    onClick={()=>acceptIdea(it, ex)}>
+                    <span className="set-main">{ideas[it.id].name}</span>
+                    <span className="chip blue" style={{flex:"0 0 auto"}}>{ideas[it.id].equipment}</span>
+                    {chosen && chosen.name===ideas[it.id].name &&
+                      <span className="chip amber" style={{flex:"0 0 auto"}}>swapping</span>}
+                  </button>
+                : <p className="hint" style={{marginTop:8,marginBottom:0}}>{ideas[it.id].why}</p>)}
+              {ideas[it.id] && ideas[it.id].name && ideas[it.id].why &&
+                <p className="hint" style={{marginTop:4,marginBottom:0}}>{ideas[it.id].why}</p>}
 
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
                 disabled={asking===it.id} onClick={()=>askAI(it, ex)}>
@@ -5119,6 +5165,14 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
         })}
 
         {askErr && <div className="auth-msg err" style={{marginTop:10}}>{askErr}</div>}
+
+        {/* The list is never final. He might have brought a bell, or the hotel
+            might have added a rack since - correcting it must be reachable
+            from the screen making claims about it, not only from the Gyms
+            tab. */}
+        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:12}} onClick={onEditGym}>
+          Fix what's listed at {gym.name}
+        </button>
 
         <div className="stick-actions">
           <button className="btn btn-primary btn-block" onClick={()=>onStart(subs)}>
