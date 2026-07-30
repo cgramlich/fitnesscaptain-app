@@ -346,10 +346,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.37.0";
+const APP_VERSION = "0.38.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-29.1";
+const BUILD = "2026-07-29.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2068,7 +2068,7 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
 
 /* Add/edit one exercise. Deleting is allowed for seed items too - the
    once-per-account seed flag means they stay deleted. */
-function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
+function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
   const [name, setName] = useState(exercise ? (exercise.name||"") : "");
   const [type, setType] = useState(exercise ? (exercise.type||"strength") : "strength");
   const [group, setGroup] = useState(exercise ? (exercise.muscleGroup||"Full body") : "Full body");
@@ -2076,6 +2076,7 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
   const [notes, setNotes] = useState(exercise ? (exercise.notes||"") : "");
   const [explaining, setExplaining] = useState(false);
   const [explainErr, setExplainErr] = useState("");
+  const [help, setHelp] = useState(false);   // the same panel the (i) opens
 
   // "How do I do this?" - the explain_exercise relay task writes form cues
   // into the notes; the user reviews and Saves (nothing persists until then),
@@ -2159,10 +2160,15 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
             <button className="btn btn-ghost btn-sm" disabled={explaining} onClick={explain}>
               {explaining ? <span className="spin"></span> : (notes.trim() ? "Rewrite how-to" : "How to do it")}
             </button>
-            <a className="btn btn-ghost btn-sm" style={{textDecoration:"none"}}
-              href={demoUrl(name)} target="_blank" rel="noopener noreferrer">
-              Watch a demo
-            </a>
+            {/* This used to be an anchor straight out to a YouTube SEARCH.
+                Chris: tapping the exercise itself "just gives me a button
+                that takes me out of app to YouTube" while the (i) plays the
+                demo inline - two different answers to the same question.
+                Same destination as the (i) now; the YouTube escape hatch
+                still lives inside that panel. */}
+            <button className="btn btn-ghost btn-sm" onClick={()=>setHelp(true)}>
+              Pictures and video
+            </button>
           </div>
         </div>
 
@@ -2175,6 +2181,12 @@ function ExerciseSheet({ exercise, onSave, onDelete, onClose }){
             Delete exercise
           </button>}
       </div>
+
+      {/* Layer z-index 88 beats the sheet's 61, so this opens OVER the form
+          rather than the sheet having to close and lose unsaved edits. */}
+      {help &&
+        <ExerciseHelp store={store} name={name} exerciseId={exercise ? exercise.id : null}
+          onClose={()=>setHelp(false)} />}
     </>
   );
 }
@@ -5463,7 +5475,7 @@ function App(){
           onPick={pickAdd} onClose={()=>setAddSheet(false)} />}
 
       {exSheet &&
-        <ExerciseSheet exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
+        <ExerciseSheet store={store} exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
 
       {gymView &&
         <GymDetail store={store} gymId={gymView} onEdit={(g)=>setGymSheet({gym:g})}
