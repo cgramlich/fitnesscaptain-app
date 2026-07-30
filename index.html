@@ -165,6 +165,7 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .info-btn{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:32px;height:32px;border-radius:50%;background:transparent;border:none;color:var(--ink-3);}
 .info-btn:active{background:var(--bg-3);color:var(--amber-2);}
+.info-btn.has-video{color:var(--amber-2);}
 .btn:disabled,.pill:disabled{opacity:.45;cursor:default;}
 .btn:disabled:active,.pill:disabled:active{transform:none;}
 .btn svg{width:15px;height:15px;flex:0 0 auto;}
@@ -346,10 +347,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.38.0";
+const APP_VERSION = "0.39.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-29.2";
+const BUILD = "2026-07-29.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -530,6 +531,45 @@ function modifiersMatch(a, b){
   for(const t of b) if(NAME_MODIFIERS.has(t) && a.indexOf(t) === -1) return false;
   return true;
 }
+/* RENAMING and ILLUSTRATING want different strictness, and treating them the
+   same was costing more than half the available pictures.
+
+   For a rename, symmetry is right: if either name carries a qualifier the
+   other lacks, they are not the same exercise and must not be merged.
+
+   For a PICTURE, that rule threw out every more-specific variant of the very
+   movement asked for. The reference database calls it "One-Arm Kettlebell
+   Swings"; ask for "Kettlebell Swing" and "one"/"arm" disqualified it. Same
+   for "Barbell Shoulder Press", "Cable Seated Lateral Raise", "Dips - Triceps
+   Version" - all correct illustrations, all rejected. Measured coverage of
+   Chris's movements was 16 of 34, and the misses were conventional lifts the
+   database definitely contains.
+
+   So: these words describe HOW or WITH WHAT, not WHICH movement, and a
+   candidate may add them freely when all we want is a picture. Everything
+   else in NAME_MODIFIERS stays strict in BOTH directions even for media -
+   reverse, incline, front, rear and the body parts genuinely change the
+   movement, and showing the wrong one is worse than showing none. */
+const DETAIL_MODIFIERS = new Set([
+  "dumbbell","barbell","kettlebell","cable","machine","band","banded","leverage","lever",
+  "sled","smith","suspended","stability","bosu","swiss","medicine","slam","goblet","trap",
+  "hex","safety","seated","standing","lying","kneeling","bent","walking",
+  "one","single","alternating","arm","arms","close","wide","narrow","side",
+  "triceps","tricep","biceps","bicep",
+]);
+function mediaModifiersOk(want, have){
+  // Everything the USER named must be there - dropping their qualifier is how
+  // you end up showing an incline press for a flat one.
+  for(const t of want) if(NAME_MODIFIERS.has(t) && have.indexOf(t) === -1) return false;
+  // The candidate may only ADD detail. A movement-changing word it carries
+  // that the user did not ask for disqualifies it.
+  for(const t of have){
+    if(!NAME_MODIFIERS.has(t)) continue;
+    if(DETAIL_MODIFIERS.has(t)) continue;
+    if(want.indexOf(t) === -1) return false;
+  }
+  return true;
+}
 /* The noun that says what the movement IS. Qualifiers can overlap completely
    while the movement differs - "DB Standing Curl" and "Standing Dumbbell
    Press" share two of three words and score 0.67, but one is a curl and the
@@ -558,17 +598,31 @@ function matchMediaScored(idx, name){
   if(exact) return { item: exact, score: 1 };
   const want = mediaTokens(name);
   if(!want.length) return null;
-  let best = null, bestScore = 0;
+  let best = null, bestScore = 0, bestLen = 999;
   for(const k in idx.items){
     const it = idx.items[k];
     const have = mediaTokens(it.n);
-    if(!modifiersMatch(want, have)) continue;
+    if(!mediaModifiersOk(want, have)) continue;
     if(!sameMovement(want, have)) continue;
+    // A one-word name matches too much to trust against a long candidate:
+    // "Press" would happily take "Bench Press". Keep single-token lookups to
+    // near-exact candidates.
+    if(want.length === 1 && have.length > 2) continue;
     let hit = 0;
     for(const t of want) if(have.indexOf(t) !== -1) hit++;
     if(!hit) continue;
-    const score = hit / Math.max(want.length, have.length);
-    if(score > bestScore){ bestScore = score; best = it; }
+    /* Scored on COVERAGE of what was asked for, not similarity of the two
+       names. The old divisor was max(want, have), which punished a candidate
+       for being more descriptive: "Lat Pulldown" against "Full Range-Of-Motion
+       Lat Pulldown" scored 2/6 = 0.33 and failed, despite containing both
+       words typed. Dividing by want.length asks the question that actually
+       matters for a picture - did this candidate cover the movement named? */
+    const score = hit / want.length;
+    // Ties go to the PLAINEST candidate. Equal coverage means the shortest
+    // name is the least surprising illustration.
+    if(score > bestScore || (score === bestScore && have.length < bestLen)){
+      bestScore = score; best = it; bestLen = have.length;
+    }
   }
   return best ? { item: best, score: bestScore } : null;
 }
@@ -1299,16 +1353,24 @@ const ICONS = {
   eye:     ["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z","M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"],
   eyeOff:  ["M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94","M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19","M14.12 14.12a3 3 0 1 1-4.24-4.24","M1 1l22 22"],
   info:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M12 16v-4","M12 8h.01"],
+  play:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M10.2 8.4l5.4 3.6-5.4 3.6z"],
 };
 
 /* The same affordance everywhere an exercise name is written down: tap the
    (i) to see how it is done. One component so it looks and behaves
    identically in the library, in a routine, and mid-workout. */
-function InfoBtn({ name, onClick, style }){
+function InfoBtn({ name, onClick, style, hasVideo }){
+  /* Chris: "put the video we have instead of the little eye - should we have
+     an icon indicator of a video?" Yes, and the icon is the indicator: a play
+     circle means a demo is already saved for this movement and will start
+     immediately, an info circle means there is a written how-to and probably
+     an illustration. One glyph, so you can see what is waiting before you
+     spend a tap on it. */
   return (
-    <button className="info-btn" style={style} aria-label={"How to do "+name}
+    <button className={"info-btn"+(hasVideo?" has-video":"")} style={style}
+      aria-label={(hasVideo ? "Watch the demo for " : "How to do ")+name}
       onClick={(e)=>{ e.stopPropagation(); onClick(); }}>
-      <Icon d={ICONS.info} size={17}/>
+      <Icon d={hasVideo ? ICONS.play : ICONS.info} size={17}/>
     </button>
   );
 }
@@ -1867,6 +1929,12 @@ async function normalizeLibrary(store){
 
 function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the (i) panel
+  // Chris asked "did we get all the exercise pictures?" - a question the app
+  // should be able to answer itself rather than needing a script run.
+  const [mediaIdx, setMediaIdx] = useState(null);
+  useEffect(() => { let alive = true;
+    loadMediaIndex().then(i => { if(alive) setMediaIdx(i); });
+    return () => { alive = false; }; }, []);
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("all");
   const [groupF, setGroupF] = useState("all");
@@ -2047,7 +2115,8 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
                       </div>
                     </div>
                   </button>
-                  <InfoBtn name={x.name} style={{alignSelf:"center",marginLeft:2}}
+                  <InfoBtn name={x.name} hasVideo={!!x.demoVideoId}
+                    style={{alignSelf:"center",marginLeft:2}}
                     onClick={()=>setHelp({ name: x.name, exerciseId: x.id })} />
                 </div>
               </SwipeRow>
@@ -2056,6 +2125,16 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
       <p className="hint center" style={{marginTop:14,opacity:.7}}>
         {filtered.length} of {exercises.length} exercises
       </p>
+      {/* Coverage, stated plainly. The reference database is strong on
+          conventional gym work and has nothing for specialty or mobility
+          movements - landmine, med ball, 90/90 - so a shortfall here is
+          expected, not a fault. Those are what the demo video is for. */}
+      {mediaIdx && exercises.length > 0 &&
+        <p className="hint center" style={{marginTop:2,marginBottom:0,opacity:.7}}>
+          {exercises.filter(x => matchMedia(mediaIdx, x.name)).length} have illustrations
+          {" - "}
+          {exercises.filter(x => x.demoVideoId).length} have a saved demo
+        </p>}
 
       {/* No gym in scope here - the library is gym-agnostic, so the help
           panel offers its own picker instead of defaulting to one. */}
@@ -4242,7 +4321,9 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
                 {it.type==="mobility" && !(it.targetSets>0) &&
                   <div className="entry-last" style={{color:"var(--amber-2)"}}>no reps set</div>}
               </div>
-              <InfoBtn name={it.name} onClick={()=>setHelp({ name: it.name, exerciseId: it.exerciseId })} />
+              <InfoBtn name={it.name}
+                hasVideo={!!((store.data.exercises||[]).find(x=>x.id===it.exerciseId)||{}).demoVideoId}
+                onClick={()=>setHelp({ name: it.name, exerciseId: it.exerciseId })} />
               <button className="entry-x" onClick={()=>removeItem(it.id)} aria-label={"Remove "+it.name}>
                 <Icon d={ICONS.x} size={15}/>
               </button>
