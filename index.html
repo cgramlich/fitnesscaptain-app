@@ -347,10 +347,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.41.0";
+const APP_VERSION = "0.42.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-29.5";
+const BUILD = "2026-07-29.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3744,8 +3744,21 @@ function ProgramCard({ store }){
       <>
       <div className="card" style={{marginBottom:12}}>
         <div className="updrow" style={{marginBottom:8}}>
-          <span style={{fontWeight:700}}>{prog.name}</span>
-          <span className="subtle" style={{fontSize:12}}>
+          {/* Editable in place. Chris's imported program is called "My
+              program" - the importer's fallback when no name is given - and
+              there was no way anywhere to change it. Saves on blur, so it
+              behaves like the routine name field. */}
+          <input defaultValue={prog.name} maxLength={60}
+            style={{fontWeight:700,flex:1,minWidth:0,background:"transparent",
+                    border:"none",color:"var(--ink)",font:"inherit",padding:0}}
+            aria-label="Program name"
+            onBlur={e=>{
+              const v = e.target.value.trim();
+              if(v && v !== prog.name)
+                store.savePrograms((store.programs||[]).map(x =>
+                  x.id===prog.id ? {...x, name:v, updatedAt:nowISO()} : x));
+            }} />
+          <span className="subtle" style={{fontSize:12,flex:"0 0 auto"}}>
             {prog.routineIds.length} days - following
           </span>
         </div>
@@ -3844,10 +3857,22 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
       </div>
     );
   }
+  const loose = routines.filter(r => {
+    const inAny = (store.programs||[]).some(pr => (pr.routineIds||[]).indexOf(r.id) !== -1);
+    return !inAny;
+  });
   return (
     <div className="list">
+      {/* Named sections, because "is it obvious programs are in here" had the
+          answer no. A program is an ordered set of days you follow; a routine
+          is a single session you start whenever. */}
+      {(store.programs||[]).length > 0 && <div className="set-group">Programs</div>}
       <ProgramCard store={store} />
-      {routines.map(r => (
+      {/* Days that belong to a program are listed inside its card, so
+          repeating them here made the tab look like twenty unrelated
+          routines. Only unattached ones show below. */}
+      {loose.length > 0 && <div className="set-group">Routines</div>}
+      {loose.map(r => (
         <SwipeRow key={r.id} onDelete={()=>onDelete(r)}>
           <div className="item" style={{alignItems:"center"}}>
             <button style={{flex:1,minWidth:0,textAlign:"left",display:"block"}} onClick={()=>onOpen(r)}>
@@ -4425,9 +4450,11 @@ function RoutineEditor({ store, routineId, onClose, onDelete, onStart }){
    the trailing 4-week trend against a threshold THE USER sets, and only ever
    suggests they look at it. Waist is here because it is the honest non-scale
    signal when the scale stalls. */
-function BodySection({ store }){
+function BodySection({ store, openNow, onOpened }){
   const units = store.cfg.units || "lb";
   const [sheet, setSheet] = useState(false);
+  // Opened from the + menu, which is the entry point most likely to be used.
+  useEffect(() => { if(openNow){ setSheet(true); onOpened && onOpened(); } }, [openNow]);
   const rows = (store.metrics||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
   const withW = rows.filter(r => Number(r.weight)>0);
   const latest = rows.length ? rows[rows.length-1] : null;
@@ -4550,7 +4577,8 @@ function MetricSheet({ store, onClose }){
         <label className="label">Date</label>
         <input className="input" type="date" value={date} onChange={e=>{ setDate(e.target.value); setErr(""); }} />
         <label className="label" style={{marginTop:12}}>Weight ({units})</label>
-        <input className="input" inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)} placeholder="optional" />
+        <input className="input" inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)}
+          placeholder="the one that matters" />
         <label className="label" style={{marginTop:12}}>Waist ({units==="kg"?"cm":"in"})</label>
         <input className="input" inputMode="decimal" value={waist} onChange={e=>setWaist(e.target.value)} placeholder="optional" />
         <label className="label" style={{marginTop:12}}>Body fat %</label>
@@ -5184,7 +5212,7 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
   );
 }
 
-function ProgressScreen({ store }){
+function ProgressScreen({ store, weighIn, onWeighInDone }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
   const done = (store.data.workouts||[]).filter(w=>w.endedAt)
@@ -5193,7 +5221,7 @@ function ProgressScreen({ store }){
   if(!done.length){
     return (
       <div>
-        <BodySection store={store} />
+        <BodySection store={store} openNow={weighIn} onOpened={onWeighInDone} />
         <div className="empty">
           <div className="glyph">^</div>
           <h3 className="title-sm">Training progress</h3>
@@ -5263,7 +5291,7 @@ function ProgressScreen({ store }){
         </div>
       </div>
 
-      <BodySection store={store} />
+      <BodySection store={store} openNow={weighIn} onOpened={onWeighInDone} />
 
       <RetentionLens store={store} exStats={exStats} />
 
@@ -5408,6 +5436,8 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
         </div>
         <p className="hint" style={{marginTop:6}}>
           Losing faster than this usually costs muscle as well as fat. Shown on the Progress tab.
+          {" "}This is the THRESHOLD, not your weight - log that with the + button ("Weigh in") or
+          on Progress under Body.
         </p>
         <div className="subtle" style={{marginTop:14}}>Weekly sets per muscle group</div>
         <div className="pills">
@@ -5479,6 +5509,12 @@ function AddSheet({ hasRoutines, active, onPick, onClose }){
         <Item what="buildProgram"  icon={ICONS.repeat} t1="Build me a program" t2="Answer four questions, get a week" />
         <Item what="importProgram" icon={ICONS.repeat} t1="Import a program"   t2="Paste one you already have" />
         <div className="sheet-div"></div>
+        {/* Chris logged his weight in Settings and it did not take - because
+            Settings only holds "Weight units" and the loss-rate flag, neither
+            of which is a weigh-in. The entry lived on Progress and nowhere
+            else. It belongs here: it is a ten-second action done often. */}
+        <Item what="weigh"    icon={ICONS.chart} t1="Weigh in" t2="Today's bodyweight, waist, body fat" />
+        <div className="sheet-div"></div>
         <Item what="exercise" icon={ICONS.book} t1="Add exercise" t2="Grow your library" />
         <Item what="gym"      icon={ICONS.pin}  t1="Add gym"      t2="A place you train, with its equipment" />
         <Item what="routine"  icon={ICONS.plus} t1="New routine"  t2="Build a reusable plan" />
@@ -5519,7 +5555,14 @@ function MoreScreen({ store, onOpenGyms, onOpenExercises, onOpenSettings }){
 // entries so the topbar titles them when opened from the hub.
 const TABS = [
   { key:"workouts",  label:"Workouts",  eyebrow:"Train",      icon:ICONS.dumbbell },
-  { key:"routines",  label:"Routines",  eyebrow:"Plan",       icon:ICONS.repeat },
+  /* Chris: "is it obvious that programs are in the Routines tab?" It was not,
+     and the header said one thing while the tab said another - eyebrow "Plan",
+     title "Routines". The tab is Plan now, and the two things it holds are
+     labelled outright rather than left to be inferred. A sixth tab was the
+     other option; the nav is full at five, and a program IS an ordering of
+     routines, so splitting them would separate things you move between
+     constantly. */
+  { key:"routines",  label:"Plan",      eyebrow:"Prepare",    icon:ICONS.repeat },
   { key:"progress",  label:"Progress",  eyebrow:"Momentum",   icon:ICONS.chart },
   { key:"more",      label:"More",      eyebrow:"Everything", icon:ICONS.more },
   { key:"gyms",      label:"Gyms",      eyebrow:"Places",     icon:ICONS.pin },
@@ -5538,6 +5581,7 @@ function App(){
   const [startCheck, setStartCheck] = useState(null); // null | {routine, gym}
   const [gymView, setGymView] = useState(null);       // open gym place page (id)
   const [addSheet, setAddSheet] = useState(false);    // center-+ create ActionSheet
+  const [weighIn, setWeighIn]   = useState(false);    // open the Body sheet on arrival
 
   // ---- gym CRUD ----
   const saveGym = (rec) => {
@@ -5591,6 +5635,7 @@ function App(){
     else if(what==="routine"){ setTab("routines"); createRoutine(); }
     else if(what==="buildProgram"){ setTab("routines"); setRoutineImporter("build"); }
     else if(what==="importProgram"){ setTab("routines"); setRoutineImporter("paste"); }
+    else if(what==="weigh"){ setTab("progress"); setWeighIn(true); }
   };
 
   // ---- routines ----
@@ -5856,7 +5901,7 @@ function App(){
                 onDelete={(x)=>{ if(confirm("Delete this exercise? Logged workouts keep their history.")) deleteExercise(x.id); }} />}
               {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter("paste")} onBuild={()=>setRoutineImporter("build")}
                 onDelete={(r)=>{ if(confirm("Delete this routine?")) deleteRoutine(r.id); }} />}
-              {tab==="progress"  && <ProgressScreen store={store} />}
+              {tab==="progress"  && <ProgressScreen store={store} weighIn={weighIn} onWeighInDone={()=>setWeighIn(false)} />}
               {tab==="more"      && <MoreScreen store={store} onOpenGyms={()=>setTab("gyms")}
                 onOpenExercises={()=>setTab("exercises")} onOpenSettings={()=>setInSettings(true)} />}
             </>}
