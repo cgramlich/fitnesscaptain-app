@@ -347,10 +347,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.39.0";
+const APP_VERSION = "0.40.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-07-29.3";
+const BUILD = "2026-07-29.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2281,6 +2281,7 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
   const [kind, setKind] = useState(gym ? (gym.kind||"home") : "home");
   const [equip, setEquip] = useState(gym && Array.isArray(gym.equipment) ? gym.equipment : []);
   const [inventory, setInventory] = useState(gym ? (gym.inventory||"") : "");
+  const [confirmed, setConfirmed] = useState(gym ? !!gym.invConfirmed : false);
 
   const toggleEquip = (e) => setEquip(prev => prev.includes(e) ? prev.filter(x=>x!==e) : [...prev, e]);
 
@@ -2289,6 +2290,7 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
     onSave({
       id: gym ? gym.id : uid(),
       name: name.trim(), kind, equipment: equip,
+      invConfirmed: confirmed || undefined,
       inventory: inventory.trim(),
       // Carry the AI-organized catalog ONLY while the source text is
       // unchanged; edited text means the catalog is stale -> re-organize.
@@ -2336,6 +2338,19 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
                 {e}
               </button>)}
           </div>
+          {/* A short list cannot prove a thing is ABSENT - it might just be
+              unfinished. Saying "that's everything" is better evidence than
+              any count, and it is the only way a genuinely spartan hotel gym
+              gets to flag what won't work there. */}
+          <button className={"pill "+(confirmed?"on":"")} style={{marginTop:10}}
+            onClick={()=>setConfirmed(c=>!c)}>
+            {confirmed ? "That's everything here" : "Is this the full list?"}
+          </button>
+          {confirmed && equip.length < 6 &&
+            <div className="hint" style={{marginTop:6,marginBottom:0}}>
+              Short list, taken as complete - routines will flag anything that
+              needs kit not ticked above.
+            </div>}
         </div>
 
         <div className="field">
@@ -2873,6 +2888,10 @@ function EntryCard({ entry, prev, units, active, onHelp, onUpdate, onRemove, onS
             style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
             {entry.name}
           </div>
+          {/* Say WHY this differs from the routine. Without it a swapped
+              exercise looks like the app lost your plan. */}
+          {entry.substitutedFor &&
+            <div className="entry-last">standing in for {entry.substitutedFor}</div>}
           {/* Mobility carries targets too, so this can't be gated on strength. */}
           {plan
             ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -4901,6 +4920,216 @@ function CheckInCard({ store }){
   );
 }
 
+/* ============================================================
+   STARTING A ROUTINE SOMEWHERE IT WAS NOT DESIGNED FOR
+
+   Chris travels: a program written for the Dallas home gym gets run in a
+   hotel with three dumbbells. Finding that out at exercise three wrecks a
+   30-minute session, so the check happens at the door.
+
+   The hard part is Chris's own question: what do we do with a gym whose
+   inventory is empty or thin? An equipment list only supports a NEGATIVE
+   claim - "there is no GHD here" - if we believe the list is COMPLETE. A
+   four-item list might be an honest hotel gym or an abandoned first
+   attempt, and the app cannot tell which.
+
+   So it never guesses. Either the list is trusted and we flag what is
+   missing, or it is not and we say we do not know - and ask, once, at the
+   only moment the answer is worth anything.
+   ============================================================ */
+const INVENTORY_TRUSTED_MIN = 6;   // tags below which absence proves nothing
+
+function inventoryTrusted(gym){
+  if(!gym) return false;
+  const n = (gym.equipment||[]).length;
+  // An explicit confirmation beats any count: a hotel gym really can hold
+  // four things, and the owner saying "that is everything" is better
+  // evidence than a threshold.
+  if(gym.invConfirmed && n > 0) return true;
+  return n >= INVENTORY_TRUSTED_MIN;
+}
+
+/* Exercises in this routine that the gym cannot support. Mobility and cardio
+   are excluded: ankle rocks need no equipment, and swapping a bike for a
+   treadmill is not a decision worth a screen. */
+function blockedItems(routine, gym, store){
+  if(!inventoryTrusted(gym)) return [];
+  const byId = {};
+  (store.data.exercises||[]).forEach(x => { byId[x.id] = x; });
+  return (routine.items||[])
+    .filter(it => it.type !== "mobility" && it.type !== "cardio")
+    .map(it => ({ it, ex: byId[it.exerciseId] || null }))
+    .filter(r => r.ex && !availableAt(r.ex, gym));
+}
+
+/* Substitutes come from YOUR OWN library first - deterministic, free, works
+   offline, and a movement you have already logged carries its history and
+   pre-fills forward. Ranked by how often you have actually done it, because
+   a familiar lift is a better answer than a clever one. */
+function substitutesFor(ex, gym, store, exclude){
+  if(!ex) return [];
+  // Never offer something already in this session. Caught in review: the
+  // hotel case proposed Nordic Curl as a stand-in for the trap bar while
+  // Nordic Curl was the very next exercise on the list.
+  const skip = new Set([ex.id].concat(exclude || []));
+  const counts = {};
+  (store.data.workouts||[]).forEach(w => {
+    if(!w.endedAt) return;
+    (w.entries||[]).forEach(e => {
+      if(!e.exerciseId) return;
+      const n = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0).length;
+      if(n) counts[e.exerciseId] = (counts[e.exerciseId]||0) + 1;
+    });
+  });
+  return (store.data.exercises||[])
+    .filter(x => !skip.has(x.id)
+              && (x.type||"strength") === (ex.type||"strength")
+              && x.muscleGroup && x.muscleGroup === ex.muscleGroup
+              && availableAt(x, gym))
+    .map(x => ({ x, done: counts[x.id]||0 }))
+    .sort((a,b) => b.done - a.done || String(a.x.name).localeCompare(String(b.x.name)))
+    .slice(0, 3);
+}
+
+/* One screen, two modes: "here is what will not work" when the inventory can
+   be trusted, and "I do not know what is here" when it cannot. */
+function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
+  const trusted = inventoryTrusted(gym);
+  const blocked = blockedItems(routine, gym, store);
+  const [subs, setSubs] = useState({});     // itemId -> exercise record
+  const [asking, setAsking] = useState(null);
+  const [askErr, setAskErr] = useState("");
+  const [ideas, setIdeas] = useState({});   // itemId -> AI text
+
+  const options = useMemo(() => {
+    const o = {};
+    const inRoutine = (routine.items||[]).map(i => i.exerciseId).filter(Boolean);
+    blocked.forEach(({it, ex}) => { o[it.id] = substitutesFor(ex, gym, store, inRoutine); });
+    return o;
+  }, [routine.id, gym && gym.id, store.data.exercises, store.data.workouts]);
+
+  // Only when the library has nothing that fits does this cost a call. It
+  // reuses adapt_exercise, which already knows how to read an inventory.
+  const askAI = async (it, ex) => {
+    setAsking(it.id); setAskErr("");
+    try{
+      const system = "You suggest ONE replacement exercise. Plain text, no markdown, under 40 words. " +
+        "You are given a gym's full equipment inventory - use ONLY what is on it. " +
+        "Name the exercise, then one short clause on why it stands in. " +
+        "If nothing on the list can train the same thing, say exactly that and suggest nothing.";
+      const out = await aiRelay("adapt_exercise",
+        [{ role:"user", content: "Replace: "+ex.name+" (trains "+(ex.muscleGroup||"?")+", needs "+
+            (ex.equipment||"none")+"). Gym: "+gym.name+". Inventory: "+(gym.equipment||[]).join(", ")+"." }],
+        { system, maxTokens: 300 });
+      const text = (out||"").trim();
+      if(!text) throw new Error("Nothing came back.");
+      setIdeas(prev => ({...prev, [it.id]: text}));
+    }catch(e){ setAskErr(e.message||"Couldn't get an option."); log("ERROR","substitute: "+e.message); }
+    finally{ setAsking(null); }
+  };
+
+  const swapCount = Object.keys(subs).length;
+
+  if(!trusted) return (
+    <div className="layer" style={{zIndex:86}}>
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onCancel} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>{routine.name}</h2>
+        </div>
+        <div className="card">
+          <div style={{fontWeight:600,marginBottom:4}}>
+            I don't know what's at {gym ? gym.name : "this gym"}
+          </div>
+          <p className="hint" style={{marginTop:0}}>
+            {(gym && (gym.equipment||[]).length)
+              ? "Only " + gym.equipment.length + " item" + (gym.equipment.length===1?"":"s") + " are on file, which isn't enough to tell you what won't work here."
+              : "Nothing is on file for it yet."}
+            {" "}Tick what's actually there and I'll flag anything in a routine that can't be done - and offer something that can.
+          </p>
+          <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={onEditGym}>
+            Tick what's here
+          </button>
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>onStart({})}>
+            Start {routine.name} anyway
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="layer" style={{zIndex:86}}>
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onCancel} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>{routine.name}</h2>
+        </div>
+
+        <div className="card" style={{borderColor:"var(--amber-line)",background:"var(--amber-dim)"}}>
+          <div style={{fontWeight:600}}>
+            {blocked.length} of {(routine.items||[]).length} need kit that isn't at {gym.name}
+          </div>
+          <p className="hint" style={{marginTop:4,marginBottom:0}}>
+            Based on the {(gym.equipment||[]).length} items on file. Keep anything you
+            know you can do - a swap is only a suggestion.
+          </p>
+        </div>
+
+        {blocked.map(({it, ex}) => {
+          const chosen = subs[it.id];
+          const opts = options[it.id] || [];
+          return (
+            <div key={it.id} className="card" style={{marginTop:12}}>
+              <div className="updrow">
+                <div style={{fontWeight:600,minWidth:0}}>{it.name}</div>
+                <span className="chip amber" style={{flex:"0 0 auto"}}>needs {ex.equipment}</span>
+              </div>
+
+              {opts.length === 0 && !ideas[it.id] &&
+                <p className="hint" style={{marginTop:8,marginBottom:0}}>
+                  Nothing in your library trains {ex.muscleGroup || "this"} with what's here.
+                </p>}
+
+              {opts.map(({x, done}) => (
+                <button key={x.id} className="set-row"
+                  style={chosen && chosen.id===x.id ? {borderColor:"var(--amber-line)"} : null}
+                  onClick={()=>setSubs(prev => {
+                    const n = {...prev};
+                    if(n[it.id] && n[it.id].id === x.id) delete n[it.id]; else n[it.id] = x;
+                    return n;
+                  })}>
+                  <span className="set-main">{x.name}</span>
+                  <span className="chip" style={{flex:"0 0 auto"}}>
+                    {done ? done + " session" + (done===1?"":"s") : "new to you"}
+                  </span>
+                  {chosen && chosen.id===x.id && <span className="chip amber" style={{flex:"0 0 auto"}}>swapping</span>}
+                </button>
+              ))}
+
+              {ideas[it.id] &&
+                <p className="hint" style={{marginTop:8,marginBottom:0,whiteSpace:"pre-wrap"}}>{ideas[it.id]}</p>}
+
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
+                disabled={asking===it.id} onClick={()=>askAI(it, ex)}>
+                {asking===it.id ? <span className="spin"></span> : "Ask for another option"}
+              </button>
+            </div>
+          );
+        })}
+
+        {askErr && <div className="auth-msg err" style={{marginTop:10}}>{askErr}</div>}
+
+        <div className="stick-actions">
+          <button className="btn btn-primary btn-block" onClick={()=>onStart(subs)}>
+            {swapCount ? "Start with "+swapCount+" swap"+(swapCount===1?"":"s") : "Start unchanged"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressScreen({ store }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
@@ -5252,6 +5481,7 @@ function App(){
   const [importer, setImporter] = useState(false);    // AI history import layer
   const [routineImporter, setRoutineImporter] = useState(null);   // null | "paste" | "build" (AI program layer)
   const [gymSheet, setGymSheet] = useState(null);     // null | {gym: rec|null}
+  const [startCheck, setStartCheck] = useState(null); // null | {routine, gym}
   const [gymView, setGymView] = useState(null);       // open gym place page (id)
   const [addSheet, setAddSheet] = useState(false);    // center-+ create ActionSheet
 
@@ -5338,19 +5568,47 @@ function App(){
     }
     const gym = (store.gyms||[]).find(g=>g.id===r.gymId)
              || (store.gyms||[]).find(g=>g.id===store.cfg.lastGymId) || null;
+    // A routine written for the home gym gets run in hotels. Check at the
+    // door rather than letting him discover it at exercise three.
+    if(gym){
+      if(inventoryTrusted(gym)){
+        if(blockedItems(r, gym, store).length){ setStartCheck({routine:r, gym}); return; }
+      }else if((store.cfg.invAsked||[]).indexOf(gym.id) === -1){
+        // Ask about an unknown gym ONCE, ever. A prompt that fires every
+        // time you train somewhere is a prompt you learn to dismiss.
+        setStartCheck({routine:r, gym}); return;
+      }
+    }
+    createFromRoutine(r, gym, {});
+  };
+
+  /* Build the workout, applying any accepted substitutions. A swap is
+     recorded as the exercise ACTUALLY DONE, with substitutedFor kept for
+     honesty - logging a dumbbell RDL as a trap bar deadlift would poison the
+     strength trend the weekly check-in reads. */
+  const createFromRoutine = (r, gym, subs) => {
     const w = { id: uid(), name: r.name, date: todayStr(), startedAt: nowISO(),
                 endedAt: null, durationMin: 0, notes: "", routineId: r.id,
                 gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
-                entries: (r.items||[]).map(it => ({
-                  id: uid(), exerciseId: it.exerciseId, name: it.name, type: it.type,
-                  sets: [], cardio: null,
-                  targetSets: it.targetSets, targetReps: it.targetReps,
-                  // A per-set plan rides along so the editor can pre-fill each
-                  // set with its own numbers rather than one figure for all.
-                  plan: planOf(it) || undefined,
-                })) };
+                entries: (r.items||[]).map(it => {
+                  const sub = subs && subs[it.id];
+                  return {
+                    id: uid(),
+                    exerciseId: sub ? sub.id : it.exerciseId,
+                    name: sub ? sub.name : it.name,
+                    type: sub ? (sub.type||it.type) : it.type,
+                    substitutedFor: sub ? it.name : undefined,
+                    sets: [], cardio: null,
+                    targetSets: it.targetSets, targetReps: it.targetReps,
+                    // A per-set plan rides along so the editor can pre-fill each
+                    // set with its own numbers rather than one figure for all.
+                    // A substitute inherits the SHAPE but not the loads - the
+                    // weights were chosen for a different movement.
+                    plan: sub ? undefined : (planOf(it) || undefined),
+                  };
+                }) };
     store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
-    setRoutineId(null); setTab("workouts"); setWorkoutId(w.id);
+    setStartCheck(null); setRoutineId(null); setTab("workouts"); setWorkoutId(w.id);
   };
   // Capture a finished workout as a reusable routine.
   const saveAsRoutine = (w) => {
@@ -5564,6 +5822,24 @@ function App(){
 
       {gymSheet &&
         <GymSheet gym={gymSheet.gym} onSave={saveGym} onDelete={deleteGym} onClose={()=>setGymSheet(null)} />}
+
+      {startCheck &&
+        <StartCheck store={store} routine={startCheck.routine} gym={startCheck.gym}
+          onEditGym={()=>{
+            // Mark it asked BEFORE opening the sheet: whether he fills it in
+            // or backs out, this gym has now had its one prompt.
+            const asked = store.cfg.invAsked || [];
+            if(asked.indexOf(startCheck.gym.id) === -1)
+              store.saveCfg({ ...store.cfg, invAsked: [...asked, startCheck.gym.id] });
+            setGymSheet({gym: startCheck.gym}); setStartCheck(null);
+          }}
+          onStart={(subs)=>{
+            const asked = store.cfg.invAsked || [];
+            if(!inventoryTrusted(startCheck.gym) && asked.indexOf(startCheck.gym.id) === -1)
+              store.saveCfg({ ...store.cfg, invAsked: [...asked, startCheck.gym.id] });
+            createFromRoutine(startCheck.routine, startCheck.gym, subs);
+          }}
+          onCancel={()=>setStartCheck(null)} />}
 
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
