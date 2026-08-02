@@ -233,6 +233,11 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .rest{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(26px + env(safe-area-inset-bottom));z-index:75;
   background:var(--amber);color:#241505;border-radius:999px;padding:11px 24px;font-weight:800;font-size:15px;
   box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;border:none;}
+.rest-wrap{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(26px + env(safe-area-inset-bottom));
+  z-index:75;display:flex;align-items:stretch;gap:6px;}
+.rest-wrap .rest{position:static;transform:none;bottom:auto;z-index:auto;}
+.rest-more{background:var(--bg-3);color:var(--ink);border:1px solid var(--line-2);border-radius:999px;
+  padding:0 15px;font-weight:700;font-size:14px;box-shadow:var(--shadow-lg);}
 /* collapsible catalog category header */
 .cat-head{width:100%;display:flex;align-items:center;gap:8px;padding:11px 4px;text-align:left;
   color:var(--ink-2);font-weight:600;font-size:13px;letter-spacing:.05em;text-transform:uppercase;}
@@ -357,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.44.1";
+const APP_VERSION = "0.45.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-01.1";
+const BUILD = "2026-08-01.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2197,6 +2202,8 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
   const [group, setGroup] = useState(exercise ? (exercise.muscleGroup||"Full body") : "Full body");
   const [equip, setEquip] = useState(exercise ? (exercise.equipment||"none") : "none");
   const [notes, setNotes] = useState(exercise ? (exercise.notes||"") : "");
+  // undefined = follow the app default, a number = this movement's own rest.
+  const [rest, setRest] = useState(exercise && exercise.restSecs !== undefined ? exercise.restSecs : undefined);
   const [explaining, setExplaining] = useState(false);
   const [explainErr, setExplainErr] = useState("");
   const [help, setHelp] = useState(false);   // the same panel the (i) opens
@@ -2225,6 +2232,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
     onSave({
       id: exercise ? exercise.id : uid(),
       name: name.trim(), type, muscleGroup: group, equipment: equip,
+      restSecs: rest,
       notes: notes.trim(),
       custom: exercise ? (exercise.custom!==false) : true,
       createdAt: exercise ? (exercise.createdAt||nowISO()) : nowISO(),
@@ -2270,6 +2278,24 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
             <select className="select" value={equip} onChange={e=>setEquip(e.target.value)}>
               {EQUIPMENT.map(g=><option key={g} value={g}>{g}</option>)}
             </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Rest between sets</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            A heavy hinge wants two or three minutes; a calf raise wants forty
+            seconds. Leave it on the default unless this movement disagrees.
+          </div>
+          <div className="pills" style={{marginTop:4}}>
+            <button className={"pill "+(rest===undefined?"on":"")} onClick={()=>setRest(undefined)}>
+              App default
+            </button>
+            {[0,45,60,90,120,180].map(v => (
+              <button key={v} className={"pill "+(rest===v?"on":"")} onClick={()=>setRest(v)}>
+                {v===0 ? "None" : (v>=60 ? (v/60)+" min" : v+"s")}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -2844,7 +2870,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, onHelp, onUpdate, onRemove, onSetLogged }){
+function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -2884,7 +2910,7 @@ function EntryCard({ entry, prev, units, active, hasDemo, onHelp, onUpdate, onRe
     const rec = { reps, weight };
     if(effort) rec.effort = effort;
     if(selIdx>=0 && selIdx<next.length){ next[selIdx] = rec; setSelIdx(-1); }
-    else { next.push(rec); onSetLogged(); }
+    else { next.push(rec); onSetLogged(entry); }
     setEffort(null);                          // next set starts untagged
     onUpdate(e => ({ ...e, sets: next }));
   };
@@ -2961,6 +2987,10 @@ function EntryCard({ entry, prev, units, active, hasDemo, onHelp, onUpdate, onRe
           {prev && !isCardio &&
             <div className="entry-last">
               Last time: {prev.sets.length} set{prev.sets.length===1?"":"s"}, best {prev.best.reps} x {fmtW(prev.best.weight)} {units}
+            </div>}
+          {restSecs !== undefined && restSecs !== null && !isCardio &&
+            <div className="entry-last">
+              Rest {restSecs===0 ? "off" : (restSecs>=60 ? (restSecs/60)+" min" : restSecs+"s")}
             </div>}
           {/* Machine setup from the last time you did this - the numbers you
               otherwise rediscover by trial and error every visit. */}
@@ -3370,8 +3400,16 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
     addExercise(x);
   };
-  const onSetLogged = () => {
-    if(active && restSecs>0) setRestUntil(Date.now() + restSecs*1000);
+  /* Rest is per EXERCISE now, falling back to the global default. One
+     number for trap bar deadlifts and calf raises was always wrong: the
+     heavy hinge wants two or three minutes, the calf raise wants forty
+     seconds, and being nagged by the wrong one teaches you to ignore it.
+     Chris asked where the rest timer came from the first time he met it. */
+  const onSetLogged = (entry) => {
+    const ex = (store.data.exercises||[]).find(x => x.id === (entry && entry.exerciseId));
+    const secs = (ex && Number(ex.restSecs) >= 0 && ex.restSecs !== undefined && ex.restSecs !== null)
+      ? Number(ex.restSecs) : restSecs;
+    if(active && secs > 0) setRestUntil(Date.now() + secs*1000);
     try{ if(navigator.vibrate) navigator.vibrate(15); }catch(e){}
   };
 
@@ -3465,6 +3503,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         {(workout.entries||[]).map(e => (
           <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit}
             hasDemo={!!((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).demoVideoId}
+            restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
         ))}
@@ -3498,10 +3537,16 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
           </button>}
       </div>
 
+      {/* The permanent length lives on the exercise; this is the one-off. You
+          only discover a rest is too short while standing in it. */}
       {active && restLeft>0 &&
-        <button className="rest" onClick={()=>setRestUntil(0)}>
-          Rest {fmtClock(restLeft)} <Icon d={ICONS.x} size={14}/>
-        </button>}
+        <div className="rest-wrap">
+          <button className="rest" onClick={()=>setRestUntil(0)}>
+            Rest {fmtClock(restLeft)} <Icon d={ICONS.x} size={14}/>
+          </button>
+          <button className="rest-more" onClick={()=>setRestUntil(t => t + 30000)}
+            aria-label="Add 30 seconds">+30s</button>
+        </div>}
 
       {picker &&
         <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
