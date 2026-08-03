@@ -362,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.50.0";
+const APP_VERSION = "0.51.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.5";
+const BUILD = "2026-08-03.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1429,6 +1429,7 @@ const ICONS = {
   play:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M10.2 8.4l5.4 3.6-5.4 3.6z"],
   image:   ["M3 5h18v14H3z","M3 16l5-5 4 4 3-3 6 6"],
   up:      ["M12 19V5","M5 12l7-7 7 7"],
+  check:   ["M20 6L9 17l-5-5"],
   text:    ["M5 5h14","M5 10h14","M5 15h9"],
 };
 
@@ -2993,7 +2994,13 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
      same news, ~200px of it, per finished exercise. A done exercise collapses
      to one line; the pencil puts it all back. */
   const [expanded, setExpanded] = useState(false);
-  const collapsed = doneAll && !expanded;
+  /* Auto-collapse only fires when a plan or targetSets says how many sets were
+     wanted. Anything added mid-workout has neither, so the flyes Chris added
+     could never close - it would have sat open for the rest of the session.
+     The checkmark is the manual version: "I am done with this one", stored ON
+     THE ENTRY so it survives closing and reopening the workout. */
+  const closed = !!entry.closed;
+  const collapsed = (doneAll || closed) && !expanded;
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -3071,7 +3078,8 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
           <span className="chip green" style={{flex:"0 0 auto"}}>done</span>
           <InfoBtn name={entry.name} hasVideo={hasDemo} onClick={()=>onHelp && onHelp(entry)} />
           {active &&
-            <button className="entry-x" onClick={()=>setExpanded(true)}
+            <button className="entry-x"
+              onClick={()=>{ setExpanded(true); if(closed) onUpdate(e => ({ ...e, closed: undefined })); }}
               aria-label={"Edit "+entry.name} title="Edit">
               <Icon d={ICONS.edit} size={16}/>
             </button>}
@@ -3130,6 +3138,13 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
+        {/* Only offered once something is logged - "done" means nothing on an
+            exercise you have not started. */}
+        {active && !collapsed && sets.length > 0 && !doneAll &&
+          <button className="entry-x" onClick={()=>onUpdate(e => ({ ...e, closed: true }))}
+            aria-label={"Mark "+entry.name+" done"} title="Done with this exercise">
+            <Icon d={ICONS.check} size={17}/>
+          </button>}
         {active && onMoveUp &&
           <button className="entry-x" onClick={onMoveUp} aria-label={"Move "+entry.name+" earlier"}
             title="Move earlier">
@@ -3150,9 +3165,14 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
             <span className="set-main">
               {isMobility ? s.reps+" reps" : s.reps+" x "+fmtW(s.weight)+" "+units}
             </span>
+            {/* Chris: "what is the little red down arrow next to one of the
+                sets? I don't understand what that does." His own feature, and
+                he could not read it - because the row printed the GLYPH alone
+                while the only place the word appears is the button that sets
+                it. A mark you cannot interpret where you see it is noise. */}
             {effortOf(s.effort) &&
               <span className={"chip "+effortOf(s.effort).cls} style={{flex:"0 0 auto"}}>
-                {effortOf(s.effort).label}
+                {effortOf(s.effort).label} {effortOf(s.effort).short.toLowerCase()}
               </span>}
           </button>;
         // Swipe left to delete a set (portfolio standard); finished workouts stay read-only.
