@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.52.0";
+const APP_VERSION = "0.53.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.7";
+const BUILD = "2026-08-03.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2978,6 +2978,13 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
   const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
   const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
   const [effort, setEffort] = useState(null); // optional tag for the set being logged
+  /* Chris: "I need to be able to put a note next to each set, like how many
+     reps I was trying to do." The entry already carried a machine-setup note,
+     but that is one note for the whole exercise - this is per SET, which is
+     where the intent lives ("wanted 10, got 8"). Hidden behind a toggle so
+     the logger does not grow a field you rarely use. */
+  const [note, setNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
   /* Chris, five sets into a five-set plan: "I'm done with my fifth set and
      don't wanna add a sixth, so I'm not sure how I close out this exercise
      without closing the workout." There was no closed state - the logger sat
@@ -3017,16 +3024,19 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
     const next = sets.slice();
     const rec = { reps, weight };
     if(effort) rec.effort = effort;
+    if(note.trim()) rec.note = note.trim().slice(0,80);
     if(selIdx>=0 && selIdx<next.length){ next[selIdx] = rec; setSelIdx(-1); }
     else { next.push(rec); onSetLogged(entry); }
     setEffort(null);                          // next set starts untagged
+    setNote(""); setNoteOpen(false);
     onUpdate(e => ({ ...e, sets: next }));
   };
   const pickSet = (i) => {
     if(!active) return;
-    if(selIdx===i){ setSelIdx(-1); setEffort(null); return; }
+    if(selIdx===i){ setSelIdx(-1); setEffort(null); setNote(""); setNoteOpen(false); return; }
     setSelIdx(i); setReps(Number(sets[i].reps)||0); setWeight(Number(sets[i].weight)||0);
     setEffort(sets[i].effort || null);
+    setNote(sets[i].note || ""); setNoteOpen(!!sets[i].note);
   };
 
   /* Progression nudge. Suggest more weight only when last time's heaviest set
@@ -3143,13 +3153,6 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
-        {/* Only offered once something is logged - "done" means nothing on an
-            exercise you have not started. */}
-        {active && !collapsed && sets.length > 0 && !doneAll &&
-          <button className="entry-x" onClick={()=>onUpdate(e => ({ ...e, closed: true }))}
-            aria-label={"Mark "+entry.name+" done"} title="Done with this exercise">
-            <Icon d={ICONS.check} size={17}/>
-          </button>}
         {active && onMoveUp &&
           <button className="entry-x" onClick={onMoveUp} aria-label={"Move "+entry.name+" earlier"}
             title="Move earlier">
@@ -3178,6 +3181,10 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
             {effortOf(s.effort) &&
               <span className={"chip "+effortOf(s.effort).cls} style={{flex:"0 0 auto"}}>
                 {effortOf(s.effort).label} {effortOf(s.effort).short.toLowerCase()}
+              </span>}
+            {s.note &&
+              <span className="subtle" style={{flex:"0 0 auto",fontSize:12.5,fontStyle:"italic"}}>
+                {s.note}
               </span>}
           </button>;
         // Swipe left to delete a set (portfolio standard); finished workouts stay read-only.
@@ -3230,14 +3237,36 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
           </div>}
           {/* Seat heights and arm positions are the thing you rediscover by
               trial and error on every club-gym visit. Save on blur. */}
+          {noteOpen
+            ? <input className="input" style={{marginTop:10}} value={note} maxLength={80} autoFocus
+                onChange={e=>setNote(e.target.value)}
+                placeholder="Note for this set - e.g. wanted 10" />
+            : <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+                onClick={()=>setNoteOpen(true)}>
+                + Note for this set
+              </button>}
           {!isMobility &&
           <input className="input" style={{marginTop:10}} defaultValue={entry.settings||""}
             placeholder="Machine setup - optional"
             onBlur={ev=>{ const v = ev.target.value.slice(0,80);
               if(v !== (entry.settings||"")) onUpdate(e => ({ ...e, settings: v || undefined })); }} />}
-          <button className="btn btn-primary btn-block log-set-btn" style={{marginTop:12}} onClick={logSet}>
-            {selIdx>=0 ? "Update set "+(selIdx+1) : "Log set "+(sets.length+1)}
-          </button>
+          {/* Chris: "should the checkmark be more prominent - my eyes
+              immediately go to the big yellow button." Yes. A 17px glyph in a
+              crowded header cannot compete with a full-width primary, and the
+              moment you want it is the moment you are looking at that button.
+              Logging stays primary; finishing sits beside it at the same
+              height, with the word as well as the mark. */}
+          <div className="row" style={{marginTop:12}}>
+            <button className="btn btn-primary log-set-btn" style={{flex:1}} onClick={logSet}>
+              {selIdx>=0 ? "Update set "+(selIdx+1) : "Log set "+(sets.length+1)}
+            </button>
+            {sets.length > 0 && selIdx < 0 &&
+              <button className="btn btn-ghost" style={{flex:"0 0 auto",paddingLeft:16,paddingRight:16}}
+                onClick={()=>onUpdate(e => ({ ...e, closed: true }))}
+                aria-label={"Done with "+entry.name}>
+                <Icon d={ICONS.check} size={17}/> Done
+              </button>}
+          </div>
           {selIdx>=0 &&
             <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:8}} onClick={()=>setSelIdx(-1)}>
               Cancel edit
