@@ -362,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.47.0";
+const APP_VERSION = "0.48.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.2";
+const BUILD = "2026-08-03.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2941,6 +2941,18 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
   const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
   const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
   const [effort, setEffort] = useState(null); // optional tag for the set being logged
+  /* Chris, five sets into a five-set plan: "I'm done with my fifth set and
+     don't wanna add a sixth, so I'm not sure how I close out this exercise
+     without closing the workout." There was no closed state - the logger sat
+     open offering "Log set 6", which reads as an instruction. An exercise that
+     has met its plan now says so and puts the logger away. Nothing is locked:
+     one tap reopens it, and any set is still editable. */
+  const [moreSets, setMoreSets] = useState(false);
+  const targetCount = plan ? plan.length : (Number(entry.targetSets)||0);
+  // Must come AFTER the state above: it reads selIdx and moreSets, and const
+  // has no hoisting - computing it earlier threw "Cannot access 'selIdx'
+  // before initialization" and took the whole workout screen down.
+  const doneAll = targetCount > 0 && sets.length >= targetCount && selIdx < 0 && !moreSets;
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -3044,6 +3056,10 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
               {entry.settings || prev.settings}
             </div>}
         </div>
+        {/* Visible while scrolling, so you can see what is left without
+            opening each card. */}
+        {targetCount > 0 && sets.length >= targetCount &&
+          <span className="chip green" style={{flex:"0 0 auto",alignSelf:"flex-start"}}>done</span>}
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
@@ -3080,7 +3096,21 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
           </span>
         </div>}
 
-      {active && !isCardio &&
+      {active && !isCardio && doneAll &&
+        <div className="logger" style={{textAlign:"center"}}>
+          <div style={{fontWeight:700,color:"var(--green)"}}>
+            Done - {sets.length} of {targetCount} set{targetCount===1?"":"s"}
+          </div>
+          <p className="hint" style={{marginTop:4,marginBottom:0}}>
+            Move on to the next exercise, or tap a set above to correct it.
+          </p>
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+            onClick={()=>setMoreSets(true)}>
+            Add another set
+          </button>
+        </div>}
+
+      {active && !isCardio && !doneAll &&
         <div className="logger">
           <Stepper label={isMobility ? "Reps (or per side)" : "Reps"} value={reps} onChange={setReps} step={1} min={0}/>
           {!isMobility &&
