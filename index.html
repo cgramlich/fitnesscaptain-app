@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.54.0";
+const APP_VERSION = "0.55.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.9";
+const BUILD = "2026-08-03.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3273,7 +3273,17 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
             </button>
             {sets.length > 0 && selIdx < 0 &&
               <button className="btn btn-ghost" style={{flex:"0 0 auto",paddingLeft:16,paddingRight:16}}
-                onClick={()=>onUpdate(e => ({ ...e, closed: true }))}
+                /* BUG (Chris: "the Done button isn't working"): setting closed
+                   was not enough. `collapsed` is (doneAll || closed) && !expanded,
+                   and `expanded` stays true after the pencil reopens a card or
+                   after Add another set. So the record saved closed:true and the
+                   card did not move - the worst kind of failure, because the data
+                   said it worked. Closing has to clear the two flags that force it
+                   open, not just set the one that asks it to shut. */
+                onClick={()=>{
+                  setExpanded(false); setMoreSets(false);
+                  onUpdate(e => ({ ...e, closed: true }));
+                }}
                 aria-label={"Done with "+entry.name}>
                 <Icon d={ICONS.check} size={17}/> Done
               </button>}
