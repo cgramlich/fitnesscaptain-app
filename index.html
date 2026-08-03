@@ -362,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.46.0";
+const APP_VERSION = "0.47.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.1";
+const BUILD = "2026-08-03.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -967,6 +967,36 @@ const HABIT_SUGGESTIONS = [
 // Trailing window + default guard for the rate-of-loss check.
 const LOSS_WINDOW_DAYS = 28;
 const DEFAULT_LOSS_GUARD = 1.0;        // % of bodyweight per week
+
+/* The rate-of-loss rule, in ONE place. It was computed inline in BodySection
+   and again in buildDigest, and the Program Builder now needs it too - three
+   copies of a rule is how they drift apart. Returns null when there is not
+   enough weighed data to say anything, which is a real answer. */
+function weightTrend(store){
+  const rows = (store.metrics||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const withW = rows.filter(r => Number(r.weight) > 0);
+  if(!withW.length) return null;
+  const last = withW[withW.length-1];
+  const gc = Number((store.cfg||{}).lossGuardPct);
+  const out = { weight: Number(last.weight), on: last.date,
+                guardPct: gc > 0 ? gc : DEFAULT_LOSS_GUARD,
+                pctPerWeek: null, tooFast: false, losing: false };
+  const cut = shiftDay(todayStr(), -LOSS_WINDOW_DAYS);
+  const win = withW.filter(r => !cut || r.date >= cut);
+  if(win.length >= 2){
+    const a = win[0], b = win[win.length-1];
+    const days = Math.round((new Date(b.date+"T00:00:00") - new Date(a.date+"T00:00:00"))/86400000);
+    if(days >= 7){
+      const pct = ((Number(a.weight)-Number(b.weight))/Number(a.weight))*100;
+      out.pctPerWeek = Math.round((pct/(days/7))*100)/100;
+      out.tooFast = out.pctPerWeek > out.guardPct;
+      // A quarter percent a week is the floor for calling it a deficit at all;
+      // below that it is scale noise, not a trend.
+      out.losing = out.pctPerWeek >= 0.25;
+    }
+  }
+  return out;
+}
 
 const EXERCISE_TYPES = ["strength","cardio","mobility"];
 const GYM_KINDS = ["home","club","hotel","other"];
@@ -4048,6 +4078,8 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
   const [parsed, setParsed] = useState([]);
   const [skipped, setSkipped] = useState([]);
   // intake answers (Chris's spec: ask minutes/day and days/week first)
+  // Asked once, then remembered - a fact about him, not about this program.
+  const [bAge, setBAge] = useState(store.cfg.age ? String(store.cfg.age) : "");
   const [bMins, setBMins] = useState(30);
   const [bDays, setBDays] = useState(5);
   const [bGymId, setBGymId] = useState(store.cfg.lastGymId || null);
@@ -4146,6 +4178,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
     try{
       const gym = (store.gyms||[]).find(g => g.id === bGymId) || null;
       const names = (store.data.exercises||[]).map(x=>x.name);
+      let coaching = "";
       // Time honesty: ~3 min per strength set incl. rest, minus warm-up/down.
       const setBudget = Math.max(6, Math.round((bMins-8)/3));
       const gymCtx = gym
@@ -4171,14 +4204,47 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         "cardio = cardio; stretches, holds and drills = mobility. targetSets/targetReps: strength gets " +
         "real numbers; cardio and mobility use 0 and 0 and carry their duration in the name " +
         "(e.g. 'AssaultBike Intervals - 12 min').";
+      /* Age and an active deficit change what a good week looks like, and the
+         builder was designing as if for a 30-year-old eating at maintenance.
+         The deficit is DERIVED from his own weigh-ins rather than asked -
+         weightTrend() already knows, and a number he is living is better
+         evidence than a checkbox.
+
+         The guidance below is about TRAINING only. Nothing here prescribes
+         calories, protein or anything dose-related - same line every other AI
+         surface in this app holds. */
+      const age = Number(bAge) > 0 ? Number(bAge) : null;
+      const trend = weightTrend(store);
+      const ctx = [];
+      if(age) ctx.push("Age " + age + ".");
+      if(trend && trend.losing){
+        ctx.push("Currently losing weight at about " + trend.pctPerWeek + "% of bodyweight per week" +
+                 (trend.tooFast ? " - above their own " + trend.guardPct + "%/week guard" : "") + ".");
+      }
+      coaching = ((age && age >= 50) || (trend && trend.losing))
+        ? " COACHING CONTEXT - adjust the design, do not comment on it in the output: " +
+          ((age && age >= 50)
+            ? "Over 50: keep the heavy compound anchors, they are what defend bone density and lean " +
+              "mass, but favour joint-friendly variants (trap bar over straight bar, neutral grips, " +
+              "controlled tempo), allow a longer warm-up inside the time budget, and leave at least " +
+              "one day between sessions that load the same pattern hard. " : "") +
+          ((trend && trend.losing)
+            ? "Training in a calorie deficit: recovery is reduced, so hold INTENSITY (load) and trim " +
+              "VOLUME rather than the reverse - dropping load in a deficit is what costs muscle. Keep " +
+              "weekly sets per muscle group at the LOW end of the useful range rather than the high " +
+              "end, and avoid high-eccentric novelty that produces soreness without adding stimulus. " : "") +
+          "Do NOT give calorie, protein, macro or medication advice anywhere in the output. "
+        : "";
       const user = "Goals: " + goals.trim().slice(0,1200) + "\n" +
+        (ctx.length ? "Athlete: " + ctx.join(" ") + "\n" : "") +
         "Time: " + bMins + " minutes per day, " + bDays + " days per week." +
         (gym ? "\nTraining at: " + gym.name + "." : "\nNo fixed gym - traveling.");
       const out = await aiRelay("routine_suggest",
         [{ role:"user", content: user }],
-        { system, maxTokens: 8000 });
+        { system: system + coaching, maxTokens: 8000 });
       await toReview(out, gym);
-      log("BUILD","program built ("+bDays+"d x "+bMins+"min)");
+      if(age && age !== store.cfg.age) store.saveCfg({ ...store.cfg, age });
+      log("BUILD","program built ("+bDays+"d x "+bMins+"min"+(age?", age "+age:"")+")");
     }catch(e){
       setErr(e.message||"Couldn't build the program."); setPhase("intake");
       log("ERROR","routine_suggest: "+e.message);
@@ -4246,10 +4312,19 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
 
         {phase==="intake" && <>
           <p className="hint" style={{marginTop:4}}>
-            Four questions. The AI designs a week that actually fits your time
-            and your equipment - and you review every day before anything saves.
+            A few questions. The AI designs a week that actually fits your time,
+            your equipment and where you are right now - and you review every day
+            before anything saves.
           </p>
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          <label className="label" style={{marginTop:14}}>Your age</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            Optional, asked once. Past fifty the same goals want joint-friendlier
+            variants and more room between hard sessions.
+          </div>
+          <input className="input" inputMode="numeric" value={bAge} maxLength={3}
+            onChange={e=>setBAge(e.target.value.replace(/[^0-9]/g,""))} placeholder="optional" />
+
           <label className="label" style={{marginTop:14}}>Minutes per day</label>
           <div className="pills">
             {[20,30,45,60].map(m => (
@@ -4917,27 +4992,9 @@ function buildDigest(store){
     sessionsLast28: recent.filter(w => w.routineId).length,
   } : null;
 
-  // ---- body: the guard already lives in BodySection; reuse its rule ----
-  const rows = (store.metrics||[]).slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  const withW = rows.filter(r => Number(r.weight)>0);
-  let body = null;
-  if(withW.length){
-    const last = withW[withW.length-1];
-    body = { weight:Number(last.weight), units, on:last.date, pctPerWeek:null, guardPct:null, tooFast:false };
-    const gc = Number(store.cfg.lossGuardPct);
-    body.guardPct = gc>0 ? gc : DEFAULT_LOSS_GUARD;
-    const cutL = shiftDay(todayStr(), -LOSS_WINDOW_DAYS);
-    const win = withW.filter(r => !cutL || r.date >= cutL);
-    if(win.length >= 2){
-      const a = win[0], b = win[win.length-1];
-      const days = Math.round((new Date(b.date+"T00:00:00") - new Date(a.date+"T00:00:00"))/86400000);
-      if(days >= 7){
-        const pct = ((Number(a.weight)-Number(b.weight))/Number(a.weight))*100;
-        body.pctPerWeek = Math.round((pct/(days/7))*100)/100;
-        body.tooFast = body.pctPerWeek > body.guardPct;
-      }
-    }
-  }
+  // ---- body: one shared rule, see weightTrend() ----
+  const bt = weightTrend(store);
+  const body = bt ? { ...bt, units } : null;
 
   // ---- daily checklist, last 14 days ----
   const daily = store.daily || {habits:[], log:{}};
