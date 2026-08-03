@@ -362,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.48.0";
+const APP_VERSION = "0.49.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.3";
+const BUILD = "2026-08-03.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1010,6 +1010,26 @@ function availableAt(x, gym){
   return gym.equipment.includes(x.equipment);
 }
 const MUSCLE_GROUPS = ["Chest","Back","Shoulders","Arms","Legs","Glutes","Core","Full body"];
+/* The reference database names muscles, not the training groups this app
+   counts by. Chris went looking for dumbbell flyes - a movement it has, with
+   equipment and pictures - and could not find it, because the starter library
+   is 56 movements and the reference is 873. Adding straight from the
+   reference needs this translation or every import lands as "Full body" and
+   quietly breaks weekly sets-by-muscle. */
+const REF_MUSCLE_GROUP = {
+  chest:"Chest", lats:"Back", "middle back":"Back", "lower back":"Back", traps:"Back",
+  shoulders:"Shoulders", neck:"Shoulders",
+  biceps:"Arms", triceps:"Arms", forearms:"Arms",
+  quadriceps:"Legs", hamstrings:"Legs", calves:"Legs", adductors:"Legs", abductors:"Legs",
+  glutes:"Glutes", abdominals:"Core",
+};
+function refToGroup(muscles){
+  for(const m of (muscles||[])){
+    const g = REF_MUSCLE_GROUP[String(m).toLowerCase()];
+    if(g) return g;
+  }
+  return "Full body";
+}
 const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
 function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
 // Deterministic demo link - a YouTube SEARCH, never an AI-invented URL
@@ -1408,6 +1428,7 @@ const ICONS = {
   info:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M12 16v-4","M12 8h.01"],
   play:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M10.2 8.4l5.4 3.6-5.4 3.6z"],
   image:   ["M3 5h18v14H3z","M3 16l5-5 4 4 3-3 6 6"],
+  up:      ["M12 19V5","M5 12l7-7 7 7"],
   text:    ["M5 5h14","M5 10h14","M5 15h9"],
 };
 
@@ -1817,7 +1838,7 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
   );
 }
 
-function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRoutine }){
+function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard, onStartRoutine }){
   const units = store.cfg.units || "lb";
   const workouts = (store.data.workouts||[]).slice()
     .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
@@ -1849,7 +1870,18 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRou
       {/* An open workout is the single most actionable thing on this screen,
           so it goes first - above the program card, which now stays quiet
           while one is running rather than repeating the same news. */}
+      {/* Chris: "we should be able to swipe more of these cards to delete -
+          like workout in progress, when I know I'm going to delete it."
+          Every other row in the app already swipes; this one was a bare
+          button. The confirm stays because an in-progress session can hold
+          real logged work. */}
       {activeW &&
+        <SwipeRow onDelete={()=>{
+          const n = workoutSets(activeW);
+          if(confirm('Discard "' + (activeW.name || "this workout") + '"?' +
+                     (n ? " " + n + " logged set" + (n===1?"":"s") + " will be lost." : "")))
+            onDiscard(activeW);
+        }}>
         <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
           <div className="item-body">
             <div className="item-title" style={{color:"var(--amber-2)"}}>Workout in progress</div>
@@ -1865,9 +1897,10 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onStartRou
                   open {fmtClock((Date.now()-new Date(activeW.startedAt).getTime())/1000)}
                 </span>}
             </div>
-            <p className="hint" style={{margin:"8px 0 0"}}>Tap to pick it back up, or finish it there.</p>
+            <p className="hint" style={{margin:"8px 0 0"}}>Tap to pick it back up, swipe to discard it.</p>
           </div>
-        </button>}
+        </button>
+        </SwipeRow>}
 
       <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
       <DailyCard store={store} />
@@ -2915,7 +2948,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged }){
+function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -3063,6 +3096,11 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
+        {active && onMoveUp &&
+          <button className="entry-x" onClick={onMoveUp} aria-label={"Move "+entry.name+" earlier"}
+            title="Move earlier">
+            <Icon d={ICONS.up} size={16}/>
+          </button>}
         {active &&
           <button className="entry-x" onClick={onRemove} aria-label={"Remove "+entry.name}>
             <Icon d={ICONS.x} size={15}/>
@@ -3376,13 +3414,49 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
 function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
   const [q, setQ] = useState("");
   const [groupF, setGroupF] = useState("all");
+  const [refIdx, setRefIdx] = useState(null);
+  const [adding, setAdding] = useState(null);   // folder being fetched
   const needle = q.trim().toLowerCase();
+  useEffect(() => { let alive = true;
+    loadMediaIndex().then(i => { if(alive) setRefIdx(i); });
+    return () => { alive = false; }; }, []);
   // Location-aware: flag exercises whose equipment this gym lacks.
   const notHere = (x) => !availableAt(x, gym);
   const list = (store.data.exercises||[])
     .filter(x => groupF==="all" || x.muscleGroup===groupF)
     .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
     .slice().sort((a,b)=> (notHere(a)?1:0)-(notHere(b)?1:0) || (a.name||"").localeCompare(b.name||""));
+
+  /* 873 movements ship with the app already (the illustration index). Searching
+     them is free and offline; only ADDING one fetches its record. Anything
+     already in the library is filtered out so the list never offers a
+     duplicate. */
+  const mine = new Set((store.data.exercises||[]).map(x => normName(x.name)));
+  const refHits = (needle.length > 1 && refIdx && refIdx.items)
+    ? Object.keys(refIdx.items)
+        .filter(k => k.indexOf(normName(q)) !== -1 && !mine.has(k))
+        .map(k => refIdx.items[k])
+        .sort((a,b) => a.n.length - b.n.length)
+        .slice(0, 8)
+    : [];
+
+  const addFromRef = async (item) => {
+    setAdding(item.f);
+    try{
+      const ref = await fetchReference(item.f);
+      const x = { id: uid(), name: item.n,
+                  type: "strength",
+                  muscleGroup: refToGroup(ref && ref.primaryMuscles),
+                  equipment: (ref && ref.equipment) ? String(ref.equipment) : "none",
+                  notes: (ref && Array.isArray(ref.instructions)) ? ref.instructions.join(" ") : "",
+                  custom: true, createdAt: nowISO(), updatedAt: nowISO() };
+      store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
+      log("LIBRARY","added from reference: "+x.name+" ("+x.muscleGroup+", "+x.equipment+")");
+      onPick(x);
+    }catch(e){ log("ERROR","add from reference: "+e.message); }
+    finally{ setAdding(null); }
+  };
+
   return (
     <div className="layer">
       <div className="layer-inner">
@@ -3406,9 +3480,26 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
               {g==="all" ? "All muscles" : g}
             </button>)}
         </div>
+        {/* The reference database, offered only when your own library does not
+            already answer. Adding one brings its equipment, muscle group and
+            written how-to with it, so the (i) works immediately. */}
+        {refHits.length > 0 && <>
+          <div className="set-group">Not in your library yet</div>
+          {refHits.map(it => (
+            <button key={it.f} className="item" onClick={()=>addFromRef(it)} disabled={!!adding}>
+              <div className="item-body">
+                <div className="item-title">{it.n}</div>
+                <div className="item-meta">
+                  <span className="chip blue">reference database</span>
+                  {adding===it.f && <span className="chip">adding...</span>}
+                </div>
+              </div>
+            </button>
+          ))}
+        </>}
         {q.trim().length>1 && !list.some(x=>(x.name||"").toLowerCase()===needle) &&
           <button className="btn btn-ghost btn-block" style={{marginTop:12}} onClick={()=>onCreate(q.trim())}>
-            <Icon d={ICONS.plus} size={15}/> Create "{q.trim()}"
+            <Icon d={ICONS.plus} size={15}/> Create "{q.trim()}" myself
           </button>}
         <div className="list">
           {list.map(x => (
@@ -3460,6 +3551,18 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       (store.data.workouts||[]).map(w => w.id===workout.id ? { ...w, ...p, updatedAt: nowISO() } : w));
   };
   const updateEntry = (id, fn) => patch({ entries: (workout.entries||[]).map(e => e.id===id ? fn(e) : e) });
+  /* An exercise added mid-workout lands at the bottom, which is rarely where
+     you want to do it. Chris: "I want to add an exercise and then rearrange
+     that it's happening second in line, not last just because it was added."
+     Bubble-up is enough to place anything and costs one glyph rather than a
+     drag handle that fights the scroll on a phone. */
+  const moveEntryUp = (id) => {
+    const es = (workout.entries||[]).slice();
+    const i = es.findIndex(x => x.id === id);
+    if(i <= 0) return;
+    const t = es[i-1]; es[i-1] = es[i]; es[i] = t;
+    patch({ entries: es });
+  };
   const removeEntry = (id) => {
     const e = (workout.entries||[]).find(x=>x.id===id);
     if(e && ((e.sets||[]).length || e.cardio) && !confirm("Remove "+e.name+" and its logged sets?")) return;
@@ -3575,12 +3678,13 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             {active && <p>Pick from the library; sets pre-fill from your last session.</p>}
           </div>}
 
-        {(workout.entries||[]).map(e => (
+        {(workout.entries||[]).map((e, i) => (
           <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit}
             hasDemo={!!((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).demoVideoId}
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
-            onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged} />
+            onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
+            onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} />
         ))}
 
         {canEdit &&
@@ -6156,7 +6260,8 @@ function App(){
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
           : <>
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} onStartRoutine={startRoutine}
-                onDelete={(w)=>{ if(confirm("Delete this workout from your history?")) deleteWorkout(w.id); }} />}
+                onDelete={(w)=>{ if(confirm("Delete this workout from your history?")) deleteWorkout(w.id); }}
+                onDiscard={(w)=>deleteWorkout(w.id)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})}
                 onDelete={(g)=>{ if(confirm("Delete this gym? Logged workouts keep its name.")) deleteGym(g.id); }} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
