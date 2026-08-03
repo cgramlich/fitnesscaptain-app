@@ -362,10 +362,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.49.0";
+const APP_VERSION = "0.50.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.4";
+const BUILD = "2026-08-03.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2986,6 +2986,14 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
   // has no hoisting - computing it earlier threw "Cannot access 'selIdx'
   // before initialization" and took the whole workout screen down.
   const doneAll = targetCount > 0 && sets.length >= targetCount && selIdx < 0 && !moreSets;
+  /* Chris: "this done - completed 5 of 5 sets takes way too much space. Once
+     it's done you should go to a marker with maybe a little pencil for edit."
+     Right - the head already carries a "done" chip and the five set rows were
+     still listed underneath, so the green block was a third telling of the
+     same news, ~200px of it, per finished exercise. A done exercise collapses
+     to one line; the pencil puts it all back. */
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = doneAll && !expanded;
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -3045,6 +3053,32 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
   const saveCardio = () => {
     onUpdate(e => ({ ...e, cardio: { minutes: mins, distance: dist, unit: units==="kg" ? "km" : "mi" } }));
   };
+
+  /* One line for something you have finished. The whole card is one tap away
+     again, and the pencil says so. */
+  if(collapsed){
+    const best = topSet(sets);
+    return (
+      <div className="entry" style={{paddingTop:12,paddingBottom:12}}>
+        <div className="entry-head" style={{alignItems:"center"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div className="entry-name" style={{opacity:.75}}>{entry.name}</div>
+            <div className="entry-last">
+              {sets.length} set{sets.length===1?"":"s"}
+              {best ? " - top " + best.reps + " x " + fmtW(best.weight) + " " + units : ""}
+            </div>
+          </div>
+          <span className="chip green" style={{flex:"0 0 auto"}}>done</span>
+          <InfoBtn name={entry.name} hasVideo={hasDemo} onClick={()=>onHelp && onHelp(entry)} />
+          {active &&
+            <button className="entry-x" onClick={()=>setExpanded(true)}
+              aria-label={"Edit "+entry.name} title="Edit">
+              <Icon d={ICONS.edit} size={16}/>
+            </button>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="entry">
@@ -3135,16 +3169,12 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
         </div>}
 
       {active && !isCardio && doneAll &&
-        <div className="logger" style={{textAlign:"center"}}>
-          <div style={{fontWeight:700,color:"var(--green)"}}>
-            Done - {sets.length} of {targetCount} set{targetCount===1?"":"s"}
-          </div>
-          <p className="hint" style={{marginTop:4,marginBottom:0}}>
-            Move on to the next exercise, or tap a set above to correct it.
-          </p>
-          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
-            onClick={()=>setMoreSets(true)}>
+        <div className="row" style={{marginTop:12}}>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setMoreSets(true)}>
             Add another set
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setExpanded(false)}>
+            Collapse
           </button>
         </div>}
 
