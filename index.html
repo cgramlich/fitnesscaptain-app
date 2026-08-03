@@ -340,7 +340,10 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .log .err{color:var(--red);}
 .log .t{color:var(--ink-3);}
 .toast{position:fixed;bottom:calc(var(--nav-h) + 24px);left:50%;transform:translateX(-50%);z-index:90;
-  background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;}
+  background:var(--bg-4);border:1px solid var(--line-2);color:var(--ink);padding:9px 18px;border-radius:999px;font-size:13.5px;font-weight:500;box-shadow:var(--shadow-lg);animation:fade .2s;max-width:90%;
+  display:flex;align-items:center;gap:14px;}
+.toast-undo{background:transparent;border:none;color:var(--amber-2);font-weight:800;font-size:13.5px;
+  padding:2px 2px;text-decoration:underline;text-underline-offset:3px;}
 /* Sticky, not just first-in-the-flow: it used to scroll away with the
    content, so it looked like it only existed on whichever screen happened
    to be at the top. An update you can't reach is an update you don't take. */
@@ -362,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.51.0";
+const APP_VERSION = "0.52.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.6";
+const BUILD = "2026-08-03.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2949,7 +2952,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp }){
+function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -3054,8 +3057,10 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
     return weight >= up ? null : { weight: up, dir:"up" };
   })();
   const removeSet = (i) => {
+    const before = sets.slice();
     onUpdate(e => ({ ...e, sets: (e.sets||[]).filter((_,j)=>j!==i) }));
     if(selIdx===i) setSelIdx(-1);
+    if(onUndoable) onUndoable("Set "+(i+1)+" removed", () => onUpdate(e => ({ ...e, sets: before })));
   };
   const saveCardio = () => {
     onUpdate(e => ({ ...e, cardio: { minutes: mins, distance: dist, unit: units==="kg" ? "km" : "mi" } }));
@@ -3579,7 +3584,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
 
 /* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
    Finish. Finished: view/edit history + delete. */
-function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine }){
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, undoable }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
@@ -3613,10 +3618,14 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     const t = es[i-1]; es[i-1] = es[i]; es[i] = t;
     patch({ entries: es });
   };
+  /* Confirm replaced by undo. A dialog interrupts every removal to protect
+     against the rare mistake; undo lets the common case be instant and still
+     catches the mistake. */
   const removeEntry = (id) => {
-    const e = (workout.entries||[]).find(x=>x.id===id);
-    if(e && ((e.sets||[]).length || e.cardio) && !confirm("Remove "+e.name+" and its logged sets?")) return;
-    patch({ entries: (workout.entries||[]).filter(x=>x.id!==id) });
+    const before = (workout.entries||[]).slice();
+    const e = before.find(x=>x.id===id);
+    patch({ entries: before.filter(x=>x.id!==id) });
+    if(undoable) undoable((e ? e.name : "Exercise") + " removed", () => patch({ entries: before }));
   };
   const addExercise = (x) => {
     patch({ entries: [...(workout.entries||[]), { id: uid(), exerciseId: x.id, name: x.name, type: x.type, sets: [], cardio: null }] });
@@ -3734,7 +3743,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
-            onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} />
+            onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable} />
         ))}
 
         {canEdit &&
@@ -4026,7 +4035,7 @@ function ImportLayer({ store, onClose, onImported }){
    ============================================================ */
 /* The active program's running order, with the next day marked. Also the
    place to build one from routines you already have, or step off it. */
-function ProgramCard({ store }){
+function ProgramCard({ store, undoable }){
   const [picking, setPicking] = useState(false);
   const [name, setName] = useState("");
   const [order, setOrder] = useState([]);      // routine ids, in the order tapped
@@ -4049,11 +4058,18 @@ function ProgramCard({ store }){
      effectively doing. Routines are untouched: the program owns the running
      order, not the workouts. */
   const deleteProgram = () => {
-    if(!confirm('Delete "' + prog.name + '"?\n\nYour routines are kept - only the running order and ' +
-                'your place in it go away.')) return;
-    store.savePrograms((store.programs||[]).filter(p => p.id !== prog.id));
+    const before = (store.programs||[]).slice();
+    const wasActive = store.cfg.activeProgramId;
+    store.savePrograms(before.filter(p => p.id !== prog.id));
     store.saveCfg({ ...store.cfg, activeProgramId: null });
     log("PROGRAM","deleted "+prog.name);
+    /* Undo instead of a confirm - and it has to put the CURSOR back too. A
+       program restored to day 1 of 10 has lost the thing you actually cared
+       about, so the whole array and the active id both go back. */
+    if(undoable) undoable('"' + prog.name + '" deleted', () => {
+      store.savePrograms(before);
+      store.saveCfg({ ...store.cfg, activeProgramId: wasActive });
+    });
   };
   const setNextTo = (idx) => store.savePrograms((store.programs||[]).map(p =>
     p.id===prog.id ? { ...p, cursor: idx, updatedAt: nowISO() } : p));
@@ -4170,7 +4186,7 @@ function ProgramCard({ store }){
   );
 }
 
-function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDelete }){
+function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDelete, undoable }){
   const routines = (store.data.routines||[]).slice()
     .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const activeW = (store.data.workouts||[]).find(w=>!w.endedAt) || null;
@@ -4206,7 +4222,7 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
           answer no. A program is an ordered set of days you follow; a routine
           is a single session you start whenever. */}
       {(store.programs||[]).length > 0 && <div className="set-group">Programs</div>}
-      <ProgramCard store={store} />
+      <ProgramCard store={store} undoable={undoable} />
       {/* Days that belong to a program are listed inside its card, so
           repeating them here made the tab look like twenty unrelated
           routines. Only unattached ones show below. */}
@@ -5999,14 +6015,37 @@ function App(){
     showToast(exists ? "Gym updated" : "Gym added");
   };
   const deleteGym = (id) => {
-    store.saveGyms((store.gyms||[]).filter(g => g.id !== id));
+    const before = (store.gyms||[]).slice();
+    store.saveGyms(before.filter(g => g.id !== id));
     if(store.cfg.lastGymId === id) store.saveCfg({ ...store.cfg, lastGymId: null });
     setGymSheet(null); setGymView(null);
-    showToast("Gym deleted");
+    showUndo("Gym deleted", () => store.saveGyms(before));
   };
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState(null);   // null | {msg, undo}
   const toastRef = useRef();
-  const showToast = (m) => { setToast(m); clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(""), 2200); };
+  const showToast = (m) => {
+    setToast({ msg: m, undo: null });
+    clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(null), 2200);
+  };
+  /* Undo for deletions. Every delete in this app is a filter on a collection,
+     so the cheapest correct undo is to keep the WHOLE previous array and put
+     it back - no index bookkeeping, no partial restore, and order is
+     preserved exactly. Held only for as long as the toast is up; after that
+     the deletion stands.
+
+     Longer window than a plain toast (6s vs 2.2s) because reading "deleted",
+     realising it was wrong and reaching the button takes longer than reading
+     a confirmation you expected. */
+  const showUndo = (msg, restore) => {
+    setToast({ msg, undo: () => { restore(); clearTimeout(toastRef.current); setToast(null); } });
+    clearTimeout(toastRef.current); toastRef.current = setTimeout(()=>setToast(null), 6000);
+  };
+  // The common shape: drop one record from a collection, offer the array back.
+  const deleteFrom = (file, id, label) => {
+    const before = (store.data[file] || []).slice();
+    store.saveCollection(file, before.filter(r => r.id !== id));
+    showUndo(label + " deleted", () => store.saveCollection(file, before));
+  };
 
   // ---- workout lifecycle ----
   // atGym (optional) starts the workout AT that gym (from a place page).
@@ -6054,9 +6093,8 @@ function App(){
     setRoutineId(r.id);
   };
   const deleteRoutine = (id) => {
-    store.saveCollection("routines", (store.data.routines||[]).filter(r => r.id !== id));
     setRoutineId(null);
-    showToast("Routine deleted");
+    deleteFrom("routines", id, "Routine");
   };
   // Instantiate a routine into a pre-filled workout (the whole point).
   const startRoutine = (r) => {
@@ -6170,9 +6208,8 @@ function App(){
     showToast("Workout saved - "+mins+" min");
   };
   const deleteWorkout = (id) => {
-    store.saveCollection("workouts", (store.data.workouts||[]).filter(w => w.id !== id));
     setWorkoutId(null);
-    showToast("Workout deleted");
+    deleteFrom("workouts", id, "Workout");
   };
 
   // ---- exercise CRUD ----
@@ -6184,9 +6221,8 @@ function App(){
     showToast(exists ? "Exercise updated" : "Exercise added");
   };
   const deleteExercise = (id) => {
-    store.saveCollection("exercises", (store.data.exercises||[]).filter(x => x.id !== id));
     setExSheet(null);
-    showToast("Exercise deleted");
+    deleteFrom("exercises", id, "Exercise");
   };
 
   // --- PWA self-update: fetch the deployed index.html (no-store), read its
@@ -6310,14 +6346,14 @@ function App(){
           ? <SettingsScreen store={store} onCheckUpdate={checkUpdate} updMsg={updMsg} update={update} onApplyUpdate={applyUpdate} />
           : <>
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} onStartRoutine={startRoutine}
-                onDelete={(w)=>{ if(confirm("Delete this workout from your history?")) deleteWorkout(w.id); }}
+                onDelete={(w)=>deleteWorkout(w.id)}
                 onDiscard={(w)=>deleteWorkout(w.id)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})}
-                onDelete={(g)=>{ if(confirm("Delete this gym? Logged workouts keep its name.")) deleteGym(g.id); }} />}
+                onDelete={(g)=>deleteGym(g.id)} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
-                onDelete={(x)=>{ if(confirm("Delete this exercise? Logged workouts keep their history.")) deleteExercise(x.id); }} />}
+                onDelete={(x)=>deleteExercise(x.id)} />}
               {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter("paste")} onBuild={()=>setRoutineImporter("build")}
-                onDelete={(r)=>{ if(confirm("Delete this routine?")) deleteRoutine(r.id); }} />}
+                onDelete={(r)=>deleteRoutine(r.id)} undoable={showUndo} />}
               {tab==="progress"  && <ProgressScreen store={store} weighIn={weighIn} onWeighInDone={()=>setWeighIn(false)} />}
               {tab==="more"      && <MoreScreen store={store} onOpenGyms={()=>setTab("gyms")}
                 onOpenExercises={()=>setTab("exercises")} onOpenSettings={()=>setInSettings(true)} />}
@@ -6371,7 +6407,7 @@ function App(){
           onCancel={()=>setStartCheck(null)} />}
 
       {workoutId &&
-        <WorkoutEditor key={workoutId} store={store} workoutId={workoutId}
+        <WorkoutEditor key={workoutId} store={store} workoutId={workoutId} undoable={showUndo}
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
           onSaveAsRoutine={saveAsRoutine} />}
 
@@ -6400,7 +6436,12 @@ function App(){
           {["progress","more"].map(navBtn)}
         </nav>}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast &&
+        <div className="toast">
+          {toast.msg}
+          {toast.undo &&
+            <button className="toast-undo" onClick={toast.undo}>Undo</button>}
+        </div>}
     </div>
   );
 }
