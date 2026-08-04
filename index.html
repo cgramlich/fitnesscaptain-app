@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.55.0";
+const APP_VERSION = "0.55.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.10";
+const BUILD = "2026-08-03.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1669,7 +1669,7 @@ function SetPassword({ store }){
    detection, so vertical scroll is unaffected; a swipe suppresses the
    row's open-on-tap.
    ============================================================ */
-function SwipeRow({ onDelete, className, children }){
+function SwipeRow({ onDelete, className, style, children }){
   const [dx,setDx] = useState(0);
   const st = useRef(null); const moved = useRef(false);
   // Pointer capture is deferred until horizontal drag intent: capturing on
@@ -1688,7 +1688,12 @@ function SwipeRow({ onDelete, className, children }){
   function end(){ if(!st.current) return; st.current = null; setDx(d => { const nd = d <= -48 ? -84 : 0; if(nd===0) moved.current = false; return nd; }); }
   function clickCapture(e){ if(moved.current || dx !== 0){ e.stopPropagation(); e.preventDefault(); moved.current = false; setDx(0); } }
   return (
-    <div className={"swipe-wrap"+(className ? " "+className : "")}>
+    /* Spacing belongs on the WRAP, not on the row inside it. The delete panel
+       is absolutely positioned to fill this element, so a margin on the child
+       makes the wrap taller than the visible card and the red shows above it -
+       which is exactly the orange sliver Chris spotted on the in-progress
+       card. Callers pass style here instead. */
+    <div className={"swipe-wrap"+(className ? " "+className : "")} style={style}>
       <button className="swipe-del" onClick={(e)=>{ e.stopPropagation(); setDx(0); onDelete(); }}>
         <Icon d={ICONS.trash} size={18}/><span>Delete</span>
       </button>
@@ -1891,13 +1896,13 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
           button. The confirm stays because an in-progress session can hold
           real logged work. */}
       {activeW &&
-        <SwipeRow onDelete={()=>{
+        <SwipeRow style={{marginTop:14}} onDelete={()=>{
           const n = workoutSets(activeW);
           if(confirm('Discard "' + (activeW.name || "this workout") + '"?' +
                      (n ? " " + n + " logged set" + (n===1?"":"s") + " will be lost." : "")))
             onDiscard(activeW);
         }}>
-        <button className="item" style={{marginTop:14,borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
+        <button className="item" style={{borderColor:"var(--amber-line)",background:"var(--amber-dim)"}} onClick={()=>onOpen(activeW)}>
           <div className="item-body">
             <div className="item-title" style={{color:"var(--amber-2)"}}>Workout in progress</div>
             <div className="item-meta">
