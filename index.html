@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.56.0";
+const APP_VERSION = "0.57.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-04.1";
+const BUILD = "2026-08-04.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -770,15 +770,18 @@ function planLine(plan, units){
 /* Every set in order, not a summary. A single "top" figure hides the whole
    shape of a session - 20x25, 16x30, 12x35, 8x40, 6x45 is a descending
    pyramid, and "top 20 x 25" tells you none of that. */
+const LAST_SETS_SHOWN = 6;   // Chris: "cap it at five or six if you want"
 function setsLine(sets, units){
-  const ss = sets || [];
+  const all = sets || [];
+  const ss = all.slice(0, LAST_SETS_SHOWN);
+  const more = all.length - ss.length;
   // The unit rides the LAST weight so the line does not repeat "lb" five
   // times, and effort markers sit in brackets after it rather than between
   // the number and its unit.
   return ss.map((s,i) => {
     const e = effortOf(s.effort);
     return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "") + (e ? " "+e.label : "");
-  }).join(", ");
+  }).join(", ") + (more > 0 ? " +" + more + " more" : "");
 }
 /* What to do with this weight next time, not how it felt. Two marks and a
    silence: green up = go heavier, red down = too heavy, nothing = hold.
@@ -3167,7 +3170,7 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
             </div>}
           {prev && !isCardio &&
             <div className="entry-last">
-              Last time: {prev.sets.length} set{prev.sets.length===1?"":"s"}, best {prev.best.reps} x {fmtW(prev.best.weight)} {units}
+              Last time: {setsLine(prev.sets, units)}
             </div>}
           {restSecs !== undefined && restSecs !== null && !isCardio &&
             <div className="entry-last">
