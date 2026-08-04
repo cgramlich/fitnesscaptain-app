@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.55.1";
+const APP_VERSION = "0.56.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-03.11";
+const BUILD = "2026-08-04.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1763,39 +1763,61 @@ function DailyCard({ store }){
 
   const unused = HABIT_SUGGESTIONS.filter(s => !habits.some(h=>h.label.toLowerCase()===s.toLowerCase()));
 
+  const doneCount = doneToday.filter(id=>habits.some(h=>h.id===id)).length;
+  const allDone = habits.length > 0 && doneCount === habits.length;
+
+  /* Chris: one ticked habit was spending a header, a full-height row and a
+     full-width Edit button - four lines of chrome for one checkbox, and it
+     looked identical whether he was 0 of 1 or 1 of 1.
+
+     A chip row instead. It stays ONE line as habits are added, where the old
+     layout grew a row each time - so the problem got worse precisely when the
+     checklist started doing its job. Editing moves to a pencil, and the whole
+     row goes muted once everything is ticked: still visible, no longer asking
+     for anything. */
   return (
-    <div className="card" style={{marginTop:14}}>
-      <div className="updrow" style={{marginBottom:8}}>
-        <span style={{fontWeight:600}}>Today</span>
-        <span className="subtle" style={{fontSize:12.5}}>
-          {habits.length ? doneToday.filter(id=>habits.some(h=>h.id===id)).length+" of "+habits.length : ""}
+    <div className="card" style={{marginTop:14,paddingTop:12,paddingBottom:12,
+                                  opacity: allDone && !editing ? .62 : 1}}>
+      <div className="updrow" style={{gap:10,alignItems:"center"}}>
+        {/* Status lives with the label, NOT in the chip container - as a flex
+            item among the chips it wrapped onto its own line and cost the row
+            its whole point. */}
+        <span className="subtle" style={{fontSize:12.5,flex:"0 0 auto"}}>
+          {allDone && !editing ? "Today - all done" : "Today"}
+          {!allDone && habits.length>1 ? " " + doneCount + "/" + habits.length : ""}
         </span>
+        <div className="pills" style={{marginTop:0,flex:1}}>
+          {habits.map(h => {
+            const on = doneToday.indexOf(h.id) !== -1;
+            const st = habitStreak(log, h.id);
+            return (
+              <button key={h.id} className={"pill "+(on?"on":"")} onClick={()=>toggle(h.id)}
+                aria-label={(on?"Uncheck ":"Check ")+h.label}>
+                {on ? "✓ " : ""}{h.label}{st>1 ? " · "+st+"d" : ""}
+              </button>
+            );
+          })}
+        </div>
+        <button className="info-btn" style={{flex:"0 0 auto",width:34,height:34}}
+          onClick={()=>setEditing(e=>!e)} aria-label={editing ? "Done editing checklist" : "Edit checklist"}>
+          <Icon d={editing ? ICONS.check : ICONS.edit} size={16}/>
+        </button>
       </div>
 
-      {habits.map(h => {
-        const on = doneToday.indexOf(h.id) !== -1;
-        const st = habitStreak(log, h.id);
-        return (
-          <div key={h.id} className="set-row" style={{cursor:"default",alignItems:"center",gap:10}}>
-            <button onClick={()=>toggle(h.id)} aria-label={(on?"Uncheck ":"Check ")+h.label}
-              style={{flex:"0 0 auto",width:24,height:24,borderRadius:12,padding:0,
-                      border:"1px solid "+(on?"var(--amber-line)":"var(--line-2)"),
-                      background:on?"var(--amber-dim)":"transparent",
-                      color:"var(--amber-2)",fontSize:13,lineHeight:"22px"}}>
-              {on ? "✓" : ""}
-            </button>
-            <span className="set-main" style={{fontWeight:500, opacity:on?1:.75}}>{h.label}</span>
-            {st>1 && <span className="chip" style={{flex:"0 0 auto"}}>{st}d</span>}
-            {editing &&
-              <button className="pill" style={{flex:"0 0 auto"}} onClick={()=>removeHabit(h.id)}>Remove</button>}
-          </div>
-        );
-      })}
-
       {editing && <>
+        <div className="hint" style={{marginTop:10,marginBottom:0}}>
+          Tap a habit above to tick it. Remove or add below.
+        </div>
+        {habits.length>0 &&
+          <div className="pills" style={{marginTop:8}}>
+            {habits.map(h =>
+              <button key={h.id} className="pill" onClick={()=>removeHabit(h.id)}>
+                {h.label} <span style={{opacity:.6}}>&times;</span>
+              </button>)}
+          </div>}
         {unused.length>0 &&
-          <div className="pills" style={{marginTop:10}}>
-            {unused.map(s => <button key={s} className="pill" onClick={()=>addHabit(s)}>+ {s}</button>)}
+          <div className="pills" style={{marginTop:8}}>
+            {unused.map(x => <button key={x} className="pill" onClick={()=>addHabit(x)}>+ {x}</button>)}
           </div>}
         <div className="row" style={{marginTop:10}}>
           <input className="input" style={{flex:1}} value={newLabel} onChange={e=>setNewLabel(e.target.value)}
@@ -1803,10 +1825,6 @@ function DailyCard({ store }){
           <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}} onClick={()=>addHabit(newLabel)}>Add</button>
         </div>
       </>}
-
-      <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={()=>setEditing(e=>!e)}>
-        {editing ? "Done" : "Edit list"}
-      </button>
     </div>
   );
 }
