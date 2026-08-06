@@ -229,7 +229,14 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .step-btn{width:46px;height:46px;border-radius:50%;background:var(--bg-4);border:1px solid var(--line-2);
   display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:var(--ink);flex:0 0 auto;line-height:1;}
 .step-btn:active{background:var(--amber-dim);border-color:var(--amber-line);}
-.step-val{flex:1;text-align:center;background:none;border:none;outline:none;color:var(--ink);font-size:22px;font-weight:700;min-width:0;}
+/* Chris: "it only goes in increments of five - maybe I should be able to just
+   type the number." It was always an input, but styled as bare text with no
+   border and no background, so nothing said so. A dotted underline is enough
+   to read as editable without turning the logger into a form. */
+.step-val{flex:1;text-align:center;background:none;border:none;outline:none;color:var(--ink);
+  font-size:22px;font-weight:700;min-width:0;padding:4px 2px;border-radius:8px;
+  border-bottom:1px dashed var(--line-2);}
+.step-val:focus{border-bottom-color:var(--amber);background:var(--amber-dim);}
 .rest{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(26px + env(safe-area-inset-bottom));z-index:75;
   background:var(--amber);color:#241505;border-radius:999px;padding:11px 24px;font-weight:800;font-size:15px;
   box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px;border:none;}
@@ -365,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.61.0";
+const APP_VERSION = "0.62.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-06.3";
+const BUILD = "2026-08-06.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3156,7 +3163,11 @@ function Stepper({ label, value, onChange, step, min }){
     <div className="stepper">
       <span className="lbl">{label}</span>
       <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)-step))} aria-label={"Decrease "+label}>-</button>
+      {/* Select-on-focus is the part that made typing feel impossible: without
+          it, tapping a field showing 45 and typing "12" gives you 4512, because
+          the caret lands after the existing digits. Now a tap replaces. */}
       <input className="step-val" inputMode="decimal" value={String(value)}
+        onFocus={e=>{ try{ e.target.select(); }catch(_){} }}
         onChange={e=>{ const v=parseFloat(e.target.value); onChange(isNaN(v)?0:clamp(v)); }} />
       <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)+step))} aria-label={"Increase "+label}>+</button>
     </div>
