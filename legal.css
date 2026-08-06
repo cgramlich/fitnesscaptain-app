@@ -1,0 +1,47 @@
+/* Shared by privacy.html, terms.html and support.html. Palette taken from the
+   app's :root, same reasoning as welcome.html: a policy page that does not
+   look like the product reads like someone else's policy. */
+:root{
+  --bg:#16181d; --bg-2:#1c1f26; --bg-3:#242832;
+  --ink:#eef0f3; --ink-2:#c1c6cc; --ink-3:#8b93a0;
+  --amber:#e8853d; --amber-2:#f2a366; --amber-line:#e8853d55;
+  --radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{-webkit-text-size-adjust:100%;}
+body{background:var(--bg);color:var(--ink-2);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  line-height:1.6;font-size:15.5px;
+  padding:0 20px calc(56px + env(safe-area-inset-bottom));}
+.page{max-width:660px;margin:0 auto;}
+
+.top{padding:34px 0 6px;}
+.back{display:inline-block;color:var(--ink-3);text-decoration:none;font-size:14px;margin-bottom:22px;}
+.back:hover{color:var(--amber);}
+h1{color:var(--ink);font-size:clamp(26px,7vw,34px);font-weight:800;letter-spacing:-0.02em;line-height:1.2;}
+.dateline{color:var(--ink-3);font-size:13.5px;margin-top:8px;}
+.rule{width:56px;height:3px;background:var(--amber);border-radius:2px;margin:20px 0 24px;}
+
+h2{color:var(--amber);font-size:18px;font-weight:700;margin:30px 0 8px;letter-spacing:-0.01em;}
+h3{color:var(--ink);font-size:15.5px;font-weight:700;margin:20px 0 6px;}
+p{margin:0 0 12px;}
+ul{margin:0 0 14px;padding-left:20px;}
+li{margin-bottom:7px;}
+strong{color:var(--ink);font-weight:650;}
+a{color:var(--amber-2);}
+
+/* The claims worth being able to point at. */
+.note{background:var(--bg-2);border-left:3px solid var(--amber);
+  border-radius:0 var(--radius) var(--radius) 0;padding:14px 16px;margin:18px 0;}
+.note p:last-child{margin-bottom:0;}
+
+table{width:100%;border-collapse:collapse;margin:6px 0 16px;font-size:14.5px;}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #2c313b;vertical-align:top;}
+th{color:var(--ink);font-weight:650;}
+td:first-child{white-space:nowrap;color:var(--ink);}
+
+.cta{display:inline-block;background:var(--amber);color:#16181d;font-weight:800;
+  text-decoration:none;padding:13px 26px;border-radius:999px;margin-top:6px;}
+.foot{border-top:1px solid #2c313b;margin-top:40px;padding-top:18px;
+  color:var(--ink-3);font-size:12.5px;text-align:center;}
+.foot a{color:var(--ink-2);}

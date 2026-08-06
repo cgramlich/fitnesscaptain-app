@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Privacy Policy: FitnessCaptain</title>
+<meta name="description" content="What FitnessCaptain collects, where it lives, who else sees it, and how to take it back or delete it.">
+<meta name="theme-color" content="#16181d">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="legal.css">
+</head>
+<body>
+<div class="page">
+
+  <div class="top">
+    <a class="back" href="./welcome.html">Back to FitnessCaptain</a>
+    <h1>Privacy Policy</h1>
+    <p class="dateline">Effective 6 August 2026. Last updated 6 August 2026.</p>
+    <div class="rule"></div>
+  </div>
+
+  <p>FitnessCaptain is a training log. It works because you tell it what you
+    did, so almost everything in it is something you typed or photographed.
+    This page says what happens to that.</p>
+
+  <div class="note">
+    <p><strong>The short version.</strong> Your training data is yours. It is
+      not sold, not rented, not shared with advertisers, and not used to build
+      a profile of you. There are no analytics and no tracking pixels in this
+      app. You can export everything or delete the account outright from
+      Settings, and deletion is permanent.</p>
+  </div>
+
+  <h2>Who runs this</h2>
+  <p>FitnessCaptain is published by MilSpo Life LLC, a Texas limited liability
+    company, as part of the Forever Apps portfolio. Questions about anything on
+    this page go to
+    <a href="mailto:support@fitnesscaptain.com">support@fitnesscaptain.com</a>.</p>
+
+  <h2>What is collected</h2>
+
+  <h3>Because you gave it</h3>
+  <ul>
+    <li><strong>Your email address</strong>, to create the account and sign you
+      in. There is no password recovery without it.</li>
+    <li><strong>Your training</strong>: workouts, exercises, sets, reps,
+      weights, times, distances, routines, programs and any notes you write.</li>
+    <li><strong>The places you train</strong>: gyms you add and the equipment
+      you record or photograph in them.</li>
+    <li><strong>Body measurements you choose to enter</strong>: bodyweight,
+      waist, body fat, age. All optional. The app works without any of them.</li>
+    <li><strong>Daily checklist entries</strong>, if you set one up.</li>
+  </ul>
+
+  <h3>Because the software needs it to run</h3>
+  <ul>
+    <li>An account identifier and sign-in session token.</li>
+    <li>Counts of AI requests and tokens used, per month, to enforce fair use
+      limits. These are numbers only. The contents of AI requests are not
+      stored or logged.</li>
+    <li>Ordinary server logs at our hosting providers, which include IP
+      addresses, as with any website.</li>
+  </ul>
+
+  <h3>Not collected</h3>
+  <ul>
+    <li>No location data. The app never asks for GPS.</li>
+    <li>No contacts, no calendar, no microphone.</li>
+    <li>No advertising identifiers, no cross-site tracking, no analytics
+      package of any kind.</li>
+    <li>No payment details. There is nothing to buy today, and if that changes
+      a payment processor will handle card data directly.</li>
+  </ul>
+
+  <h2>Photos and video</h2>
+  <p>The gym scan reads equipment out of pictures. Two things are worth knowing
+    about how it handles them.</p>
+  <ul>
+    <li><strong>Photos are shrunk on your device before anything is sent.</strong>
+      Resizing to roughly 1024 pixels re-encodes the image, which strips the
+      embedded camera metadata, including any GPS coordinates your phone
+      attached.</li>
+    <li><strong>Video never leaves your device.</strong> When you film a
+      walkthrough, the app pulls still frames out of the file locally and sends
+      only those frames. The video itself is never uploaded.</li>
+  </ul>
+  <p>Scan images are sent to Anthropic to be read, then discarded. They are not
+    kept on our servers. What is saved is the equipment list you approve on the
+    review screen.</p>
+
+  <h2>Where it lives</h2>
+  <table>
+    <tr><th>Provider</th><th>What it holds</th></tr>
+    <tr><td>Supabase</td><td>Your account and all training data, in Postgres, hosted in the United States (us-east-1).</td></tr>
+    <tr><td>Railway</td><td>Runs the server that talks to the database and to the AI.</td></tr>
+    <tr><td>GitHub Pages</td><td>Serves the app itself. Static files only, no user data.</td></tr>
+  </table>
+
+  <h2>Who else sees your data</h2>
+  <p>Only these, only for the job named, and none of them for advertising.</p>
+  <table>
+    <tr><th>Service</th><th>What it receives, and when</th></tr>
+    <tr><td>Anthropic</td>
+        <td>When you use an AI feature, the data that feature needs is sent to
+          Anthropic's API to produce the answer. Which data depends on the
+          feature: planning a session sends your gym's equipment, your exercise
+          library and your recent training; reading a gym photo sends the
+          photo. It is sent through our server, so your account identity is not
+          passed on.</td></tr>
+    <tr><td>Resend</td>
+        <td>Your email address, to deliver confirmation and password reset
+          messages. Nothing about your training.</td></tr>
+    <tr><td>YouTube</td>
+        <td>Demo videos are searched by <em>exercise name</em> only, never by
+          anything about you. Videos embed through youtube-nocookie.com, which
+          does not set tracking cookies until you press play.</td></tr>
+    <tr><td>Google Fonts, Cloudflare, jsDelivr</td>
+        <td>Your IP address, because the page loads fonts and code libraries
+          from them, the same as any website that uses a CDN.</td></tr>
+  </table>
+
+  <div class="note">
+    <p>What none of them get is a copy of your log to keep, and what nobody
+      gets is your data in exchange for money. There is no data broker in this
+      list because there is no data broker.</p>
+  </div>
+
+  <h2>How long it is kept</h2>
+  <p>Your data stays until you delete it. There is no automatic expiry, because
+    a training log is worth more the longer it runs. If you delete your
+    account, it goes immediately and permanently, including from backups on
+    our providers' normal backup cycle.</p>
+
+  <h2>What you can do</h2>
+  <ul>
+    <li><strong>Export everything.</strong> Settings has an export that writes
+      your whole log to a JSON file on your device. No request, no waiting.</li>
+    <li><strong>Delete the account.</strong> Settings has a permanent delete
+      that removes your training data and your sign-in. It cannot be undone,
+      so export first if you want a copy.</li>
+    <li><strong>Correct anything.</strong> Every record in the app is editable
+      by you at any time.</li>
+    <li><strong>Ask a person.</strong> If you would rather someone did it for
+      you, or you want to know exactly what is held,
+      <a href="mailto:support@fitnesscaptain.com">email support</a>.</li>
+  </ul>
+  <p>Depending on where you live, you may have additional rights over your data
+    under laws such as the GDPR or the CCPA, including the right to access,
+    correct, delete or port it, and the right not to be discriminated against
+    for exercising them. The two buttons above are how those rights are
+    exercised here, and email covers anything they do not.</p>
+
+  <h2>Security</h2>
+  <p>Sign-in is handled by Supabase Auth, so passwords are never seen by this
+    app or stored on our servers. Traffic runs over HTTPS. Database access is
+    restricted to the server: the database refuses direct reads and writes from
+    browsers entirely, so a stolen client key gets an attacker nothing.</p>
+  <p>No system is perfect and it would be dishonest to promise otherwise. If
+    something goes wrong that affects your data, you will be told what happened
+    rather than left to read about it.</p>
+
+  <h2>Children</h2>
+  <p>FitnessCaptain is not intended for children under 13, and accounts are not
+    knowingly created for them. If you believe a child has created one, email
+    support and it will be removed.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>If this changes in a way that affects what happens to your data, the date
+    at the top changes and the app tells you. Quiet edits to a privacy policy
+    are a bad habit and this one will not make them.</p>
+
+  <p class="foot">
+    <a href="./welcome.html">FitnessCaptain</a> &middot;
+    <a href="./terms.html">Terms</a> &middot;
+    <a href="./support.html">Support</a><br>
+    A Forever Apps project by MilSpo Life LLC
+  </p>
+</div>
+</body>
+</html>

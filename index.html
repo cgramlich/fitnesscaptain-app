@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.66.0";
+const APP_VERSION = "0.67.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -1690,7 +1690,18 @@ function AuthScreen({ store }){
       </div>
       {mode==="in" &&
         <button className="auth-forgot" disabled={busy} onClick={forgot}>Forgot password?</button>}
-      <p className="hint center" style={{marginTop:18,opacity:.6}}>v{APP_VERSION}</p>
+      {/* Reachable BEFORE the account exists, not just from Settings after.
+          Someone deciding whether to hand over an email address is exactly
+          who needs the privacy policy, and every app store requires a link
+          from the sign-up screen itself. */}
+      <p className="hint center" style={{marginTop:18}}>
+        <a href="privacy.html" target="_blank" rel="noopener" style={{color:"var(--ink-3)"}}>Privacy</a>
+        {" · "}
+        <a href="terms.html" target="_blank" rel="noopener" style={{color:"var(--ink-3)"}}>Terms</a>
+        {" · "}
+        <a href="support.html" target="_blank" rel="noopener" style={{color:"var(--ink-3)"}}>Support</a>
+      </p>
+      <p className="hint center" style={{marginTop:8,opacity:.6}}>v{APP_VERSION}</p>
     </div>
   );
 }
@@ -6544,6 +6555,62 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
       try{ window.prompt("Copy the log:", text); }catch(_){}
     }
   };
+  /* EXPORT. Everything the account holds, in one file, written on the device.
+     Deliberately not a server job with an email: the whole point is that
+     getting your data back should not require asking anyone. */
+  const [delPhase, setDelPhase] = useState("idle");   // idle | confirm | busy
+  const [delWord, setDelWord]   = useState("");
+  const [delErr, setDelErr]     = useState("");
+
+  const exportData = () => {
+    try{
+      const payload = {
+        app: "FitnessCaptain", version: APP_VERSION,
+        exportedAt: nowISO(), account: store.authEmail || null,
+        workouts:  store.data.workouts  || [],
+        exercises: store.data.exercises || [],
+        routines:  store.data.routines  || [],
+        meta:      store.data.meta      || {},
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "fitnesscaptain-" + todayStr() + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(_){} }, 1000);
+      log("EXPORT","exported "+(payload.workouts.length)+" workouts");
+    }catch(e){ log("ERROR","export: "+e.message); }
+  };
+
+  const deleteAccount = async () => {
+    setDelErr(""); setDelPhase("busy");
+    try{
+      const token = await authToken();
+      if(!token) throw new Error("Not signed in.");
+      const r = await fetch(API_BASE + "/api/account", {
+        method:"DELETE",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ confirm:"DELETE" }),
+      });
+      if(!r.ok){
+        let msg = "Delete failed ("+r.status+").";
+        try{ const j = await r.json(); if(j && j.detail) msg = j.detail; }catch(_){}
+        throw new Error(msg);
+      }
+      /* The rows are gone server-side, so the local copy has to go too before
+         signing out. Leaving it would let the cache resurrect a deleted log on
+         the next launch, which would be a bad thing to discover. */
+      try{ localStorage.clear(); }catch(_){}
+      log("ACCOUNT","account deleted");
+      await store.signOut();
+      try{ location.reload(); }catch(_){}
+    }catch(e){
+      setDelErr(e.message || "Couldn't delete the account.");
+      setDelPhase("confirm");
+      log("ERROR","account delete: "+e.message);
+    }
+  };
+
   const setUnits = (u) => store.saveCfg({ ...store.cfg, units: u });
   return (
     <div>
@@ -6592,6 +6659,58 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
             </button>
           ))}
         </div>
+      </div>
+
+      {/* YOUR DATA. The Privacy Policy promises both of these are reachable
+          without emailing anyone, so they have to exist here. A policy that
+          describes a right nobody implemented is worse than no policy. */}
+      <div className="set-group">Your data</div>
+      <div className="card">
+        <div className="subtle" style={{marginBottom:10}}>
+          Everything you have logged, as a file you keep. No request, no waiting.
+        </div>
+        <button className="btn btn-ghost btn-block" onClick={exportData}>
+          <Icon d={ICONS.text} size={15}/> Export my data
+        </button>
+
+        <div className="subtle" style={{marginTop:18,marginBottom:10}}>
+          Deleting removes your training and your sign-in, permanently. Export
+          first if you want a copy.
+        </div>
+        {delPhase === "idle" &&
+          <button className="btn btn-ghost btn-block" onClick={()=>setDelPhase("confirm")}>
+            <Icon d={ICONS.trash} size={15}/> Delete my account
+          </button>}
+        {delPhase === "confirm" &&
+          <div>
+            {/* Typing the word, not a second tap. The undo that covers a
+                mis-swiped workout cannot cover this one, so the gesture has to
+                be one you cannot make by accident. */}
+            <div className="subtle" style={{marginBottom:8}}>
+              Type <strong>DELETE</strong> to confirm. This cannot be undone.
+            </div>
+            <input className="input" value={delWord} autoFocus
+              onChange={e=>setDelWord(e.target.value)} placeholder="DELETE" />
+            <div className="row" style={{gap:8,marginTop:10}}>
+              <button className="btn btn-ghost btn-sm" style={{flex:1}}
+                onClick={()=>{ setDelPhase("idle"); setDelWord(""); setDelErr(""); }}>Keep my account</button>
+              <button className="btn btn-primary btn-sm" style={{flex:1}}
+                disabled={delWord.trim().toUpperCase()!=="DELETE"}
+                onClick={deleteAccount}>Delete forever</button>
+            </div>
+          </div>}
+        {delPhase === "busy" && <div className="row center" style={{marginTop:6}}><span className="spin"></span></div>}
+        {delErr && <div className="auth-msg err" style={{marginTop:10}}>{delErr}</div>}
+      </div>
+
+      <div className="set-group">Legal</div>
+      <div className="card">
+        <a className="btn btn-ghost btn-block" href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+        <a className="btn btn-ghost btn-block" style={{marginTop:8}} href="terms.html" target="_blank" rel="noopener">Terms of Use</a>
+        <a className="btn btn-ghost btn-block" style={{marginTop:8}} href="support.html" target="_blank" rel="noopener">Support</a>
+        <p className="hint center" style={{marginTop:10,marginBottom:0}}>
+          Questions to support@fitnesscaptain.com
+        </p>
       </div>
 
       <div className="set-group">About</div>
