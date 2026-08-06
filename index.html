@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.59.0";
+const APP_VERSION = "0.60.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-06.1";
+const BUILD = "2026-08-06.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6021,8 +6021,38 @@ function ExerciseProgress({ stat, units, onClose }){
   );
 }
 
+/* Which tags count as a problem worth isolating. WARN is included because a
+   silent fallback (a bad env value, a rejected match) is exactly the kind of
+   thing you want to see when something "seems fine but is not". */
+const PROBLEM_TAGS = ["ERROR", "WARN"];
+
 function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate }){
+  const [logProblems, setLogProblems] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [showLog, setShowLog] = useState(false);
+
+  const problems = LOG.filter(l => PROBLEM_TAGS.indexOf(l.tag) !== -1);
+  const errCount = problems.length;
+  const shownLog = (logProblems ? problems : LOG).slice(-120);
+
+  /* Copies what is ON SCREEN, so "problems only" then Copy gives exactly the
+     problems. Header carries version and build - a log without them is a log
+     nobody can act on. Falls back to a selectable prompt where the clipboard
+     API is unavailable (older iOS in standalone mode) rather than failing
+     silently. */
+  const copyLog = async () => {
+    const NL = String.fromCharCode(10);
+    const header = "FitnessCaptain v" + APP_VERSION + " (build " + BUILD + ")"
+                 + (logProblems ? " - problems only" : "") + NL;
+    const body = shownLog.map(l => l.t + " [" + l.tag + "] " + l.msg).join(NL);
+    const text = header + (body || "(nothing logged)");
+    try{
+      await navigator.clipboard.writeText(text);
+      setCopied(true); setTimeout(()=>setCopied(false), 1800);
+    }catch(e){
+      try{ window.prompt("Copy the log:", text); }catch(_){}
+    }
+  };
   const setUnits = (u) => store.saveCfg({ ...store.cfg, units: u });
   return (
     <div>
@@ -6082,19 +6112,41 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
       </div>
       <p className="hint center" style={{marginTop:6}}>FitnessCaptain v{APP_VERSION}</p>
 
+      {/* Chris: "it would be great if we had the log design like the other
+          apps where you can copy a block, or show just problems and then copy
+          that." Reading a log off a phone screen and retyping it is the worst
+          part of reporting a fault, and the ONE line that matters is usually
+          buried in forty that do not. */}
       <div className="set-group">Diagnostics</div>
       <div className="card">
         <button className="btn btn-ghost btn-block" onClick={()=>setShowLog(s=>!s)}>{showLog ? "Hide" : "Show"} log</button>
-        {showLog &&
-          <div className="subtle" style={{marginTop:10}}>v{APP_VERSION} (build {BUILD}) - newest at the bottom, {LOG.length} lines</div>}
-        {showLog &&
+        {showLog && <>
+          <div className="row" style={{marginTop:10}}>
+            <button className={"btn btn-sm "+(logProblems ? "btn-primary" : "btn-ghost")} style={{flex:1}}
+              onClick={()=>setLogProblems(v=>!v)}>
+              {logProblems ? "Showing problems" : "Problems only"}
+              {errCount>0 ? " ("+errCount+")" : ""}
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={copyLog}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <div className="subtle" style={{marginTop:10}}>
+            v{APP_VERSION} (build {BUILD}), newest at the bottom.{" "}
+            {logProblems
+              ? (errCount ? errCount + " problem" + (errCount===1?"":"s") : "No problems logged")
+              : LOG.length + " lines"}
+          </div>
           <div className="log" style={{marginTop:12}}>
-            {LOG.slice(-120).map((l,i)=>(
-              <div key={i} className={l.tag==="ERROR"?"err":""}>
-                <span className="t">{l.t} </span><span className="tag">[{l.tag}]</span> {l.msg}
-              </div>
-            ))}
-          </div>}
+            {shownLog.length === 0
+              ? <div className="subtle">Nothing to show. That is the good outcome.</div>
+              : shownLog.map((l,i)=>(
+                  <div key={i} className={PROBLEM_TAGS.indexOf(l.tag)!==-1 ? "err" : ""}>
+                    <span className="t">{l.t} </span><span className="tag">[{l.tag}]</span> {l.msg}
+                  </div>
+                ))}
+          </div>
+        </>}
       </div>
     </div>
   );
