@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.65.0";
+const APP_VERSION = "0.66.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2960,12 +2960,307 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
   );
 }
 
+/* ============================================================
+   TODAY'S SESSION - "I'm at this gym, I've got 40 minutes, arms and back
+   plus a bit of cardio. Build me something."
+
+   The Program Builder next door designs a WEEK from a form. This is the
+   other half of the job and it could not be a form, because the useful part
+   is the second sentence: someone is on the cable stack, the shoulder is
+   cranky, make it shorter, I did back yesterday. A form takes one shot and
+   makes you start over; a conversation re-plans.
+
+   WHAT IT KNOWS BEFORE YOU TYPE. The opening question in a chat like this is
+   normally "which gym, how long, what are you training?" - all three of
+   which the app already knows. So the gym and the time are pickers set from
+   your last session, the inventory and library go in as context, and the
+   first thing you say can be the only thing you say.
+
+   THE PLAN IS DATA, NOT PROSE. Each reply may carry a fenced ```plan block
+   the app parses into a real card with a Start button. The block is stripped
+   before the text is shown, and the RAW reply goes back into history so the
+   model can revise what it actually proposed rather than a summary of it.
+   ============================================================ */
+const SESSION_MINS = [20, 30, 45, 60, 75, 90];
+
+function parsePlan(text){
+  const m = String(text||"").match(/```plan\s*([\s\S]*?)```/);
+  if(!m) return { body: String(text||"").trim(), plan: null };
+  let plan = null;
+  try{
+    const j = JSON.parse(m[1].trim());
+    const items = Array.isArray(j.items) ? j.items.filter(it => it && it.name) : [];
+    if(items.length) plan = { name: String(j.name||"Today's session").slice(0,60), items };
+  }catch(e){ /* a malformed block is not worth failing the message over */ }
+  return { body: String(text||"").replace(m[0], "").trim(), plan };
+}
+
+function SessionBuilderLayer({ store, onClose, onStart }){
+  const gyms = store.gyms || [];
+  const [gymId, setGymId] = useState(
+    (gyms.find(g => g.id === store.cfg.lastGymId) || gyms[0] || {}).id || null);
+  const [mins, setMins]   = useState(45);
+  const [msgs, setMsgs]   = useState([]);      // [{role:"user"|"ai", body, plan, raw}]
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy]   = useState(false);
+  const [err, setErr]     = useState("");
+  const endRef = useRef(null);
+
+  const gym = gyms.find(g => g.id === gymId) || null;
+
+  useEffect(() => { if(endRef.current) endRef.current.scrollIntoView({behavior:"smooth", block:"end"}); },
+            [msgs.length, busy]);
+
+  /* Everything the coach needs that the user should not have to type. Recent
+     history matters most: proposing back on the day after a heavy back
+     session is the single most obvious way for this to look stupid. */
+  const context = () => {
+    const lines = [];
+    lines.push("Time available: " + mins + " minutes, including warm-up.");
+    if(gym){
+      lines.push("Training at: " + gym.name + " (" + (gym.kind||"gym") + ").");
+      const equip = (gym.equipment||[]).join(", ");
+      const inv = gym.inventory ? String(gym.inventory).replace(/\s+/g," ").slice(0,1500) : "";
+      if(equip || inv){
+        lines.push("Equipment actually present - prescribe ONLY what this supports: " +
+                   equip + (inv ? ". " + inv : "") + ".");
+      }else{
+        lines.push("No inventory recorded for this gym, so keep to equipment any gym has, " +
+                   "and say which pieces you assumed.");
+      }
+    }else{
+      lines.push("No gym selected - assume bodyweight, dumbbells, a bench and one cardio machine.");
+    }
+    // Last 7 days, so it can avoid hammering the same tissue twice.
+    const cutoff = new Date(Date.now() - 7*864e5).toISOString().slice(0,10);
+    const recent = (store.data.workouts||[])
+      .filter(w => w.endedAt && String(w.date) >= cutoff)
+      .sort((a,b)=> String(b.date).localeCompare(String(a.date)))
+      .slice(0,8);
+    if(recent.length){
+      const byId = {}; (store.data.exercises||[]).forEach(x => { byId[x.id] = x; });
+      const summary = recent.map(w => {
+        const groups = [];
+        (w.entries||[]).forEach(e => {
+          const g = (byId[e.exerciseId]||{}).muscleGroup;
+          if(g && groups.indexOf(g) === -1) groups.push(g);
+        });
+        return w.date + ": " + (groups.join("/") || (w.name||"session"));
+      });
+      lines.push("Trained in the last 7 days - do not hammer the same tissue two days " +
+                 "running: " + summary.join("; ") + ".");
+    }else{
+      lines.push("No sessions logged in the last 7 days.");
+    }
+    const names = (store.data.exercises||[]).map(x=>x.name);
+    if(names.length){
+      lines.push("Their exercise library - when a movement matches one of these, use that " +
+                 "name EXACTLY: " + names.slice(0,400).join(", ") + ".");
+    }
+    const age = Number(store.cfg.age) > 0 ? Number(store.cfg.age) : null;
+    const trend = weightTrend(store);
+    if(age) lines.push("Age " + age + ".");
+    if(trend && trend.losing){
+      lines.push("Currently losing weight at about " + trend.pctPerWeek + "% of bodyweight per week.");
+    }
+    return lines.join("\n");
+  };
+
+  /* Same line every AI surface in this app holds: it coaches training and
+     says nothing about calories, protein or medication. */
+  const system =
+    "You are a strength and conditioning coach planning ONE session for today, in " +
+    "conversation. Keep replies SHORT - two or three sentences of reasoning at most, " +
+    "no headings, no bullet lists of the plan in prose. The plan itself goes in the " +
+    "block described below, so do not repeat it in the text.\n\n" +
+    "Ask a clarifying question ONLY if you genuinely cannot proceed. Time, gym, " +
+    "equipment and recent history are given to you - never ask for those. If the " +
+    "request is vague, make a sensible call, propose it, and say what you assumed.\n\n" +
+    "Cover any kind of training asked for: lifting, cardio, intervals, Pilates, " +
+    "mobility, rehab-ish easy work. Not everything is barbells.\n\n" +
+    "BUDGET THE TIME HONESTLY. Roughly 3 minutes per strength set including rest, " +
+    "plus warm-up. It is better to prescribe less and finish than to write a session " +
+    "nobody completes. Say the realistic total.\n\n" +
+    "When you are proposing a session, END the reply with a fenced block exactly like:\n" +
+    "```plan\n" +
+    "{\"name\":\"Arms and back + easy cardio\",\"items\":[" +
+    "{\"name\":\"Chest Supported Row\",\"type\":\"strength\",\"targetSets\":3,\"targetReps\":10," +
+    "\"note\":\"leave 2 in the tank\"}," +
+    "{\"name\":\"Treadmill Incline Walk - 10 min\",\"type\":\"cardio\",\"targetSets\":0,\"targetReps\":0}]}\n" +
+    "```\n" +
+    "type is strength, cardio or mobility. Strength items get real targetSets and " +
+    "targetReps; cardio and mobility use 0 and 0 and carry their duration in the name " +
+    "(e.g. 'Rower Intervals - 12 min'). note is optional and at most 8 words. " +
+    "Re-issue the WHOLE block every time you revise it. Omit the block only when you " +
+    "are asking a question.\n\n" +
+    "Do NOT give calorie, protein, macro or medication advice.";
+
+  const send = async (textIn) => {
+    const text = String(textIn == null ? draft : textIn).trim();
+    if(!text || busy) return;
+    setErr(""); setDraft("");
+    const mine = { role:"user", body:text, raw:text, plan:null };
+    const history = msgs.concat([mine]);
+    setMsgs(history); setBusy(true);
+    try{
+      /* The FIRST user turn carries the context. Later turns do not repeat it -
+         it is already up the thread, and re-sending a 400-name library on every
+         "make it shorter" would triple the cost of the cheapest turns. */
+      const wire = history.map((m,i) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: (i === 0 && m.role === "user") ? (context() + "\n\nRequest: " + m.raw) : m.raw,
+      }));
+      const out = await aiRelay("session_design", wire, { system, maxTokens: 2000 });
+      const { body, plan } = parsePlan(out);
+      setMsgs(h => h.concat([{ role:"ai", body: body || "Here's a plan.", raw: out, plan }]));
+      log("AI", "session_design turn " + history.length + (plan ? " (plan)" : ""));
+    }catch(e){
+      setErr(e.message || "Couldn't reach the coach.");
+      setMsgs(h => h.slice(0, -1));         // put their message back in the box
+      setDraft(text);
+      log("ERROR", "session_design: " + e.message);
+    }finally{ setBusy(false); }
+  };
+
+  /* Straight into a live workout, matching createFromRoutine's entry shape so
+     the logger cannot tell where the session came from. Names are resolved
+     against the library so a planned "Chest Supported Row" logs against the
+     same record as every previous one and keeps its history. */
+  const startPlan = (plan) => {
+    const lib = {};
+    (store.data.exercises||[]).forEach(x => { lib[normName(x.name)] = x; });
+    const entries = plan.items.map(it => {
+      const hit = lib[normName(it.name)];
+      const type = ["strength","cardio","mobility"].includes(it.type) ? it.type : "strength";
+      return { id: uid(), exerciseId: hit ? hit.id : null, name: hit ? hit.name : String(it.name).slice(0,80),
+               type: hit ? (hit.type||type) : type, sets: [], cardio: null,
+               targetSets: Number(it.targetSets)||0, targetReps: Number(it.targetReps)||0,
+               note: it.note ? String(it.note).slice(0,60) : undefined };
+    });
+    onStart({ name: plan.name, gym, entries });
+  };
+
+  // Index of the newest message CARRYING A PLAN. Declared here, below the
+  // state it reads - a const that reaches above its useState compiles clean
+  // and blanks the whole screen at runtime.
+  let lastPlanIdx = -1;
+  msgs.forEach((m,i) => { if(m.plan) lastPlanIdx = i; });
+
+  const STARTERS = [
+    "Arms and back, plus a little cardio",
+    "Legs, nothing that wrecks my knees",
+    "Short full body, I'm short on time",
+    "Easy day - mobility and a walk",
+  ];
+
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>Today's session</h2>
+        </div>
+
+        {/* The two facts that change every session sit at the top as controls,
+            not questions. Everything else it reads from your data. */}
+        <div className="row" style={{gap:8,marginTop:10,flexWrap:"wrap"}}>
+          {gyms.length > 0 &&
+            <select className="input" style={{flex:"1 1 150px",minWidth:0}} value={gymId||""}
+                    onChange={e=>setGymId(e.target.value||null)} disabled={msgs.length>0}>
+              {gyms.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              <option value="">No fixed gym</option>
+            </select>}
+          <select className="input" style={{flex:"0 1 120px"}} value={mins}
+                  onChange={e=>setMins(Number(e.target.value))} disabled={msgs.length>0}>
+            {SESSION_MINS.map(m => <option key={m} value={m}>{m} min</option>)}
+          </select>
+        </div>
+        {msgs.length>0 &&
+          <p className="hint" style={{marginTop:6,marginBottom:0}}>
+            Ask for a change below - shorter, different kit, sore shoulder - and it re-plans.
+          </p>}
+
+        {msgs.length===0 &&
+          <>
+            <p className="hint" style={{marginTop:12}}>
+              Say what you feel like doing. It knows the kit at {gym ? gym.name : "your gym"},
+              what you've trained this week, and how long you've got.
+            </p>
+            <div className="row" style={{flexDirection:"column",gap:8,marginTop:10}}>
+              {STARTERS.map(s =>
+                <button key={s} className="btn btn-ghost btn-sm" style={{textAlign:"left"}}
+                        onClick={()=>send(s)} disabled={busy}>{s}</button>)}
+            </div>
+          </>}
+
+        {msgs.map((m,i) => (
+          <div key={i} style={{marginTop:14}}>
+            <div className="set-group" style={{marginBottom:6}}>{m.role==="user" ? "You" : "Coach"}</div>
+            {m.body && <p style={{margin:0,whiteSpace:"pre-wrap",color: m.role==="user" ? "var(--ink-2)" : "var(--ink-1)"}}>{m.body}</p>}
+            {m.plan &&
+              <div className="card" style={{marginTop:10}}>
+                <div className="item-title" style={{marginBottom:8}}>{m.plan.name}</div>
+                {m.plan.items.map((it,j) => (
+                  <div key={j} className="row" style={{justifyContent:"space-between",gap:10,
+                       padding:"7px 0",borderTop: j? "1px solid var(--line-1)":"none"}}>
+                    <div style={{minWidth:0}}>
+                      <div style={{fontSize:14}}>{it.name}</div>
+                      {it.note && <div className="hint" style={{margin:0}}>{it.note}</div>}
+                    </div>
+                    <div className="hint" style={{margin:0,whiteSpace:"nowrap"}}>
+                      {Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
+                        : (it.type==="cardio" ? "cardio" : "mobility")}
+                    </div>
+                  </div>
+                ))}
+                {/* Startable = the NEWEST plan, which is not the same as the
+                    newest message. Keying off msgs.length-1 meant a clarifying
+                    question after a plan ("which shoulder?") removed the Start
+                    button altogether and labelled every plan superseded, so the
+                    session you had just agreed to became unreachable and you
+                    had to ask for it again. Caught in the harness. */}
+                {i === lastPlanIdx
+                  ? <button className="btn btn-primary btn-block" style={{marginTop:12}}
+                            onClick={()=>startPlan(m.plan)} disabled={busy}>
+                      <Icon d={ICONS.plus} size={16}/> Start this workout
+                    </button>
+                  : <p className="hint center" style={{marginTop:10,marginBottom:0}}>Replaced by the version below</p>}
+              </div>}
+          </div>
+        ))}
+
+        {busy && <div className="row center" style={{marginTop:16}}><span className="spin"></span></div>}
+        {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
+
+        <div ref={endRef} />
+
+        <div className="row" style={{gap:8,marginTop:16,alignItems:"flex-end"}}>
+          <textarea className="input" rows={2} style={{flex:1,resize:"none"}}
+            placeholder={msgs.length ? "Make it shorter, swap the cables..." : "What are you in the mood for?"}
+            value={draft} onChange={e=>setDraft(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }} />
+          <button className="btn btn-primary" onClick={()=>send()} disabled={busy || !draft.trim()}>Send</button>
+        </div>
+        <p className="hint center" style={{marginTop:8}}>
+          A coach, not a doctor. Nothing here is medical or nutrition advice.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* GYM SCAN - photos + receipts/order screenshots -> vision AI -> reviewed
    items merge into the gym's inventory. Review-before-save is the load-
    bearing step: vision miscounts (the Dallas double-kettlebell) get fixed
    here. Photos are canvas-downscaled to ~1024px JPEG on-device, which also
    strips EXIF/GPS before anything is uploaded. z-bumped over GymDetail. */
-const SCAN_MAX_IMAGES = 8;
+/* 16, not 8. Frames are sampled evenly across the clip, so the cap sets how
+   far apart they land: at 8, a one-minute walk round the room gave a frame
+   every 7.5 seconds, which is most of the way across a gym floor - whole
+   racks fell between samples. At 16 that halves to 3.75s. The frames
+   themselves are cheap (29-74KB each, measured), so the real cost is vision
+   tokens per scan, and missing the equipment defeats the point of scanning. */
+const SCAN_MAX_IMAGES = 16;
 function GymScanLayer({ store, gym, onClose, onSaved }){
   const [phase, setPhase] = useState("pick");    // pick | busy | review
   const [imgs, setImgs] = useState([]);          // [{b64, thumb}]
@@ -6413,6 +6708,11 @@ function AddSheet({ hasRoutines, active, onPick, onClose }){
           t2={active ? "You have one in progress" : "Jump straight in - log as you go"} />
         {hasRoutines &&
           <Item what="fromRoutine" icon={ICONS.repeat} t1="Start from a routine" t2="Pick a routine, get a pre-filled workout" />}
+        {/* Above the divider with the other ways INTO a workout, not down with
+            the program tools - this ends in you training in the next minute,
+            whereas building a program ends in a plan for the week. */}
+        <Item what="planToday" icon={ICONS.sparkle} t1="Plan today's workout"
+              t2="Tell it your time and mood, get a session" />
         <div className="sheet-div"></div>
         {/* Program creation lives here too. At the foot of the Routines list
             it scrolls out of reach once you own a few routines - which is
@@ -6560,10 +6860,33 @@ function App(){
   };
   const startHere = (g) => { setGymView(null); setTab("workouts"); startWorkout(g); };
 
+  /* An AI-planned session becomes a live workout directly. It deliberately
+     does NOT become a routine first: this is one day's answer to "what should
+     I do right now", and saving every one of them would silt up the routines
+     list with near-duplicates. Finish it and "Save as routine" is already
+     there if it turns out to be a keeper.
+
+     The existing-workout guard is the same one startRoutine uses, minus the
+     substitution check - the planner designed against this gym's inventory in
+     the first place, so there is nothing to reconcile. */
+  const [sessionBuilder, setSessionBuilder] = useState(false);
+  const startPlanned = ({ name, gym, entries }) => {
+    const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
+    if(existing){ setSessionBuilder(false); setTab("workouts"); setWorkoutId(existing.id); return; }
+    const w = { id: uid(), name: name || dayPartName(), date: todayStr(), startedAt: nowISO(),
+                endedAt: null, durationMin: 0, notes: "", entries,
+                gymId: gym ? gym.id : null, gymName: gym ? gym.name : null };
+    store.saveCollection("workouts", [w, ...(store.data.workouts||[])]);
+    if(gym) store.saveCfg({ ...store.cfg, lastGymId: gym.id });
+    setSessionBuilder(false); setTab("workouts"); setWorkoutId(w.id);
+    log("BUILD","planned session started ("+entries.length+" items)");
+  };
+
   // Center-+ ActionSheet dispatch. Every pick maps onto an existing flow.
   const pickAdd = (what) => {
     setAddSheet(false);
     if(what==="start"){ setTab("workouts"); startWorkout(); }
+    else if(what==="planToday"){ setSessionBuilder(true); }
     else if(what==="fromRoutine"){ setTab("routines"); }
     else if(what==="exercise"){ setExSheet({exercise:null}); }
     else if(what==="gym"){ setGymSheet({gym:null}); }
@@ -6915,6 +7238,9 @@ function App(){
             showToast(progName
               ? progName+" is ready - your next day is on the home screen"
               : "Added "+nr+" routine"+(nr===1?"":"s")+(nx>0 ? " + "+nx+" new exercise"+(nx===1?"":"s") : "")); }} />}
+
+      {sessionBuilder &&
+        <SessionBuilderLayer store={store} onClose={()=>setSessionBuilder(false)} onStart={startPlanned} />}
 
       {!inSettings &&
         <nav className="nav">
