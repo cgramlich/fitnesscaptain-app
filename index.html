@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.57.0";
+const APP_VERSION = "0.58.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-04.2";
+const BUILD = "2026-08-04.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1519,7 +1519,16 @@ function PwInput({ value, onChange, placeholder, autoComplete, onEnter }){
    AUTH SCREEN - sign in / sign up / forgot password
    ============================================================ */
 function AuthScreen({ store }){
-  const [mode, setMode] = useState("in");     // in | up
+  /* Arriving from the landing page's "Start free" should START something.
+     The app opened on SIGN IN, so a first-time visitor met a form for an
+     account they do not have and had to find the switch - the whole funnel
+     leaking at the last step. welcome.html links to ./?signup=1 and that
+     lands on Create account instead. Anyone else still gets sign in, which
+     is right: returning users are the common case. */
+  const [mode, setMode] = useState(() => {
+    try{ return new URLSearchParams(location.search).get("signup") ? "up" : "in"; }
+    catch(e){ return "in"; }
+  });                                        // in | up
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
