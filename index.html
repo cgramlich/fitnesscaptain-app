@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.63.0";
+const APP_VERSION = "0.64.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-06.5";
+const BUILD = "2026-08-06.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -787,20 +787,38 @@ function setsLine(sets, units){
   // the number and its unit.
   return ss.map((s,i) => {
     const e = effortOf(s.effort);
-    return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "") + (e ? " "+e.label : "");
+    // Text-only context (the "Last time" line), so the word rather than the face.
+    return s.reps + " x " + fmtW(s.weight) + (i===ss.length-1 ? " "+units : "")
+         + (e ? " (" + e.label.toLowerCase() + ")" : "");
   }).join(", ") + (more > 0 ? " +" + more + " more" : "");
 }
 /* What to do with this weight next time, not how it felt. Two marks and a
    silence: green up = go heavier, red down = too heavy, nothing = hold.
    Describing effort in four words was more vocabulary than the decision
    needs, and the decision is the only part that changes what you lift. */
+/* Chris: "I'd like it to default as a thumbs up if the set is finished, and if
+   it was easy, maybe a green smiley face, and if it was a struggle or fail,
+   maybe a sad red face."
+
+   This reverses the v0.26.0 call, which deliberately moved from FEELING to
+   DIRECTION - green up for heavier, red down for lighter - on the grounds
+   that the decision is the only part that changes what you lift. He is right
+   to come back to it: how a set felt is what you actually remember, and it is
+   what you can answer honestly a minute later. The decision still falls out
+   of it, so the progression nudge is unchanged - easy means go heavier, a
+   struggle means go lighter.
+
+   Three states, and the default is no longer silence: a finished set shows a
+   thumbs up. Silence read as "I forgot to tag it"; a thumb reads as "that was
+   the job, done". */
 const EFFORTS = [
-  { k:"up",   label:"↑", short:"Heavier", cls:"green" },
-  { k:"fail", label:"↓", short:"Lighter", cls:"red"   },
+  { k:"easy", label:"Easy",     icon:"smile", cls:"green" },
+  { k:"hard", label:"Struggle", icon:"frown", cls:"red"   },
 ];
-// Older records used easy/solid/hard/fail. Map them onto the two marks so
-// nothing already logged or imported loses meaning.
-const EFFORT_ALIAS = { easy:"up", up:"up", fail:"fail", solid:null, hard:null };
+/* Records already logged used up/fail (and older ones easy/solid/hard). Map
+   them all onto the two marks so nothing imported or logged loses meaning -
+   his real history has both spellings in it. */
+const EFFORT_ALIAS = { easy:"easy", up:"easy", hard:"hard", fail:"hard", solid:null };
 const effortKey = k => (k && EFFORT_ALIAS[k]) || null;
 const effortOf = k => EFFORTS.find(e => e.k === effortKey(k)) || null;
 // Epley estimated one-rep max; at 1 rep the lift IS the max.
@@ -1488,6 +1506,9 @@ const ICONS = {
   image:   ["M3 5h18v14H3z","M3 16l5-5 4 4 3-3 6 6"],
   up:      ["M12 19V5","M5 12l7-7 7 7"],
   check:   ["M20 6L9 17l-5-5"],
+  smile:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 14a4.6 4.6 0 0 0 7.6 0","M9 9.5h.01","M15 9.5h.01"],
+  frown:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 16a4.6 4.6 0 0 1 7.6 0","M9 9.5h.01","M15 9.5h.01"],
+  thumbUp: ["M7 22V11","M11 11V6a2.5 2.5 0 0 1 5 0c0 1.6-.6 3-1.3 4H19a2 2 0 0 1 2 2.3l-1 6A2 2 0 0 1 18 20H7"],
   text:    ["M5 5h14","M5 10h14","M5 15h9"],
 };
 
@@ -3358,13 +3379,13 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
     const marks = atTop.map(s => effortKey(s.effort));
     // A red down mark is a decision, so act on it: offer the lighter weight
     // rather than merely declining to push.
-    if(marks.indexOf("fail") !== -1){
+    if(marks.indexOf("hard") !== -1){
       const down = heavy - wStep;
       return down > 0 && weight !== down ? { weight: down, dir:"down" } : null;
     }
     const goal = Number(entry.targetReps)>0 ? Number(entry.targetReps) : 12;
     const hitGoal = Math.max.apply(null, atTop.map(s=>Number(s.reps)||0)) >= goal;
-    if(marks.indexOf("up") === -1 && !hitGoal) return null;
+    if(marks.indexOf("easy") === -1 && !hitGoal) return null;
     const up = heavy + wStep;
     return weight >= up ? null : { weight: up, dir:"up" };
   })();
@@ -3480,10 +3501,19 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
                 he could not read it - because the row printed the GLYPH alone
                 while the only place the word appears is the button that sets
                 it. A mark you cannot interpret where you see it is noise. */}
-            {effortOf(s.effort) &&
-              <span className={"chip "+effortOf(s.effort).cls} style={{flex:"0 0 auto"}}>
-                {effortOf(s.effort).label} {effortOf(s.effort).short.toLowerCase()}
-              </span>}
+            {/* A finished set is not silent any more: no face means it went as
+                expected, which deserves the thumb rather than a blank. */}
+            {(() => {
+              const e = effortOf(s.effort);
+              return e
+                ? <span className={"chip "+e.cls} style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",gap:5}}>
+                    <Icon d={ICONS[e.icon]} size={14}/> {e.label.toLowerCase()}
+                  </span>
+                : <span className="chip" style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",
+                                                 gap:5,opacity:.62}} title="Finished">
+                    <Icon d={ICONS.thumbUp} size={13}/>
+                  </span>;
+            })()}
             {s.note &&
               <span className="subtle" style={{flex:"0 0 auto",fontSize:12.5,fontStyle:"italic"}}>
                 {s.note}
@@ -3528,12 +3558,18 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
             </button>}
           {/* Optional. No mark means hold this weight. Meaningless on a
               mobility drill - there is no load to take up or down. */}
+          {/* Two optional marks, nothing else. Chris: "default is just a
+              thumbs up" - so the default needs no control at all. A pill you
+              cannot press, sitting among pills you can, is a label pretending
+              to be a button. Leave both unpicked and the logged row shows the
+              thumb on its own. */}
           {!isMobility &&
           <div className="pills" style={{marginTop:10}}>
             {EFFORTS.map(e => (
               <button key={e.k} className={"pill "+(effort===e.k?"on":"")}
-                aria-label={e.short} onClick={()=>setEffort(effort===e.k ? null : e.k)}>
-                {e.label} {e.short}
+                style={{display:"inline-flex",alignItems:"center",gap:6}}
+                aria-label={e.label} onClick={()=>setEffort(effort===e.k ? null : e.k)}>
+                <Icon d={ICONS[e.icon]} size={14}/> {e.label}
               </button>
             ))}
           </div>}
@@ -5525,7 +5561,7 @@ function buildDigest(store){
   let up = 0, down = 0;
   recent.forEach(w => (w.entries||[]).forEach(e => (e.sets||[]).forEach(s => {
     const k = EFFORT_ALIAS[s.effort];
-    if(k === "up") up++; else if(k === "fail") down++;
+    if(k === "easy") up++; else if(k === "hard") down++;
   })));
 
   // ---- program adherence ----
