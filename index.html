@@ -365,10 +365,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.58.0";
+const APP_VERSION = "0.59.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-04.3";
+const BUILD = "2026-08-06.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2696,34 +2696,67 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
           <Icon d={ICONS.plus} size={16}/> Start workout here
         </button>
 
-        {hasTags && lib.length>0 && <>
-          <div className="set-group">Training coverage</div>
-          <div className="card">
-            <div className="subtle" style={{marginBottom:8}}>
-              {availCount} of {lib.length} exercises in your library work here.
-            </div>
-            <div className="pills" style={{marginTop:0}}>
-              {groups.map(x => (
-                <span key={x.g} className={"chip "+(x.have===x.total ? "green" : (x.have===0 ? "red" : "amber"))}>
-                  {x.g} {x.have}/{x.total}
-                </span>
-              ))}
-            </div>
-          </div>
-        </>}
+        {/* ONE section, not three. Equipment tags, the written inventory and
+            the catalog were separate headings describing the same thing -
+            what is in this room - and the scan that fills all of them was a
+            small ghost button buried under the third one. Chris asked for the
+            scan to be prominent and the page to read better; those are the
+            same fix. */}
+        <div className="set-group">What's here</div>
 
-        <div className="set-group">Equipment</div>
-        {hasTags
-          ? <div className="pills" style={{marginTop:0}}>
-              {gym.equipment.map(e=><span key={e} className="pill on" style={{cursor:"default"}}>{e}</span>)}
+        {!hasTags && !invLines.length
+          ? <div className="card" style={{borderColor:"var(--amber-line)",background:"var(--amber-dim)"}}>
+              <div style={{fontWeight:700,color:"var(--amber-2)"}}>Nothing on file yet</div>
+              <p className="hint" style={{marginTop:4}}>
+                Until this gym knows what it has, it cannot tell you which of your
+                exercises work here or offer a stand-in when one does not.
+              </p>
+              <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={()=>setScan(true)}>
+                <Icon d={ICONS.play} size={15}/> Scan the equipment
+              </button>
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>onEdit(gym)}>
+                Or tick it by hand
+              </button>
             </div>
-          : <p className="hint">No equipment tags yet - tap the pencil to add them.</p>}
+          : <>
+              <div className="card">
+                {hasTags && lib.length>0 &&
+                  <div className="subtle" style={{marginBottom:8}}>
+                    {availCount} of {lib.length} exercises in your library work here.
+                  </div>}
+                {hasTags &&
+                  <div className="pills" style={{marginTop:0}}>
+                    {gym.equipment.map(e=><span key={e} className="pill on" style={{cursor:"default"}}>{e}</span>)}
+                  </div>}
+                {!hasTags &&
+                  <p className="hint" style={{margin:0}}>
+                    Inventory written down, but no equipment ticked - so availability
+                    checks stay off. Scan again or tick them by hand.
+                  </p>}
+                <div className="row" style={{marginTop:12}}>
+                  <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setScan(true)}>
+                    <Icon d={ICONS.play} size={14}/> Scan
+                  </button>
+                  <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>onEdit(gym)}>
+                    Edit by hand
+                  </button>
+                </div>
+              </div>
 
-        <div className="set-group">Inventory</div>
-        <button className="btn btn-ghost btn-sm btn-block" style={{marginBottom:10}} onClick={()=>setScan(true)}>
-          Scan equipment (photos)
-        </button>
+              {/* Per-muscle coverage is a second-order detail - useful, but not
+                  what you open a gym page to find out. */}
+              {hasTags && groups.length>0 &&
+                <div className="pills" style={{marginTop:10}}>
+                  {groups.map(x => (
+                    <span key={x.g} className={"chip "+(x.have===x.total ? "green" : (x.have===0 ? "red" : "amber"))}>
+                      {x.g} {x.have}/{x.total}
+                    </span>
+                  ))}
+                </div>}
+            </>}
+
         {orgErr && <div className="auth-msg err">{orgErr}</div>}
+        {(catalog || invLines.length>0) && <div className="set-group">The detail</div>}
         {catalog
           ? <>
               {catalog.map(sec => (
@@ -2764,13 +2797,9 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
                   Sorts the text into categories - free weights, machines, cardio - for easy browsing.
                 </p>
               </>
-            : <div className="card">
-                <p className="hint" style={{marginTop:0}}>
-                  Nothing on file yet. Scan the equipment with photos, or tap
-                  the pencil and type the inventory - machines, dumbbell range,
-                  plates. The AI reads this when designing workouts for {gym.name}.
-                </p>
-              </div>}
+            : null /* The "What's here" card above already says this, and says
+                      it better - two empty states on one screen just made the
+                      page look broken twice. */}
       </div>
 
       {scan &&
@@ -2794,6 +2823,9 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
   const [items, setItems] = useState([]);
   const [tags, setTags] = useState([]);
   const fileRef = useRef(null);
+  const camRef  = useRef(null);
+  const vidRef  = useRef(null);
+  const [vidBusy, setVidBusy] = useState(false);
 
   const downscale = (file) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -2814,6 +2846,66 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that image.")); };
     img.src = url;
   });
+
+  /* VIDEO WALKTHROUGH. Chris: "should be able to video scan or upload
+     photos." Walking a gym filming as you go is a far better capture than
+     framing eight stills - you sweep the room once and everything is in it.
+
+     The relay only accepts IMAGES though (VISION_TASKS, jpeg/png/webp), so
+     the video never leaves the phone: we pull evenly-spaced frames out of it
+     locally and feed those through the SAME downscale path the photo picker
+     uses. No backend change, no upload of a large file, and the review screen
+     cannot tell the difference. */
+  const framesFromVideo = (file, want) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    v.preload = "metadata"; v.muted = true; v.playsInline = true;
+    const cleanup = () => { try{ URL.revokeObjectURL(url); }catch(e){} };
+    v.onerror = () => { cleanup(); reject(new Error("Couldn't read that video.")); };
+    v.onloadedmetadata = async () => {
+      try{
+        const dur = Number(v.duration);
+        if(!isFinite(dur) || dur <= 0) throw new Error("That video has no duration.");
+        // Evenly spaced, skipping the very start and end - the first and last
+        // frames of a hand-held clip are usually a blur or a pocket.
+        const times = [];
+        for(let i=0;i<want;i++) times.push(dur * (i+0.5) / want);
+        const MAX = 1024;
+        const scale = Math.min(1, MAX/Math.max(v.videoWidth||1, v.videoHeight||1));
+        const cv = document.createElement("canvas");
+        cv.width  = Math.max(1, Math.round((v.videoWidth||1)*scale));
+        cv.height = Math.max(1, Math.round((v.videoHeight||1)*scale));
+        const ctx = cv.getContext("2d");
+        const out = [];
+        for(const t of times){
+          await new Promise((res2, rej2) => {
+            const done = () => { v.removeEventListener("seeked", done); res2(); };
+            v.addEventListener("seeked", done);
+            setTimeout(() => { v.removeEventListener("seeked", done); res2(); }, 3000);
+            try{ v.currentTime = Math.min(t, Math.max(0, dur - 0.05)); }catch(e){ rej2(e); }
+          });
+          ctx.drawImage(v, 0, 0, cv.width, cv.height);
+          const dataUrl = cv.toDataURL("image/jpeg", 0.85);
+          out.push({ b64: dataUrl.split(",")[1], thumb: dataUrl });
+        }
+        cleanup(); resolve(out);
+      }catch(e){ cleanup(); reject(e); }
+    };
+    v.src = url;
+  });
+
+  const addVideo = async (file) => {
+    setErr(""); setVidBusy(true);
+    try{
+      const room = SCAN_MAX_IMAGES - imgs.length;
+      if(room <= 0){ setErr("Already at "+SCAN_MAX_IMAGES+" shots - remove some first."); return; }
+      const frames = await framesFromVideo(file, room);
+      if(!frames.length) throw new Error("No frames came out of that video.");
+      setImgs(p => [...p, ...frames]);
+      log("SCAN","video -> "+frames.length+" frames");
+    }catch(e){ setErr(e.message||"Couldn't read that video."); log("ERROR","scan video: "+e.message); }
+    finally{ setVidBusy(false); }
+  };
 
   const addFiles = async (fileList) => {
     setErr("");
@@ -2903,9 +2995,10 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
 
         {phase==="pick" && <>
           <p className="hint" style={{marginTop:4}}>
-            Add photos of the equipment - plus receipts or order screenshots if
-            you have them, they nail exact models. Up to {SCAN_MAX_IMAGES} per
-            scan; you review everything before it saves to {gym.name}.
+            Film a walk round the room, or add photos - plus receipts or order
+            screenshots if you have them, they nail exact models. Up to
+            {SCAN_MAX_IMAGES} shots per scan; you review everything before it
+            saves to {gym.name}.
           </p>
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
           {imgs.length>0 &&
@@ -2921,12 +3014,42 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
                 </div>
               ))}
             </div>}
+          {/* Three ways in, because the right one depends on where you are.
+              Walking the floor filming beats framing eight stills; standing at
+              one rack, a photo is faster; and receipts live in your library. */}
+          <input ref={vidRef} type="file" accept="video/*" capture="environment" style={{display:"none"}}
+            onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; if(f) addVideo(f); }} />
+          <input ref={camRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}}
+            onChange={e=>{ addFiles(e.target.files); e.target.value=""; }} />
           <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}}
             onChange={e=>{ addFiles(e.target.files); e.target.value=""; }} />
-          <button className="btn btn-ghost btn-block" style={{marginTop:12}}
-            disabled={imgs.length>=SCAN_MAX_IMAGES} onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
-            <Icon d={ICONS.plus} size={15}/> {imgs.length ? "Add more photos ("+imgs.length+"/"+SCAN_MAX_IMAGES+")" : "Add photos"}
+
+          <button className="btn btn-primary btn-block" style={{marginTop:14}}
+            disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
+            onClick={()=>{ if(vidRef.current) vidRef.current.click(); }}>
+            {vidBusy ? <span className="spin"></span>
+                     : <><Icon d={ICONS.play} size={15}/> Record a walkthrough</>}
           </button>
+          <p className="hint center" style={{marginTop:6,marginBottom:0}}>
+            Walk the floor filming. It pulls {SCAN_MAX_IMAGES} frames out and reads those.
+          </p>
+
+          <div className="row" style={{marginTop:10}}>
+            <button className="btn btn-ghost btn-sm" style={{flex:1}}
+              disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
+              onClick={()=>{ if(camRef.current) camRef.current.click(); }}>
+              Take photos
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{flex:1}}
+              disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
+              onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
+              Upload
+            </button>
+          </div>
+          {imgs.length>0 &&
+            <p className="hint center" style={{marginTop:8,marginBottom:0}}>
+              {imgs.length} of {SCAN_MAX_IMAGES} shots ready
+            </p>}
           {imgs.length>0 &&
             <button className="btn btn-primary btn-block" style={{marginTop:10}} onClick={analyze}>
               Read the equipment
