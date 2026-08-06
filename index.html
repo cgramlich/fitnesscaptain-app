@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.62.0";
+const APP_VERSION = "0.63.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-06.4";
+const BUILD = "2026-08-06.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1047,6 +1047,40 @@ const REF_MUSCLE_GROUP = {
   quadriceps:"Legs", hamstrings:"Legs", calves:"Legs", adductors:"Legs", abductors:"Legs",
   glutes:"Glutes", abdominals:"Core",
 };
+/* Create a library exercise from a reference-database entry. Shared by the
+   exercise PICKER and the LIBRARY screen: Chris found the 873 searchable when
+   adding to a workout but not when browsing his library, which is the screen
+   actually named "Exercises". Two copies of this would have drifted the first
+   time either changed. Returns the existing record if the name is already
+   there, so adding twice is harmless. */
+async function createFromReference(store, item){
+  const existing = (store.data.exercises||[])
+    .find(x => normName(x.name) === normName(item.n));
+  if(existing) return existing;
+  const ref = await fetchReference(item.f);
+  const x = { id: uid(), name: item.n, type: "strength",
+              muscleGroup: refToGroup(ref && ref.primaryMuscles),
+              equipment: (ref && ref.equipment) ? String(ref.equipment) : "none",
+              notes: (ref && Array.isArray(ref.instructions)) ? ref.instructions.join(" ") : "",
+              custom: true, createdAt: nowISO(), updatedAt: nowISO() };
+  store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
+  log("LIBRARY","added from reference: "+x.name+" ("+x.muscleGroup+", "+x.equipment+")");
+  return x;
+}
+
+/* Search the 873 by name, minus anything already in the library. The index
+   ships with the app, so this is free and works offline; only ADDING one
+   fetches its record. */
+function searchReference(refIdx, mine, term, limit){
+  if(!refIdx || !refIdx.items || String(term||"").trim().length < 2) return [];
+  const needle = normName(term);
+  return Object.keys(refIdx.items)
+    .filter(k => k.indexOf(needle) !== -1 && !mine.has(k))
+    .map(k => refIdx.items[k])
+    .sort((a,b) => a.n.length - b.n.length)
+    .slice(0, limit || 8);
+}
+
 function refToGroup(muscles){
   for(const m of (muscles||[])){
     const g = REF_MUSCLE_GROUP[String(m).toLowerCase()];
@@ -2155,10 +2189,27 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
   // Chris asked "did we get all the exercise pictures?" - a question the app
   // should be able to answer itself rather than needing a script run.
   const [mediaIdx, setMediaIdx] = useState(null);
+  const [addingRef, setAddingRef] = useState(null);
   useEffect(() => { let alive = true;
     loadMediaIndex().then(i => { if(alive) setMediaIdx(i); });
     return () => { alive = false; }; }, []);
+
   const [q, setQ] = useState("");
+  /* Must sit AFTER q: it reads it, and const does not hoist. Putting this
+     above the useState threw "Cannot access 'q' before initialization" and
+     took the whole Library screen blank - the same trap as the Done flag. */
+  /* Chris, filtered to Shoulders and looking at five results: "not enough
+     exercises available, we need access to more of the library." The 873 were
+     searchable from the PICKER but not from the screen actually called
+     Exercises, which is where you go when you want to browse what exists. */
+  const mineKeys = new Set((store.data.exercises||[]).map(x => normName(x.name)));
+  const refHits = searchReference(mediaIdx, mineKeys, q, 12);
+  const addRef = async (item) => {
+    setAddingRef(item.f);
+    try{ await createFromReference(store, item); }
+    catch(e){ log("ERROR","library add from reference: "+e.message); }
+    finally{ setAddingRef(null); }
+  };
   const [typeF, setTypeF] = useState("all");
   const [groupF, setGroupF] = useState("all");
   const [normBusy, setNormBusy] = useState(false);
@@ -2348,8 +2399,34 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
               </SwipeRow>
             ))}
           </div>}
+      {/* Offered when your own library comes up short, which is exactly when
+          you are looking for something you do not have. */}
+      {refHits.length > 0 && <>
+        <div className="set-group">Not in your library yet</div>
+        {refHits.map(it => (
+          <button key={it.f} className="item" disabled={!!addingRef} onClick={()=>addRef(it)}>
+            <div className="item-body">
+              <div className="item-title">{it.n}</div>
+              <div className="item-meta">
+                <span className="chip blue">reference database</span>
+                {addingRef===it.f && <span className="chip">adding...</span>}
+              </div>
+            </div>
+          </button>
+        ))}
+        <p className="hint center" style={{marginTop:8}}>
+          Adding one brings its equipment, muscle group, instructions and pictures.
+        </p>
+      </>}
+
+      {q.trim().length > 1 && refHits.length === 0 && mediaIdx &&
+        <p className="hint center" style={{marginTop:12}}>
+          Nothing else in the reference database matches "{q.trim()}". Use + to add your own.
+        </p>}
+
       <p className="hint center" style={{marginTop:14,opacity:.7}}>
         {filtered.length} of {exercises.length} exercises
+        {mediaIdx ? ", searching " + Object.keys(mediaIdx.items).length + " more" : ""}
       </p>
       {/* Coverage, stated plainly. The reference database is strong on
           conventional gym work and has nothing for specialty or mobility
@@ -3751,28 +3828,12 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
      already in the library is filtered out so the list never offers a
      duplicate. */
   const mine = new Set((store.data.exercises||[]).map(x => normName(x.name)));
-  const refHits = (needle.length > 1 && refIdx && refIdx.items)
-    ? Object.keys(refIdx.items)
-        .filter(k => k.indexOf(normName(q)) !== -1 && !mine.has(k))
-        .map(k => refIdx.items[k])
-        .sort((a,b) => a.n.length - b.n.length)
-        .slice(0, 8)
-    : [];
+  const refHits = searchReference(refIdx, mine, q, 8);
 
   const addFromRef = async (item) => {
     setAdding(item.f);
-    try{
-      const ref = await fetchReference(item.f);
-      const x = { id: uid(), name: item.n,
-                  type: "strength",
-                  muscleGroup: refToGroup(ref && ref.primaryMuscles),
-                  equipment: (ref && ref.equipment) ? String(ref.equipment) : "none",
-                  notes: (ref && Array.isArray(ref.instructions)) ? ref.instructions.join(" ") : "",
-                  custom: true, createdAt: nowISO(), updatedAt: nowISO() };
-      store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
-      log("LIBRARY","added from reference: "+x.name+" ("+x.muscleGroup+", "+x.equipment+")");
-      onPick(x);
-    }catch(e){ log("ERROR","add from reference: "+e.message); }
+    try{ onPick(await createFromReference(store, item)); }
+    catch(e){ log("ERROR","add from reference: "+e.message); }
     finally{ setAdding(null); }
   };
 
