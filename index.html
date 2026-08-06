@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.64.0";
+const APP_VERSION = "0.65.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -3010,12 +3010,43 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
     const url = URL.createObjectURL(file);
     const v = document.createElement("video");
     v.preload = "metadata"; v.muted = true; v.playsInline = true;
+    let done = false;
     const cleanup = () => { try{ URL.revokeObjectURL(url); }catch(e){} };
-    v.onerror = () => { cleanup(); reject(new Error("Couldn't read that video.")); };
+    const fail = (msg) => { if(done) return; done = true; cleanup(); reject(new Error(msg)); };
+    const ok = (frames) => { if(done) return; done = true; cleanup(); resolve(frames); };
+    /* A video the browser cannot decode never fires loadedmetadata OR error -
+       it simply sits there. Without this the button spun forever with no
+       message, which is worse than failing: nothing tells you to try again
+       with a different clip. Found by feeding it a malformed webm.
+
+       Sized off measurement, not instinct: a 22s / 38MB phone clip took ~14s
+       almost entirely in loading the file, while the frame grabbing itself was
+       0.1s. A minute-long walk round is ~100MB, so 20s would have failed
+       honest clips. This is the unreadable-file catch, not a speed limit. */
+    setTimeout(() => fail("That video took too long to read - try a shorter clip."), 60000);
+    v.onerror = () => fail("Couldn't read that video.");
     v.onloadedmetadata = async () => {
       try{
-        const dur = Number(v.duration);
-        if(!isFinite(dur) || dur <= 0) throw new Error("That video has no duration.");
+        /* Some recorders write no duration index, so the file claims 0.001s
+           or Infinity and all eight seek targets collapse onto the same
+           instant - you get eight copies of frame one. Seeking far past the
+           end makes the browser scan for the real end and fire durationchange. */
+        let dur = Number(v.duration);
+        if(!isFinite(dur) || dur < 0.2){
+          dur = await new Promise((settle) => {
+            const onDur = () => {
+              if(isFinite(v.duration) && v.duration > 0.2){
+                v.removeEventListener("durationchange", onDur);
+                settle(Number(v.duration));
+              }
+            };
+            v.addEventListener("durationchange", onDur);
+            try{ v.currentTime = 1e101; }catch(e){}
+            setTimeout(() => { v.removeEventListener("durationchange", onDur); settle(Number(v.duration)); }, 4000);
+          });
+          try{ v.currentTime = 0; }catch(e){}
+        }
+        if(!isFinite(dur) || dur <= 0) throw new Error("That clip has no readable duration - try recording it again.");
         // Evenly spaced, skipping the very start and end - the first and last
         // frames of a hand-held clip are usually a blur or a pocket.
         const times = [];
@@ -3027,19 +3058,31 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         cv.height = Math.max(1, Math.round((v.videoHeight||1)*scale));
         const ctx = cv.getContext("2d");
         const out = [];
+        /* Wait for "seeked", NOT requestVideoFrameCallback. rVFC only fires
+           when the page is actually compositing, so the moment the app is not
+           the foreground tab every seek stalls until its guard expires and the
+           whole scan dies on the overall timeout. Measured on a real 22s
+           1080x1920 phone clip: seeked returned all 8 frames, all distinct, in
+           0.1s total; rVFC returned nothing in 20s. */
+        const awaitFrame = () => new Promise((done) => {
+          let settled = false;
+          const finish = () => { if(!settled){ settled = true; done(); } };
+          const onSeeked = () => { v.removeEventListener("seeked", onSeeked);
+                                   setTimeout(finish, 60); };
+          v.addEventListener("seeked", onSeeked);
+          setTimeout(finish, 6000);                   // never hang on a bad clip
+        });
         for(const t of times){
-          await new Promise((res2, rej2) => {
-            const done = () => { v.removeEventListener("seeked", done); res2(); };
-            v.addEventListener("seeked", done);
-            setTimeout(() => { v.removeEventListener("seeked", done); res2(); }, 3000);
-            try{ v.currentTime = Math.min(t, Math.max(0, dur - 0.05)); }catch(e){ rej2(e); }
-          });
+          const target = Math.min(t, Math.max(0, dur - 0.05));
+          const waiter = awaitFrame();
+          try{ v.currentTime = target; }catch(e){}
+          await waiter;
           ctx.drawImage(v, 0, 0, cv.width, cv.height);
           const dataUrl = cv.toDataURL("image/jpeg", 0.85);
           out.push({ b64: dataUrl.split(",")[1], thumb: dataUrl });
         }
-        cleanup(); resolve(out);
-      }catch(e){ cleanup(); reject(e); }
+        ok(out);
+      }catch(e){ fail(e.message || "Couldn't read that video."); }
     };
     v.src = url;
   });
@@ -3146,7 +3189,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         {phase==="pick" && <>
           <p className="hint" style={{marginTop:4}}>
             Film a walk round the room, or add photos - plus receipts or order
-            screenshots if you have them, they nail exact models. Up to
+            screenshots if you have them, they nail exact models. Up to{" "}
             {SCAN_MAX_IMAGES} shots per scan; you review everything before it
             saves to {gym.name}.
           </p>
