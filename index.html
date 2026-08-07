@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.72.0";
+const APP_VERSION = "0.73.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2653,6 +2653,17 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
    Every failure mode ends in the same place: type the name instead. A denied
    permission is a preference, not an error, so it does not get an angry red
    banner. */
+/* The server knows WHY a search failed and says so. Swallowing that into
+   "Couldn't search right now" left a screenshot that could not be diagnosed,
+   which cost a round trip. */
+async function placeErr(r){
+  try{
+    const j = await r.json();
+    if(j && j.detail) return j.detail;
+  }catch(_){}
+  return "Couldn't search right now (" + r.status + ").";
+}
+
 function askForLocation(){
   return new Promise((resolve, reject) => {
     if(!navigator.geolocation){ reject(new Error("This device can't do location. Type the name instead.")); return; }
@@ -2702,7 +2713,7 @@ function PlaceLinkField({ value, name, onPick, onClear }){
       });
       if(r.status === 503) throw new Error("Place search isn't switched on yet.");
       if(r.status === 429) throw new Error("You've hit this month's place lookups. Add it by hand instead.");
-      if(!r.ok) throw new Error("Couldn't search right now.");
+      if(!r.ok) throw new Error(await placeErr(r));
       const j = await r.json();
       setHits(j.places || []);
       if(!(j.places||[]).length) setErr("Nothing found nearby. Try searching by name.");
@@ -2723,7 +2734,7 @@ function PlaceLinkField({ value, name, onPick, onClear }){
       });
       if(r.status === 503){ throw new Error("Place search isn't switched on yet."); }
       if(r.status === 429){ throw new Error("You've hit this month's place lookups. Add it by hand instead."); }
-      if(!r.ok) throw new Error("Couldn't search right now.");
+      if(!r.ok) throw new Error(await placeErr(r));
       const j = await r.json();
       setHits(j.places || []);
     }catch(e){ setErr(e.message || "Search failed."); }
@@ -2766,6 +2777,15 @@ function PlaceLinkField({ value, name, onPick, onClear }){
             ))}
           </div>
         : <>
+            <div className="row" style={{gap:8,flexWrap:"wrap",marginBottom:8}}>
+              {NEAR_MODES.map(m => (
+                <button key={m.k} className="btn btn-ghost btn-sm" disabled={nearBusy}
+                  onClick={()=>searchNear(m)}>
+                  {nearBusy ? <span className="spin"></span>
+                            : <><Icon d={ICONS.pin} size={14}/> {m.label} near me</>}
+                </button>
+              ))}
+            </div>
             <div className="row" style={{gap:8}}>
               <input className="input" style={{flex:1}} value={q} autoFocus
                 onChange={e=>setQ(e.target.value)}
