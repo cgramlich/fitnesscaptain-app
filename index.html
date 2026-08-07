@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.77.0";
+const APP_VERSION = "0.78.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -1943,6 +1943,7 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
      EDIT surface - the wrong thing to hand someone whose next action is to
      start training. */
   const [peek, setPeek] = useState(false);
+  const [help, setHelp] = useState(null);   // {name, exerciseId} for the Show me panel
   const prog = activeProgram(store);
   const next = programNext(prog, store.data.routines||[]);
   if(!next) return null;
@@ -1997,6 +1998,9 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
                             ? it.targetSets + " x " + it.targetReps
                             : it.type))}
                 </span>
+                <InfoBtn name={it.name}
+                  hasVideo={!!((store.data.exercises||[]).find(x=>x.id===it.exerciseId)||{}).demoVideoId}
+                  onClick={()=>setHelp({ name: it.name, exerciseId: it.exerciseId })} />
               </div>
             );
           })}
@@ -2017,6 +2021,12 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
         onClick={()=>onStartRoutine(next.routine)}>
         Start {next.routine.name}
       </button>
+      {/* Gym comes from the ROUTINE, so "set it up where you are" answers for
+          the place this session is actually planned for. */}
+      {help &&
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+          gym={(store.gyms||[]).find(g=>g.id===next.routine.gymId) || null}
+          onClose={()=>setHelp(null)} />}
     </div>
   );
 }
