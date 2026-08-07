@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.81.0";
+const APP_VERSION = "0.82.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-06.6";
+const BUILD = "2026-08-07.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -8336,7 +8336,18 @@ function App(){
       const html = await res.text();
       const mb = html.match(/const BUILD = "([^"]+)";/);       const rBuild = mb && mb[1];
       const mv = html.match(/const APP_VERSION = "([^"]+)";/); const rVer = mv && mv[1];
-      if(rBuild && buildIsNewer(rBuild, BUILD)){ log("UPDATE","newer build live: "+rBuild+" (v"+(rVer||"?")+")"); setUpdate({ ver:rVer, build:rBuild }); if(manual) setUpdMsg(""); }
+      /* EITHER signal is enough, and that redundancy is the point. Detection
+         used to rest on BUILD alone, and BUILD sat unchanged through eight
+         releases (0.74 to 0.81) while APP_VERSION climbed - so the check
+         honestly reported "you're on the latest" every time and Chris was
+         stranded on 0.77 with no way to tell. A release ritual that silently
+         breaks the updater when one line is missed is the wrong shape: now a
+         changed version is sufficient by itself. */
+      const versionMoved = rVer && rVer !== APP_VERSION;
+      if((rBuild && buildIsNewer(rBuild, BUILD)) || versionMoved){
+        log("UPDATE","update live: v"+(rVer||"?")+" build "+(rBuild||"?")+
+                     (versionMoved && !(rBuild && buildIsNewer(rBuild, BUILD)) ? " (version only)" : ""));
+        setUpdate({ ver:rVer, build:rBuild || String(Date.now()) }); if(manual) setUpdMsg(""); }
       else { log("UPDATE","up to date (v"+APP_VERSION+", "+BUILD+")"); setUpdate(null); if(manual) flashUpd("You're on the latest (v"+APP_VERSION+")"); }
     }catch(e){ log("UPDATE","check failed: "+e.message); if(manual) flashUpd("Update check failed"); }
   },[flashUpd]);
