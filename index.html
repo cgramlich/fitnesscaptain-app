@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.68.0";
+const APP_VERSION = "0.69.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2737,10 +2737,304 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
   );
 }
 
+/* ============================================================
+   COMMUNITY GYMS - a shared, dated pool of scanned inventories.
+
+   Scanning a hotel gym takes five minutes and produces exactly the same
+   answer for every guest who follows you. Doing that work once between
+   everybody is the whole idea, and it is the same bargain as MenuCaptain's
+   community menus.
+
+   THE DATE IS NOT DECORATION. Equipment changes: clubs replace machines,
+   hotels refit. A rack list from two years ago is worth much less than one
+   from last month, so the age of a contribution is shown on every row and
+   the freshest is always first. Hiding it would make the whole pool
+   untrustworthy, which is worse than having no pool.
+
+   HOME GYMS ARE NEVER SHAREABLE. Sharing the contents of a private
+   residence is a different act from sharing a hotel's, so the share button
+   does not exist for them. The backend enforces the same rule, because a
+   hidden button is not a permission check.
+   ============================================================ */
+async function communityGet(path){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  let r;
+  try{ r = await fetch(API_BASE + path, { headers:{ "Authorization":"Bearer "+token } }); }
+  catch(e){ throw transportError(e); }
+  if(r.status === 404) throw new Error("That gym is no longer available.");
+  if(!r.ok) throw new Error("Couldn't reach the shared gyms (" + r.status + ").");
+  return r.json();
+}
+async function communityPost(path, body){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  let r;
+  try{
+    r = await fetch(API_BASE + path, { method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+      body: JSON.stringify(body||{}) });
+  }catch(e){ throw transportError(e); }
+  if(!r.ok){
+    let msg = "Couldn't share that (" + r.status + ").";
+    try{ const j = await r.json(); if(j && j.detail) msg = j.detail; }catch(_){}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+/* "scanned last month" beats a raw date here: the question being asked is
+   how stale this is, not what day it happened. */
+function freshness(iso){
+  if(!iso) return "date unknown";
+  const then = new Date(iso).getTime();
+  if(!isFinite(then)) return "date unknown";
+  const days = Math.floor((Date.now() - then) / 864e5);
+  if(days <= 0)  return "scanned today";
+  if(days === 1) return "scanned yesterday";
+  if(days < 30)  return "scanned " + days + " days ago";
+  const months = Math.round(days/30);
+  if(months < 24) return "scanned " + months + " month" + (months===1?"":"s") + " ago";
+  return "scanned " + Math.round(months/12) + " years ago";
+}
+// Past a couple of years a gym has usually been refitted. Say so rather than
+// letting someone pull a list that quietly wastes their session.
+function isStale(iso){
+  const then = new Date(iso||0).getTime();
+  return isFinite(then) && (Date.now() - then) > 730*864e5;
+}
+
+function ShareGymSheet({ store, gym, onClose, notify }){
+  const [city, setCity] = useState(gym.city || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const lines = String(gym.inventory||"").split("\n").filter(l=>l.trim()).length;
+  const tags = (gym.equipment||[]).length;
+
+  const share = async () => {
+    setErr(""); setBusy(true);
+    try{
+      await communityPost("/api/community/gyms", {
+        name: gym.name, city: city.trim(), kind: gym.kind,
+        equipment: gym.equipment||[], inventory: gym.inventory||"", catalog: gym.catalog||null,
+      });
+      // Remember the city on the gym so re-sharing does not ask again.
+      if(city.trim() && city.trim() !== gym.city){
+        store.saveGyms((store.gyms||[]).map(g =>
+          g.id===gym.id ? { ...g, city: city.trim() } : g));
+      }
+      log("COMMUNITY","shared gym "+gym.name);
+      if(notify) notify("Shared. Thanks - that saves the next person a scan.");
+      onClose();
+    }catch(e){ setErr(e.message||"Couldn't share that."); setBusy(false); }
+  };
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose}></div>
+      <div className="sheet">
+        <div className="sheet-grip"></div>
+        <div style={{padding:"0 4px 8px"}}>
+          <div className="item-title" style={{marginBottom:6}}>Share {gym.name}</div>
+          <p className="hint" style={{marginTop:0}}>
+            Your equipment list goes into the shared pool so the next person
+            training here does not have to scan it again. It is dated, so
+            everyone can see how current it is.
+          </p>
+          <div className="subtle" style={{marginTop:12,marginBottom:6}}>Town or city</div>
+          <input className="input" value={city} maxLength={80} autoFocus
+            onChange={e=>setCity(e.target.value)} placeholder="Austin, TX" />
+          <p className="hint" style={{marginTop:6}}>
+            How people find it. "{gym.name}" on its own is a lot of hotels.
+          </p>
+          <div className="item-meta" style={{marginTop:12}}>
+            <span className="chip amber">{tags} tag{tags===1?"":"s"}</span>
+            {lines>0 && <span className="chip green">{lines} line{lines===1?"":"s"} of detail</span>}
+          </div>
+          <p className="hint" style={{marginTop:12}}>
+            Shared: the name, town, and equipment. Not your workouts, not your
+            numbers, and nothing that identifies you.
+          </p>
+          {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+          <button className="btn btn-primary btn-block" style={{marginTop:12}}
+            disabled={busy} onClick={share}>
+            {busy ? <span className="spin"></span> : "Share this gym"}
+          </button>
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:8}} onClick={onClose}>
+            Not now
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function FindGymLayer({ store, onClose, onAdded }){
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState(null);        // null = nothing searched yet
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [preview, setPreview] = useState(null);  // the full record being looked at
+  const [pulling, setPulling] = useState(false);
+
+  const search = async () => {
+    const term = q.trim();
+    if(term.length < 2){ setErr("Two letters or more."); return; }
+    setErr(""); setBusy(true);
+    try{
+      const j = await communityGet("/api/community/gyms?q=" + encodeURIComponent(term));
+      setHits(j.gyms || []);
+    }catch(e){ setErr(e.message||"Search failed."); }
+    finally{ setBusy(false); }
+  };
+
+  const open = async (row) => {
+    setErr(""); setBusy(true);
+    try{ setPreview(await communityGet("/api/community/gym/" + row.id)); }
+    catch(e){ setErr(e.message||"Couldn't open that."); }
+    finally{ setBusy(false); }
+  };
+
+  /* Pulls into YOUR gyms as an ordinary local record, which is the point: it
+     immediately drives availability, the start check and the session planner
+     the same as one you scanned yourself. invConfirmed is deliberately NOT
+     set - somebody else's list is good evidence, not your confirmation that
+     it is complete, and that flag decides whether the app will claim a
+     movement is impossible here. */
+  const pull = async () => {
+    setPulling(true);
+    try{
+      const g = { id: uid(), name: preview.name, kind: preview.kind || "other",
+                  city: preview.city || "", equipment: preview.equipment || [],
+                  inventory: preview.inventory || "", catalog: preview.catalog || null,
+                  fromCommunity: true, communityAt: preview.updated_at,
+                  createdAt: nowISO() };
+      store.saveGyms([...(store.gyms||[]), g]);
+      log("COMMUNITY","pulled gym "+g.name);
+      onAdded(g);
+    }catch(e){ setErr(e.message||"Couldn't add that."); setPulling(false); }
+  };
+
+  const report = async () => {
+    try{
+      await communityPost("/api/community/gym/" + preview.id + "/report", {});
+      setPreview(null); setErr("Thanks. Reported.");
+    }catch(e){ setErr(e.message||"Couldn't report that."); }
+  };
+
+  if(preview){
+    const stale = isStale(preview.updated_at);
+    const invLines = String(preview.inventory||"").split("\n").filter(l=>l.trim());
+    return (
+      <div className="layer">
+        <div className="layer-inner">
+          <div className="layer-top">
+            <button className="icon-btn" onClick={()=>setPreview(null)} aria-label="Back">
+              <Icon d={ICONS.back} size={20}/></button>
+            <h2 style={{flex:1,minWidth:0}}>{preview.name}</h2>
+          </div>
+          <div className="item-meta" style={{marginTop:2}}>
+            <span className="chip amber">{preview.kind}</span>
+            {preview.city && <span className="chip">{preview.city}</span>}
+            <span className={"chip "+(stale?"":"green")}>{freshness(preview.updated_at)}</span>
+          </div>
+          {stale &&
+            <p className="hint" style={{marginTop:10}}>
+              Old enough that the room has probably changed. Worth a scan of
+              your own when you get there.
+            </p>}
+
+          <div className="set-group">What's here</div>
+          {(preview.equipment||[]).length>0 &&
+            <div className="row" style={{flexWrap:"wrap",gap:6,marginBottom:10}}>
+              {(preview.equipment||[]).map((e,i)=>
+                <span key={i} className="chip">{e}</span>)}
+            </div>}
+          {invLines.length>0 &&
+            <div className="card">
+              {invLines.slice(0,60).map((l,i)=>(
+                <div key={i} style={{padding:"4px 0",fontSize:14,
+                  borderTop: i? "1px solid var(--line-1)":"none"}}>{l}</div>
+              ))}
+              {invLines.length>60 &&
+                <p className="hint" style={{marginTop:8,marginBottom:0}}>
+                  and {invLines.length-60} more
+                </p>}
+            </div>}
+
+          {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
+          <button className="btn btn-primary btn-block" style={{marginTop:14}}
+            disabled={pulling} onClick={pull}>
+            {pulling ? <span className="spin"></span> : "Add to my gyms"}
+          </button>
+          <p className="hint center" style={{marginTop:8}}>
+            You can edit it afterwards, the same as any gym you added yourself.
+          </p>
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}} onClick={report}>
+            Report this as wrong or out of date
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="layer">
+      <div className="layer-inner">
+        <div className="layer-top">
+          <button className="icon-btn" onClick={onClose} aria-label="Back">
+            <Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>Find a gym</h2>
+        </div>
+        <p className="hint" style={{marginTop:8}}>
+          Gyms other people have scanned and shared. Search by name or town,
+          then pull the equipment list straight into your gyms.
+        </p>
+        <div className="row" style={{gap:8,marginTop:12}}>
+          <input className="input" style={{flex:1}} value={q} autoFocus
+            onChange={e=>setQ(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") search(); }}
+            placeholder="Hyatt Regency, or Austin" />
+          <button className="btn btn-primary" onClick={search} disabled={busy}>
+            {busy ? <span className="spin"></span> : "Search"}
+          </button>
+        </div>
+        {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
+
+        {hits && hits.length===0 &&
+          <div className="empty" style={{marginTop:24}}>
+            <div className="glyph">@</div>
+            <h3 className="title-sm">Nothing shared yet</h3>
+            <p>Nobody has scanned a gym matching that. If you end up there,
+            scan it and share it, and the next person will find it.</p>
+          </div>}
+
+        {hits && hits.length>0 && <div className="set-group">{hits.length} found</div>}
+        {(hits||[]).map(row => (
+          <button key={row.id} className="item" style={{width:"100%",textAlign:"left"}}
+            onClick={()=>open(row)}>
+            <div className="item-body">
+              <div className="item-title">{row.name}</div>
+              <div className="item-meta">
+                <span className="chip amber">{row.kind}</span>
+                {row.city && <span className="chip">{row.city}</span>}
+                <span className="chip">{row.item_count} item{row.item_count===1?"":"s"}</span>
+                <span className={"chip "+(isStale(row.updated_at)?"":"green")}>
+                  {freshness(row.updated_at)}
+                </span>
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* The Gyms TAB - places, MenuCaptain-style. List of gym cards; each opens
    a full place page with browsable equipment + inventory, that location's
    training stats, and "Start workout here". */
-function GymsScreen({ store, onOpen, onAdd, onDelete }){
+function GymsScreen({ store, onOpen, onAdd, onDelete, onFind }){
   const gyms = store.gyms || [];
   const workouts = store.data.workouts || [];
   if(!gyms.length){
@@ -2754,6 +3048,11 @@ function GymsScreen({ store, onOpen, onAdd, onDelete }){
         <button className="btn btn-primary" style={{marginTop:18}} onClick={onAdd}>
           <Icon d={ICONS.plus} size={16}/> Add a gym
         </button>
+        <div className="row" style={{marginTop:12,justifyContent:"center"}}>
+          <button className="btn btn-ghost btn-sm" onClick={onFind}>
+            Find one someone has scanned
+          </button>
+        </div>
       </div>
     );
   }
@@ -2778,6 +3077,9 @@ function GymsScreen({ store, onOpen, onAdd, onDelete }){
           </SwipeRow>
         );
       })}
+      <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}} onClick={onFind}>
+        <Icon d={ICONS.pin} size={15}/> Find a gym someone has scanned
+      </button>
     </div>
   );
 }
@@ -2788,6 +3090,7 @@ function GymsScreen({ store, onOpen, onAdd, onDelete }){
    source of truth). */
 function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
   const [organizing, setOrganizing] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [orgErr, setOrgErr] = useState("");
   const [scan, setScan] = useState(false);        // Gym Scan layer
   const [openCats, setOpenCats] = useState({});   // catalog sections start collapsed
@@ -2856,6 +3159,20 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
         <button className="btn btn-primary btn-block" style={{marginTop:16}} onClick={()=>onStartHere(gym)}>
           <Icon d={ICONS.plus} size={16}/> Start workout here
         </button>
+
+        {/* Sharing sits with the inventory, not up with Start: you offer a
+            room to other people once you have finished describing it. Home
+            gyms never get the option - sharing what is in your house is a
+            different act from sharing a hotel's, and the backend refuses it
+            too, because a hidden button is not a permission check. */}
+        {gym.kind !== "home" && (hasTags || invLines.length>0) &&
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}}
+            onClick={()=>setSharing(true)}>
+            Share this gym with everyone
+          </button>}
+        {sharing &&
+          <ShareGymSheet store={store} gym={gym} notify={notify}
+            onClose={()=>setSharing(false)} />}
 
         {/* ONE section, not three. Equipment tags, the written inventory and
             the catalog were separate headings describing the same thing -
@@ -7017,6 +7334,7 @@ function App(){
     if(gymArg) store.saveCfg({ ...store.cfg, lastGymId: gymArg.id });
     setWorkoutId(w.id);
   };
+  const [findGym, setFindGym] = useState(false);
   const startHere = (g) => { setGymView(null); setTab("workouts"); startWorkout(g); };
 
   /* An AI-planned session becomes a live workout directly. It deliberately
@@ -7320,7 +7638,7 @@ function App(){
                 onDelete={(w)=>deleteWorkout(w.id)}
                 onDiscard={(w)=>deleteWorkout(w.id)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})}
-                onDelete={(g)=>deleteGym(g.id)} />}
+                onDelete={(g)=>deleteGym(g.id)} onFind={()=>setFindGym(true)} />}
               {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
                 onDelete={(x)=>deleteExercise(x.id)} />}
               {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter("paste")} onBuild={()=>setRoutineImporter("build")}
@@ -7342,6 +7660,11 @@ function App(){
       {gymView &&
         <GymDetail store={store} gymId={gymView} onEdit={(g)=>setGymSheet({gym:g})}
           onStartHere={startHere} onClose={()=>setGymView(null)} notify={showToast} />}
+
+      {findGym &&
+        <FindGymLayer store={store} onClose={()=>setFindGym(false)}
+          onAdded={(g)=>{ setFindGym(false); setGymView(g.id);
+            showToast(g.name + " added to your gyms"); }} />}
 
       {gymSheet &&
         <GymSheet gym={gymSheet.gym} onSave={saveGym} onDelete={deleteGym} onClose={()=>setGymSheet(null)} />}
