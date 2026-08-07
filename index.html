@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.80.0";
+const APP_VERSION = "0.81.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -1966,6 +1966,15 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
   const prog = activeProgram(store);
   const next = programNext(prog, store.data.routines||[]);
   if(!next) return null;
+  /* "I did something else today, can I dismiss this and have it come back
+     tomorrow." Yes - and crucially WITHOUT advancing the cursor. The program
+     is rolling rather than calendar-bound, so P2 is still the next day; you
+     have only said "not today". Advancing would silently skip a session,
+     which is the opposite of what was asked.
+
+     Keyed by DATE rather than a boolean, so it expires on its own at
+     midnight and there is nothing to remember to switch back on. */
+  if(store.cfg.nextUpSnoozed === todayStr()) return null;
   const busy = (store.data.workouts||[]).find(w=>!w.endedAt) || null;
   // Chris: "two sections that say there's a workout in progress is just
   // overload." He was right - this card grew a big "go to your workout in
@@ -2039,6 +2048,10 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
       <button className="btn btn-primary btn-block" style={{marginTop:12}}
         onClick={()=>onStartRoutine(next.routine)}>
         Start {next.routine.name}
+      </button>
+      <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:8}}
+        onClick={()=>store.saveCfg({ ...store.cfg, nextUpSnoozed: todayStr() })}>
+        Not today
       </button>
       {/* Gym comes from the ROUTINE, so "set it up where you are" answers for
           the place this session is actually planned for. */}
