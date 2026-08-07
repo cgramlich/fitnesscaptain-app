@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.79.0";
+const APP_VERSION = "0.80.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -523,7 +523,15 @@ const REF_EQUIPMENT = {
   "barbell":"barbell", "kettlebells":"kettlebell", "bands":"band", "e-z curl bar":"barbell",
   "medicine ball":"other", "exercise ball":"other", "foam roll":"other", "other":"other",
 };
-function refEquipment(ref){
+/* `name` is optional and checked FIRST, because the reference database files
+   Smith movements under barbell or machine. Importing them straight would
+   mis-tag all twenty and make the smith machine tag worth nothing. The name
+   is unambiguous evidence: a movement called "Smith Machine Squat" needs a
+   Smith machine, whatever the database says. Normalize passes the name too,
+   so a library that already has Smith exercises in it gets corrected rather
+   than only new imports being right. */
+function refEquipment(ref, name){
+  if(name && /\bsmith\b/i.test(String(name))) return "smith machine";
   const raw = ref && ref.equipment ? String(ref.equipment).toLowerCase() : "";
   return REF_EQUIPMENT[raw] || null;
 }
@@ -1044,7 +1052,18 @@ const EXERCISE_TYPES = ["strength","cardio","mobility"];
 const GYM_KINDS = ["home","club","hotel","other"];
 const CATALOG_CATEGORIES = ["Racks & stations","Free weights","Machines & cables","Cardio","Conditioning","Mobility & recovery","Other"];
 // Equipment kinds that actually gate an exercise (bodyweight/none/other always fit).
-const GATING_EQUIP = ["barbell","dumbbell","kettlebell","machine","cable","band","treadmill","bike","rower"];
+/* "smith machine" is its own tag rather than living under "machine", because
+   it is the one piece of kit that decides whether a lift is POSSIBLE rather
+   than merely pleasant. A hotel with a single leg-extension machine is
+   honestly tagged "machine", and before this it then claimed to support all
+   twenty Smith movements in the reference library, which it cannot.
+
+   The two tags are independent, NOT hierarchical. A Smith machine does not
+   give you a leg extension, and a leg extension does not give you a Smith
+   rack, so a gym with both carries both. Leg press and hack squat have the
+   same argument available to them and deliberately do not get it: the line is
+   "does its absence make the movement impossible", and it is worth holding. */
+const GATING_EQUIP = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","band","treadmill","bike","rower"];
 // Can this exercise be done at this gym? Only meaningful when the gym has tags.
 function availableAt(x, gym){
   if(!gym || !Array.isArray(gym.equipment) || !gym.equipment.length) return true;
@@ -1078,7 +1097,7 @@ async function createFromReference(store, item){
   const ref = await fetchReference(item.f);
   const x = { id: uid(), name: item.n, type: "strength",
               muscleGroup: refToGroup(ref && ref.primaryMuscles),
-              equipment: (ref && ref.equipment) ? String(ref.equipment) : "none",
+              equipment: refEquipment(ref, name) || "none",
               notes: (ref && Array.isArray(ref.instructions)) ? ref.instructions.join(" ") : "",
               custom: true, createdAt: nowISO(), updatedAt: nowISO() };
   store.saveCollection("exercises", [x, ...(store.data.exercises||[])]);
@@ -1106,7 +1125,7 @@ function refToGroup(muscles){
   }
   return "Full body";
 }
-const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
+const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
 function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
 // Deterministic demo link - a YouTube SEARCH, never an AI-invented URL
 // (generated video links rot; search results stay current).
@@ -2213,7 +2232,7 @@ async function normalizeLibrary(store){
       const c = need[cursor++];
       const ref = await fetchReference(c.folder);
       if(c.desc) c.newNotes = refInstructions(ref);
-      if(c.equip) c.newEquip = refEquipment(ref) || "";
+      if(c.equip) c.newEquip = refEquipment(ref, c.toName) || "";
     }
   };
   await Promise.all([worker(),worker(),worker(),worker()]);
