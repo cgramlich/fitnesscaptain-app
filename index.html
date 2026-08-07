@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.67.0";
+const APP_VERSION = "0.68.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -4766,10 +4766,11 @@ function ImportLayer({ store, onClose, onImported }){
    ============================================================ */
 /* The active program's running order, with the next day marked. Also the
    place to build one from routines you already have, or step off it. */
-function ProgramCard({ store, undoable }){
+function ProgramCard({ store, undoable, onOpen }){
   const [picking, setPicking] = useState(false);
   const [name, setName] = useState("");
   const [order, setOrder] = useState([]);      // routine ids, in the order tapped
+  const [expanded, setExpanded] = useState(null);   // id of the other-program showing its days
   const routines = store.data.routines || [];
   const prog = activeProgram(store);
   const next = programNext(prog, routines);
@@ -4810,18 +4811,45 @@ function ProgramCard({ store, undoable }){
      invisible and unreachable, which made "multiple programs" a fiction. */
   const others = (store.programs||[]).filter(p => !prog || p.id !== prog.id);
   const follow = (p) => store.saveCfg({ ...store.cfg, activeProgramId: p.id });
+  /* Expandable, because the days inside a program you are NOT following were
+     completely unreachable: the Routines list below hides any routine that
+     belongs to ANY program, and this card showed only a name and a count. Two
+     perfectly good travel routines could not be seen, opened or started
+     without first switching which program you follow. Tapping the name used
+     to BE the follow action too, which is a lot to trigger by accident. */
   const OtherPrograms = () => !others.length ? null : (
     <div className="card" style={{marginBottom:12}}>
       <div className="subtle" style={{marginBottom:8}}>
         {prog ? "Your other programs" : "Your programs"}
       </div>
-      {others.map(p => (
-        <button key={p.id} className="set-row" onClick={()=>follow(p)}>
-          <span className="set-main" style={{fontWeight:500}}>{p.name}</span>
-          <span className="chip" style={{flex:"0 0 auto"}}>{(p.routineIds||[]).length} days</span>
-          <span className="chip amber" style={{flex:"0 0 auto"}}>follow</span>
-        </button>
-      ))}
+      {others.map(p => {
+        const open = expanded === p.id;
+        const days = (p.routineIds||[]);
+        return (
+          <div key={p.id}>
+            <div className="set-row">
+              <button className="set-main" style={{fontWeight:500,textAlign:"left"}}
+                onClick={()=>setExpanded(open ? null : p.id)}>
+                {p.name}
+              </button>
+              <span className="chip" style={{flex:"0 0 auto"}}>{days.length} days</span>
+              <button className="chip amber" style={{flex:"0 0 auto"}}
+                onClick={()=>follow(p)}>follow</button>
+            </div>
+            {open && days.map((rid, i) => {
+              const r = routines.find(x=>x.id===rid);
+              if(!r) return null;
+              return (
+                <div key={rid} className="set-row" style={{opacity:.75}}>
+                  <span className="set-num" style={{paddingLeft:12}}>{i+1}</span>
+                  <button className="set-main" style={{fontWeight:500,textAlign:"left"}}
+                    onClick={()=>onOpen && onOpen(r)}>{r.name}</button>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -4848,20 +4876,32 @@ function ProgramCard({ store, undoable }){
             {prog.routineIds.length} days - following
           </span>
         </div>
+        {/* TWO tap targets per day, the same shape as an unattached routine
+            row below: the NAME opens it, the control on the right acts.
+            Before this the whole row was one button that only re-flagged
+            which day was next, so a routine inside a program could not be
+            opened or edited from anywhere in the app. With a ten-day program
+            that is every routine you own. */}
         {prog.routineIds.map((rid, i) => {
           const r = routines.find(x=>x.id===rid);
           if(!r) return null;
           const isNext = i === next.index;
           return (
-            <button key={rid} className="set-row" onClick={()=>setNextTo(i)}
-              style={{opacity:isNext?1:.7}}>
+            <div key={rid} className="set-row" style={{opacity:isNext?1:.7}}>
               <span className="set-num">{i+1}</span>
-              <span className="set-main" style={{fontWeight:isNext?700:500}}>{r.name}</span>
-              {isNext && <span className="chip amber" style={{flex:"0 0 auto"}}>next</span>}
-            </button>
+              <button className="set-main" style={{fontWeight:isNext?700:500,textAlign:"left"}}
+                onClick={()=>onOpen && onOpen(r)}>{r.name}</button>
+              {/* "next" is a STATE, so it stays a label; "make next" DOES
+                  something, so it is a button. A pill you cannot press sitting
+                  among pills you can is the trap flagged on the Yes/No pill. */}
+              {isNext
+                ? <span className="chip amber" style={{flex:"0 0 auto"}}>next</span>
+                : <button className="chip" style={{flex:"0 0 auto"}}
+                    onClick={()=>setNextTo(i)}>make next</button>}
+            </div>
           );
         })}
-        <p className="hint" style={{marginTop:8}}>Tap any day to make it the next one.</p>
+        <p className="hint" style={{marginTop:8}}>Tap a day to open it, or make it the next one.</p>
         <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:6}} onClick={deleteProgram}>
           Delete this program
         </button>
@@ -4953,7 +4993,7 @@ function RoutinesScreen({ store, onOpen, onAdd, onStart, onImport, onBuild, onDe
           answer no. A program is an ordered set of days you follow; a routine
           is a single session you start whenever. */}
       {(store.programs||[]).length > 0 && <div className="set-group">Programs</div>}
-      <ProgramCard store={store} undoable={undoable} />
+      <ProgramCard store={store} undoable={undoable} onOpen={onOpen} />
       {/* Days that belong to a program are listed inside its card, so
           repeating them here made the tab look like twenty unrelated
           routines. Only unattached ones show below. */}
