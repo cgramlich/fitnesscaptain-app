@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.75.0";
+const APP_VERSION = "0.76.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -1208,6 +1208,10 @@ function useStore(){
   // Programs: an ORDERED list of routine ids plus a cursor to the next one.
   // Deliberately not calendar-bound - miss a day and the sequence just waits.
   const [programs, setPrograms] = useState(() => lsGet("programs", []));
+  /* Progress photos: the RECORD rides meta like every other per-user
+     structure, so there is no new table. Only the bytes go to storage, and
+     they never touch this list. */
+  const [photos, setPhotos] = useState(() => lsGet("photos", []));
   const [data, setData] = useState(() => {
     const d = {}; FILES.forEach(f => d[f] = lsGet("cache:"+f, [])); return d;
   });
@@ -1228,6 +1232,7 @@ function useStore(){
   const dailyRef = useRef(daily); dailyRef.current = daily;
   const metricsRef = useRef(metrics); metricsRef.current = metrics;
   const programsRef = useRef(programs); programsRef.current = programs;
+  const photosRef = useRef(photos); photosRef.current = photos;
   // Last-pulled meta object, so pushes preserve keys other builds may add.
   const metaBaseRef = useRef({});
   const cfgDirtyRef = useRef(lsGet("cfgDirty", false));
@@ -1264,7 +1269,7 @@ function useStore(){
     try{
       await metaPut({ ...metaBaseRef.current, cfg: cfgRef.current, gyms: gymsRef.current,
                       daily: dailyRef.current, metrics: metricsRef.current,
-                      programs: programsRef.current });
+                      programs: programsRef.current, photos: photosRef.current });
       cfgDirtyRef.current=false; lsSet("cfgDirty", false);
     }
     catch(e){ setSync("error"); setSyncMsg(e.message||"Sync failed"); log("ERROR","pushCfg: "+e.message); }
@@ -1301,6 +1306,9 @@ function useStore(){
       }
       if(m && Array.isArray(m.programs) && !cfgDirtyRef.current){
         setPrograms(m.programs); lsSet("programs", m.programs); programsRef.current = m.programs;
+      }
+      if(m && Array.isArray(m.photos) && !cfgDirtyRef.current){
+        setPhotos(m.photos); lsSet("photos", m.photos); photosRef.current = m.photos;
       }
       // One-time starter seed: an empty library after a clean pull gets the
       // ~55 common movements. The cfg flag makes it once-per-account, so a
@@ -1366,6 +1374,12 @@ function useStore(){
 
   const saveMetrics = useCallback((next) => {
     setMetrics(next); lsSet("metrics", next); metricsRef.current = next;
+    cfgDirtyRef.current = true; lsSet("cfgDirty", true);
+    pushCfg();
+  }, [pushCfg]);
+
+  const savePhotos = useCallback((next) => {
+    setPhotos(next); lsSet("photos", next); photosRef.current = next;
     cfgDirtyRef.current = true; lsSet("cfgDirty", true);
     pushCfg();
   }, [pushCfg]);
@@ -1454,6 +1468,7 @@ function useStore(){
         setDaily(blankDaily); dailyRef.current = blankDaily;
         setMetrics([]); metricsRef.current = [];
         setPrograms([]); programsRef.current = [];
+        setPhotos([]); photosRef.current = [];
         cfgDirtyRef.current = false;
         log("AUTH","signed out (local cache + config cleared)");
       }
@@ -1470,8 +1485,8 @@ function useStore(){
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, [flush]);
 
-  return { data, cfg, gyms, daily, metrics, programs, sync, syncMsg, online, authed, authEmail, authReady, recovery,
-           saveCollection, saveCfg, saveGyms, saveDaily, saveMetrics, savePrograms, pullAll, flush,
+  return { data, cfg, gyms, daily, metrics, programs, photos, sync, syncMsg, online, authed, authEmail, authReady, recovery,
+           saveCollection, saveCfg, saveGyms, saveDaily, saveMetrics, savePrograms, savePhotos, pullAll, flush,
            signIn, signUp, signOut, requestReset, updatePassword };
 }
 
@@ -6950,7 +6965,276 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
   );
 }
 
-function ProgressScreen({ store, weighIn, onWeighInDone }){
+/* ============================================================
+   PROGRESS PHOTOS
+
+   The scale moves for reasons that have nothing to do with training, and the
+   mirror is a bad witness because you see it every day. Two photos eight
+   weeks apart settle arguments the numbers cannot.
+
+   THIS IS THE MOST SENSITIVE THING THE APP HOLDS, and the handling says so:
+
+     - Shrunk on THIS DEVICE before upload, which re-encodes the file and
+       drops the EXIF block, including the GPS tag your phone attached.
+     - Stored in a PRIVATE bucket under your own account id. There is no
+       public URL. The app fetches a signed link that dies after an hour.
+     - Never sent to the AI. Nothing here is read, described or analysed by
+       anything. It is a photo album, not a dataset.
+     - Deleting your account deletes the files, not just the records.
+
+   Everything is opt in. The section explains itself and stays empty until
+   you decide otherwise.
+   ============================================================ */
+const PHOTO_MAX_PX = 1600;      // enough to see changes, small enough to store
+
+function ProgressPhotos({ store, notify }){
+  const photos = (store.photos || []).slice()
+    .sort((a,b)=> String(b.date||"").localeCompare(String(a.date||"")));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [urls, setUrls] = useState({});          // id -> signed url
+  const [viewing, setViewing] = useState(null);  // one photo, full size
+  const [compare, setCompare] = useState(null);  // {a, b} two photos
+  const [picking, setPicking] = useState(false); // choosing the second to compare
+  const camRef = useRef(null);
+  const fileRef = useRef(null);
+
+  /* Signed links expire, so they are fetched on demand and held only in
+     memory. Nothing about a photo is cached to disk by us. */
+  const urlFor = async (id) => {
+    if(urls[id]) return urls[id];
+    const token = await authToken();
+    const r = await fetch(API_BASE + "/api/progress/photo/" + id,
+      { headers:{ "Authorization":"Bearer "+token } });
+    if(!r.ok) throw new Error(r.status===404 ? "That photo is gone." : "Couldn't open that photo.");
+    const j = await r.json();
+    setUrls(u => ({ ...u, [id]: j.url }));
+    return j.url;
+  };
+
+  useEffect(() => {
+    // Warm the newest few so the grid is not a row of spinners.
+    let stop = false;
+    (async () => {
+      for(const p of photos.slice(0, 6)){
+        if(stop || urls[p.id]) continue;
+        try{ await urlFor(p.id); }catch(e){ /* a missing one just stays blank */ }
+      }
+    })();
+    return () => { stop = true; };
+  }, [photos.length]);
+
+  const shrink = (file) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try{
+        const scale = Math.min(1, PHOTO_MAX_PX/Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(img.width*scale));
+        cv.height = Math.max(1, Math.round(img.height*scale));
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        // 0.82: a body photo compresses well and this is about seeing change,
+        // not printing. Re-encoding is also what strips the EXIF.
+        const dataUrl = cv.toDataURL("image/jpeg", 0.82);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl.split(",")[1]);
+      }catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that image.")); };
+    img.src = url;
+  });
+
+  const add = async (file) => {
+    if(!file) return;
+    setErr(""); setBusy(true);
+    try{
+      const b64 = await shrink(file);
+      const id = uid();
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/progress/photo", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ b64, photo_id: id }),
+      });
+      if(!r.ok){
+        let msg = "Couldn't save that photo.";
+        try{ const j = await r.json(); if(j && j.detail) msg = j.detail; }catch(_){}
+        throw new Error(msg);
+      }
+      store.savePhotos([{ id, date: todayStr(), note:"", createdAt: nowISO() },
+                        ...(store.photos||[])]);
+      log("PROGRESS","photo added");
+      if(notify) notify("Photo saved");
+    }catch(e){ setErr(e.message || "Couldn't save that photo."); log("ERROR","progress photo: "+e.message); }
+    finally{ setBusy(false); }
+  };
+
+  const remove = async (p) => {
+    setErr("");
+    const before = (store.photos||[]).slice();
+    // Record first so the grid responds immediately, then the object. If the
+    // object delete fails the record is restored, because a photo you think
+    // you deleted must not come back on the next device.
+    store.savePhotos(before.filter(x => x.id !== p.id));
+    setViewing(null); setCompare(null);
+    try{
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/progress/photo/" + p.id,
+        { method:"DELETE", headers:{ "Authorization":"Bearer "+token } });
+      if(!r.ok) throw new Error("Couldn't delete that photo.");
+      log("PROGRESS","photo deleted");
+    }catch(e){
+      store.savePhotos(before);
+      setErr(e.message || "Couldn't delete that photo.");
+    }
+  };
+
+  const Thumb = ({ p, onTap, selected }) => (
+    <button onClick={onTap} style={{position:"relative",padding:0,borderRadius:10,
+      overflow:"hidden",border: selected ? "2px solid var(--amber)" : "1px solid var(--line-2)",
+      background:"var(--bg-3)",aspectRatio:"3/4"}}>
+      {urls[p.id]
+        ? <img src={urls[p.id]} alt={"Progress photo from "+fmtDate(p.date)}
+            style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+        : <span className="spin" style={{position:"absolute",top:"50%",left:"50%",
+            transform:"translate(-50%,-50%)"}}></span>}
+      <span style={{position:"absolute",left:0,right:0,bottom:0,fontSize:10.5,
+        padding:"3px 5px",background:"rgba(0,0,0,.55)",color:"#fff",textAlign:"left"}}>
+        {fmtDate(p.date)}
+      </span>
+    </button>
+  );
+
+  /* THE COMPARE VIEW IS THE WHOLE POINT. A grid of thumbnails is an album;
+     two photos side by side with their dates is evidence. */
+  if(compare){
+    return (
+      <div className="layer">
+        <div className="layer-inner">
+          <div className="layer-top">
+            <button className="icon-btn" onClick={()=>setCompare(null)} aria-label="Back">
+              <Icon d={ICONS.back} size={20}/></button>
+            <h2 style={{flex:1,minWidth:0}}>Then and now</h2>
+          </div>
+          <div className="row" style={{gap:8,marginTop:10,alignItems:"flex-start"}}>
+            {[compare.a, compare.b].map((p,i)=>(
+              <div key={i} style={{flex:1,minWidth:0}}>
+                {urls[p.id]
+                  ? <img src={urls[p.id]} alt="" style={{width:"100%",borderRadius:10,display:"block"}} />
+                  : <div className="row center" style={{padding:30}}><span className="spin"></span></div>}
+                <div className="hint center" style={{marginTop:6}}>{fmtDate(p.date)}</div>
+              </div>
+            ))}
+          </div>
+          {(() => {
+            const days = Math.abs(Math.round(
+              (new Date(compare.b.date) - new Date(compare.a.date)) / 864e5));
+            return <p className="hint center" style={{marginTop:12}}>
+              {days} day{days===1?"":"s"} apart
+            </p>;
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+  if(viewing){
+    return (
+      <div className="layer">
+        <div className="layer-inner">
+          <div className="layer-top">
+            <button className="icon-btn" onClick={()=>{ setViewing(null); setPicking(false); }} aria-label="Back">
+              <Icon d={ICONS.back} size={20}/></button>
+            <h2 style={{flex:1,minWidth:0}}>{fmtDate(viewing.date)}</h2>
+          </div>
+          {urls[viewing.id]
+            ? <img src={urls[viewing.id]} alt="" style={{width:"100%",borderRadius:12,marginTop:10,display:"block"}} />
+            : <div className="row center" style={{padding:40}}><span className="spin"></span></div>}
+          {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
+          {photos.length > 1 &&
+            <>
+              <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}}
+                onClick={()=>setPicking(p=>!p)}>
+                {picking ? "Cancel compare" : "Compare with another"}
+              </button>
+              {picking &&
+                <>
+                  <p className="hint center" style={{marginTop:8}}>Pick the one to compare against.</p>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:8}}>
+                    {photos.filter(p=>p.id!==viewing.id).map(p =>
+                      <Thumb key={p.id} p={p} onTap={async ()=>{
+                        try{ await urlFor(p.id); }catch(e){}
+                        // Oldest on the left always: "then and now" reads
+                        // backwards otherwise and the point is lost.
+                        const older = String(p.date) <= String(viewing.date) ? p : viewing;
+                        const newer = older === p ? viewing : p;
+                        setCompare({ a: older, b: newer }); setPicking(false);
+                      }} />)}
+                  </div>
+                </>}
+            </>}
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}}
+            onClick={()=>remove(viewing)}>
+            <Icon d={ICONS.trash} size={15}/> Delete this photo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="set-group">Progress photos</div>
+
+      <input ref={camRef} type="file" accept="image/*" capture="user" style={{display:"none"}}
+        onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+
+      {!photos.length &&
+        <div className="card">
+          <p className="hint" style={{marginTop:0}}>
+            The scale moves for reasons that have nothing to do with training,
+            and the mirror is a bad witness because you see it every day. Two
+            photos eight weeks apart settle it.
+          </p>
+          <p className="hint">
+            Yours alone: stored privately, never shown to anyone, and never
+            read by the AI. Your phone's location tag is stripped before it
+            leaves the device.
+          </p>
+        </div>}
+
+      {photos.length > 0 &&
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+          {photos.map(p => <Thumb key={p.id} p={p} onTap={async ()=>{
+            try{ await urlFor(p.id); }catch(e){ setErr(e.message); }
+            setViewing(p);
+          }} />)}
+        </div>}
+
+      {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+
+      <div className="row" style={{gap:8,marginTop:10}}>
+        <button className="btn btn-ghost btn-sm" style={{flex:1}} disabled={busy}
+          onClick={()=>{ if(camRef.current) camRef.current.click(); }}>
+          {busy ? <span className="spin"></span> : "Take a photo"}
+        </button>
+        <button className="btn btn-ghost btn-sm" style={{flex:1}} disabled={busy}
+          onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
+          Upload one
+        </button>
+      </div>
+      {photos.length > 1 &&
+        <p className="hint center" style={{marginTop:8}}>
+          Tap any photo to see it big, or to compare it with another.
+        </p>}
+    </>
+  );
+}
+
+function ProgressScreen({ store, weighIn, onWeighInDone, notify }){
   const units = store.cfg.units || "lb";
   const [exId, setExId] = useState(null);
   const done = (store.data.workouts||[]).filter(w=>w.endedAt)
@@ -6960,6 +7244,7 @@ function ProgressScreen({ store, weighIn, onWeighInDone }){
     return (
       <div>
         <BodySection store={store} openNow={weighIn} onOpened={onWeighInDone} />
+        <ProgressPhotos store={store} notify={notify} />
         <div className="empty">
           <div className="glyph">^</div>
           <h3 className="title-sm">Training progress</h3>
@@ -7030,6 +7315,7 @@ function ProgressScreen({ store, weighIn, onWeighInDone }){
       </div>
 
       <BodySection store={store} openNow={weighIn} onOpened={onWeighInDone} />
+      <ProgressPhotos store={store} notify={notify} />
 
       <RetentionLens store={store} exStats={exStats} />
 
@@ -7171,12 +7457,40 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
   /* EXPORT. Everything the account holds, in one file, written on the device.
      Deliberately not a server job with an email: the whole point is that
      getting your data back should not require asking anyone. */
+  const [exporting, setExporting] = useState(false);
   const [delPhase, setDelPhase] = useState("idle");   // idle | confirm | busy
   const [delWord, setDelWord]   = useState("");
   const [delErr, setDelErr]     = useState("");
 
-  const exportData = () => {
+  /* The policy promises you can export EVERYTHING, so progress photos have to
+     be in it. They are files rather than rows, so each is fetched and embedded
+     as base64. That makes the download bigger, but a portability right that
+     quietly omits the most personal thing you own is not the right honoured.
+     A photo that fails to fetch is recorded as such rather than skipped
+     silently, so the file never overstates what it contains. */
+  const exportData = async () => {
+    setExporting(true);
     try{
+      const photos = [];
+      for(const p of (store.photos||[])){
+        try{
+          const token = await authToken();
+          const meta = await fetch(API_BASE + "/api/progress/photo/" + p.id,
+            { headers:{ "Authorization":"Bearer "+token } });
+          if(!meta.ok) throw new Error("HTTP " + meta.status);
+          const { url } = await meta.json();
+          const blob = await (await fetch(url)).blob();
+          const b64 = await new Promise((done, fail) => {
+            const fr = new FileReader();
+            fr.onload = () => done(String(fr.result).split(",")[1] || "");
+            fr.onerror = () => fail(new Error("read failed"));
+            fr.readAsDataURL(blob);
+          });
+          photos.push({ ...p, image_jpeg_base64: b64 });
+        }catch(e){
+          photos.push({ ...p, image_jpeg_base64: null, error: "could not be downloaded" });
+        }
+      }
       const payload = {
         app: "FitnessCaptain", version: APP_VERSION,
         exportedAt: nowISO(), account: store.authEmail || null,
@@ -7184,6 +7498,7 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
         exercises: store.data.exercises || [],
         routines:  store.data.routines  || [],
         meta:      store.data.meta      || {},
+        progressPhotos: photos,
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
       const url  = URL.createObjectURL(blob);
@@ -7191,8 +7506,9 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
       a.href = url; a.download = "fitnesscaptain-" + todayStr() + ".json";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>{ try{ URL.revokeObjectURL(url); }catch(_){} }, 1000);
-      log("EXPORT","exported "+(payload.workouts.length)+" workouts");
+      log("EXPORT","exported "+payload.workouts.length+" workouts + "+photos.length+" photo(s)");
     }catch(e){ log("ERROR","export: "+e.message); }
+    finally{ setExporting(false); }
   };
 
   const deleteAccount = async () => {
@@ -7280,10 +7596,12 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
       <div className="set-group">Your data</div>
       <div className="card">
         <div className="subtle" style={{marginBottom:10}}>
-          Everything you have logged, as a file you keep. No request, no waiting.
+          Everything you have logged, as a file you keep, progress photos
+          included. No request, no waiting.
         </div>
-        <button className="btn btn-ghost btn-block" onClick={exportData}>
-          <Icon d={ICONS.text} size={15}/> Export my data
+        <button className="btn btn-ghost btn-block" onClick={exportData} disabled={exporting}>
+          {exporting ? <span className="spin"></span>
+                     : <><Icon d={ICONS.text} size={15}/> Export my data</>}
         </button>
 
         <div className="subtle" style={{marginTop:18,marginBottom:10}}>
@@ -7899,7 +8217,7 @@ function App(){
                 onDelete={(x)=>deleteExercise(x.id)} />}
               {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter("paste")} onBuild={()=>setRoutineImporter("build")}
                 onDelete={(r)=>deleteRoutine(r.id)} undoable={showUndo} />}
-              {tab==="progress"  && <ProgressScreen store={store} weighIn={weighIn} onWeighInDone={()=>setWeighIn(false)} />}
+              {tab==="progress"  && <ProgressScreen store={store} weighIn={weighIn} onWeighInDone={()=>setWeighIn(false)} notify={showToast} />}
               {tab==="more"      && <MoreScreen store={store} onOpenGyms={()=>setTab("gyms")}
                 onOpenExercises={()=>setTab("exercises")} onOpenSettings={()=>setInSettings(true)} />}
             </>}

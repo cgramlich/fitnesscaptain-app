@@ -50,6 +50,8 @@
     <li><strong>Body measurements you choose to enter</strong>: bodyweight,
       waist, body fat, age. All optional. The app works without any of them.</li>
     <li><strong>Daily checklist entries</strong>, if you set one up.</li>
+    <li><strong>Progress photos</strong>, if you choose to take any. Entirely
+      optional, and covered in its own section below.</li>
   </ul>
 
   <h3>Because the software needs it to run</h3>
@@ -105,12 +107,32 @@
     kept on our servers. What is saved is the equipment list you approve on the
     review screen.</p>
 
+  <h2>Progress photos</h2>
+  <p>These are the most personal thing the app can hold, so they are handled
+    more strictly than anything else in it. Taking them is entirely your
+    choice and the feature stays empty until you do.</p>
+  <ul>
+    <li><strong>The location tag is removed before the photo leaves your
+      device.</strong> Shrinking it re-encodes the file, which drops the EXIF
+      block your camera attached, including GPS.</li>
+    <li><strong>Stored privately, filed under your account.</strong> There is
+      no public web address for any of them. The app opens one through a
+      signed link that stops working after an hour.</li>
+    <li><strong>Never sent to the AI.</strong> No progress photo is read,
+      described, scored or analysed by anything. It is an album, not a
+      dataset. This is a different rule from gym scan photos, which are sent
+      to be read precisely because that is the point of them.</li>
+    <li><strong>Deleting one deletes the file</strong>, not just its entry.
+      Deleting your account removes every one of them.</li>
+  </ul>
+
   <h2>Where it lives</h2>
   <table>
     <tr><th>Provider</th><th>What it holds</th></tr>
     <tr><td>Supabase</td><td>Your account and all training data, in Postgres, hosted in the United States (us-east-1).</td></tr>
     <tr><td>Railway</td><td>Runs the server that talks to the database and to the AI.</td></tr>
     <tr><td>GitHub Pages</td><td>Serves the app itself. Static files only, no user data.</td></tr>
+    <tr><td>Supabase Storage</td><td>Progress photos, in a private bucket. Not public, not indexed, reachable only through a short-lived signed link.</td></tr>
   </table>
 
   <h2>Who else sees your data</h2>
