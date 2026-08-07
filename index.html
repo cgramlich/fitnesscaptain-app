@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.70.0";
+const APP_VERSION = "0.71.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2644,12 +2644,66 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
    hotel the first time you stay there and never search again. Optional
    throughout - a gym with no Google entry, or someone who would rather not,
    still works exactly as before on name and town alone. */
+/* The ONLY place this app touches location, and only when the button is
+   pressed. The coordinates go to the backend to build one search bias and are
+   never stored, never logged and never attached to a workout. The privacy
+   policy says exactly this; if that ever stops being true, that page changes
+   in the same commit.
+
+   Every failure mode ends in the same place: type the name instead. A denied
+   permission is a preference, not an error, so it does not get an angry red
+   banner. */
+function askForLocation(){
+  return new Promise((resolve, reject) => {
+    if(!navigator.geolocation){ reject(new Error("This device can't do location. Type the name instead.")); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => {
+        if(err && err.code === 1) reject(new Error("Location is off for this site. Type the name instead."));
+        else reject(new Error("Couldn't get your location. Type the name instead."));
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
+    );
+  });
+}
+
 function PlaceLinkField({ value, name, onPick, onClear }){
   const [q, setQ] = useState("");
   const [hits, setHits] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [open, setOpen] = useState(false);
+  const [nearBusy, setNearBusy] = useState(false);
+
+  /* Two things people mean by "near me": the gym down the road, and the hotel
+     they are standing in. Google cannot filter hotels by whether they have a
+     gym - no such field exists - so the honest move is to return hotels and
+     let you pick, rather than pretending to a filter that does not exist. */
+  const NEAR_MODES = [
+    { k:"gym",   label:"Gyms",   query:"gym fitness center" },
+    { k:"hotel", label:"Hotels", query:"hotel" },
+  ];
+
+  const searchNear = async (mode) => {
+    setErr(""); setNearBusy(true); setOpen(true);
+    try{
+      const where = await askForLocation();
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/places/search", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ query: mode.query, max_results: 8,
+                               lat: where.lat, lng: where.lng }),
+      });
+      if(r.status === 503) throw new Error("Place search isn't switched on yet.");
+      if(r.status === 429) throw new Error("You've hit this month's place lookups. Add it by hand instead.");
+      if(!r.ok) throw new Error("Couldn't search right now.");
+      const j = await r.json();
+      setHits(j.places || []);
+      if(!(j.places||[]).length) setErr("Nothing found nearby. Try searching by name.");
+    }catch(e){ setErr(e.message || "Couldn't search nearby."); }
+    finally{ setNearBusy(false); }
+  };
 
   const search = async () => {
     const term = (q.trim() || name || "").trim();
@@ -2694,9 +2748,18 @@ function PlaceLinkField({ value, name, onPick, onClear }){
         near-duplicate.
       </div>
       {!open
-        ? <button className="btn btn-ghost btn-sm" onClick={()=>{ setOpen(true); setQ(name||""); }}>
-            Find this place
-          </button>
+        ? <div className="row" style={{gap:8,flexWrap:"wrap"}}>
+            <button className="btn btn-ghost btn-sm" onClick={()=>{ setOpen(true); setQ(name||""); }}>
+              Find by name
+            </button>
+            {NEAR_MODES.map(m => (
+              <button key={m.k} className="btn btn-ghost btn-sm" disabled={nearBusy}
+                onClick={()=>searchNear(m)}>
+                {nearBusy ? <span className="spin"></span>
+                          : <><Icon d={ICONS.pin} size={14}/> {m.label} near me</>}
+              </button>
+            ))}
+          </div>
         : <>
             <div className="row" style={{gap:8}}>
               <input className="input" style={{flex:1}} value={q} autoFocus
@@ -2787,7 +2850,12 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
         </div>
 
         <PlaceLinkField value={place} name={name}
-          onPick={(p)=>setPlace(p)} onClear={()=>setPlace(null)} />
+          onPick={(p)=>{ setPlace(p);
+            // Adding a hotel gym starts with a blank name, and having just
+            // found the building it is silly to make you type it out again.
+            // Fills a BLANK name only: your own wording always wins.
+            if(!name.trim() && p && p.name) setName(p.name);
+          }} onClear={()=>setPlace(null)} />
 
         <div className="field">
           <label className="label">Equipment available</label>
