@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.76.0";
+const APP_VERSION = "0.77.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -6337,7 +6337,7 @@ function MetricSheet({ store, onClose }){
         <input className="input" type="date" value={date} onChange={e=>{ setDate(e.target.value); setErr(""); }} />
         <label className="label" style={{marginTop:12}}>Weight ({units})</label>
         <input className="input" inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)}
-          placeholder="the one that matters" />
+          placeholder="required" />
         <label className="label" style={{marginTop:12}}>Waist ({units==="kg"?"cm":"in"})</label>
         <input className="input" inputMode="decimal" value={waist} onChange={e=>setWaist(e.target.value)} placeholder="optional" />
         <label className="label" style={{marginTop:12}}>Body fat %</label>
