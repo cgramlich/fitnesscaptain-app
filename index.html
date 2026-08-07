@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.69.0";
+const APP_VERSION = "0.70.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2635,12 +2635,106 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
    the knowledge base the AI reads when designing workouts for a location).
    Rides on synced meta - no backend change.
    ============================================================ */
+/* Linking a gym to Google gives it a stable identity, which is what lets two
+   people who scanned the same hotel land on ONE community record instead of
+   "Hyatt Regency Austin" and "Hyatt Regency Austin, TX" sitting side by side.
+
+   It is a ONCE PER GYM action, not a browsing loop, which is why this can be
+   free here while the equivalent is Pro-gated in MenuCaptain: you link the
+   hotel the first time you stay there and never search again. Optional
+   throughout - a gym with no Google entry, or someone who would rather not,
+   still works exactly as before on name and town alone. */
+function PlaceLinkField({ value, name, onPick, onClear }){
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const search = async () => {
+    const term = (q.trim() || name || "").trim();
+    if(term.length < 2){ setErr("Type a bit more of the name."); return; }
+    setErr(""); setBusy(true);
+    try{
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/places/search", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ query: term, max_results: 6 }),
+      });
+      if(r.status === 503){ throw new Error("Place search isn't switched on yet."); }
+      if(r.status === 429){ throw new Error("You've hit this month's place lookups. Add it by hand instead."); }
+      if(!r.ok) throw new Error("Couldn't search right now.");
+      const j = await r.json();
+      setHits(j.places || []);
+    }catch(e){ setErr(e.message || "Search failed."); }
+    finally{ setBusy(false); }
+  };
+
+  if(value && value.place_id){
+    return (
+      <div className="field">
+        <label className="label">Google</label>
+        <div className="row" style={{gap:8,alignItems:"center"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14}}>{value.name || name}</div>
+            {value.address && <div className="hint" style={{margin:0}}>{value.address}</div>}
+          </div>
+          <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}} onClick={onClear}>Unlink</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="field">
+      <label className="label">Google (optional)</label>
+      <div className="hint" style={{marginTop:0,marginBottom:6}}>
+        Linking it means anyone else who trains here finds the same gym, not a
+        near-duplicate.
+      </div>
+      {!open
+        ? <button className="btn btn-ghost btn-sm" onClick={()=>{ setOpen(true); setQ(name||""); }}>
+            Find this place
+          </button>
+        : <>
+            <div className="row" style={{gap:8}}>
+              <input className="input" style={{flex:1}} value={q} autoFocus
+                onChange={e=>setQ(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); search(); } }}
+                placeholder="Hyatt Regency Austin" />
+              <button className="btn btn-primary btn-sm" onClick={search} disabled={busy}>
+                {busy ? <span className="spin"></span> : "Search"}
+              </button>
+            </div>
+            {err && <div className="auth-msg err" style={{marginTop:8}}>{err}</div>}
+            {hits && hits.length===0 &&
+              <p className="hint" style={{marginTop:8}}>
+                Nothing found. It works fine without linking.
+              </p>}
+            {(hits||[]).map(p => (
+              <button key={p.place_id} className="set-row" style={{textAlign:"left"}}
+                onClick={()=>{ onPick(p); setOpen(false); setHits(null); }}>
+                <span className="set-main">
+                  <span style={{display:"block",fontWeight:600}}>{p.name}</span>
+                  {p.address && <span className="hint" style={{margin:0,fontWeight:400}}>{p.address}</span>}
+                </span>
+              </button>
+            ))}
+          </>}
+    </div>
+  );
+}
+
 function GymSheet({ gym, onSave, onDelete, onClose }){
   const [name, setName] = useState(gym ? (gym.name||"") : "");
   const [kind, setKind] = useState(gym ? (gym.kind||"home") : "home");
   const [equip, setEquip] = useState(gym && Array.isArray(gym.equipment) ? gym.equipment : []);
   const [inventory, setInventory] = useState(gym ? (gym.inventory||"") : "");
   const [confirmed, setConfirmed] = useState(gym ? !!gym.invConfirmed : false);
+  const [place, setPlace] = useState(gym && gym.placeId
+    ? { place_id: gym.placeId, name: gym.placeName || gym.name, address: gym.placeAddress || "" }
+    : null);
 
   const toggleEquip = (e) => setEquip(prev => prev.includes(e) ? prev.filter(x=>x!==e) : [...prev, e]);
 
@@ -2650,6 +2744,12 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
       id: gym ? gym.id : uid(),
       name: name.trim(), kind, equipment: equip,
       invConfirmed: confirmed || undefined,
+      // The Google link, flattened onto the gym record. city is derived from
+      // the formatted address so sharing does not have to ask for it twice.
+      placeId: place ? place.place_id : undefined,
+      placeName: place ? place.name : undefined,
+      placeAddress: place ? place.address : undefined,
+      city: place ? placeCity(place.address) : (gym ? gym.city : undefined),
       inventory: inventory.trim(),
       // Carry the AI-organized catalog ONLY while the source text is
       // unchanged; edited text means the catalog is stale -> re-organize.
@@ -2685,6 +2785,9 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
               </button>)}
           </div>
         </div>
+
+        <PlaceLinkField value={place} name={name}
+          onPick={(p)=>setPlace(p)} onClear={()=>setPlace(null)} />
 
         <div className="field">
           <label className="label">Equipment available</label>
@@ -2783,6 +2886,17 @@ async function communityPost(path, body){
   return r.json();
 }
 
+/* Google's formatted address is "1 Main St, Austin, TX 78701, USA". The town
+   is the second-to-last component before the country, which is right far more
+   often than any cleverer parse, and the field stays editable anyway. */
+function placeCity(address){
+  const parts = String(address||"").split(",").map(s=>s.trim()).filter(Boolean);
+  if(parts.length < 3) return parts.length ? parts[parts.length-1] : "";
+  const region = parts[parts.length-2].replace(/\s+\d[\d-]*$/, "").trim();
+  const town = parts[parts.length-3];
+  return region ? (town + ", " + region) : town;
+}
+
 /* "scanned last month" beats a raw date here: the question being asked is
    how stale this is, not what day it happened. */
 function freshness(iso){
@@ -2815,7 +2929,7 @@ function ShareGymSheet({ store, gym, onClose, notify }){
     setErr(""); setBusy(true);
     try{
       await communityPost("/api/community/gyms", {
-        name: gym.name, city: city.trim(), kind: gym.kind,
+        name: gym.name, city: city.trim(), kind: gym.kind, place_id: gym.placeId || "",
         equipment: gym.equipment||[], inventory: gym.inventory||"", catalog: gym.catalog||null,
       });
       // Remember the city on the gym so re-sharing does not ask again.
@@ -2905,7 +3019,8 @@ function FindGymLayer({ store, onClose, onAdded }){
     setPulling(true);
     try{
       const g = { id: uid(), name: preview.name, kind: preview.kind || "other",
-                  city: preview.city || "", equipment: preview.equipment || [],
+                  city: preview.city || "", placeId: preview.place_id || undefined,
+                  equipment: preview.equipment || [],
                   inventory: preview.inventory || "", catalog: preview.catalog || null,
                   fromCommunity: true, communityAt: preview.updated_at,
                   createdAt: nowISO() };
