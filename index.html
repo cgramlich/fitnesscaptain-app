@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.78.0";
+const APP_VERSION = "0.79.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -2510,7 +2510,148 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
 
 /* Add/edit one exercise. Deleting is allowed for seed items too - the
    once-per-account seed flag means they stay deleted. */
-function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
+/* MERGE ONE EXERCISE INTO ANOTHER.
+
+   The situation this exists for: you logged "Squat" for a year because that
+   is what you called it, then built a proper library with "Barbell Squat"
+   and "Smith Machine Squat" in it. Progress groups by exercise ID, so those
+   are three separate histories with three separate PRs and three separate
+   trend lines, and the year of squats is stranded in the vague one.
+
+   Merging rewrites every logged entry and every routine item that points at
+   the old exercise so it points at the new one, then removes the old record.
+   The SETS ARE UNTOUCHED: the weights and reps you did are facts, and this
+   only corrects the label on them.
+
+   Deliberately not automatic. "Squat" and "Front Squat" are not the same
+   movement and no name-matching rule is ever going to be trusted to decide
+   that, so the choice is yours and the count of what will move is shown
+   before you make it. */
+function MergeExerciseSheet({ store, exercise, onDone, onClose }){
+  const [target, setTarget] = useState(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const others = (store.data.exercises||[])
+    .filter(x => x.id !== exercise.id)
+    .filter(x => !q.trim() || normName(x.name).indexOf(normName(q)) !== -1)
+    .sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+
+  // What moves, counted before you commit rather than reported after.
+  const affected = (() => {
+    let entries = 0, workouts = 0, routineItems = 0, routines = 0;
+    (store.data.workouts||[]).forEach(w => {
+      const n = (w.entries||[]).filter(e => e.exerciseId === exercise.id).length;
+      if(n){ entries += n; workouts++; }
+    });
+    (store.data.routines||[]).forEach(r => {
+      const n = (r.items||[]).filter(it => it.exerciseId === exercise.id).length;
+      if(n){ routineItems += n; routines++; }
+    });
+    return { entries, workouts, routineItems, routines };
+  })();
+
+  const merge = () => {
+    if(!target) return;
+    setBusy(true);
+    const beforeW = (store.data.workouts||[]).slice();
+    const beforeR = (store.data.routines||[]).slice();
+    const beforeX = (store.data.exercises||[]).slice();
+
+    store.saveCollection("workouts", beforeW.map(w => {
+      if(!(w.entries||[]).some(e => e.exerciseId === exercise.id)) return w;
+      return { ...w, updatedAt: nowISO(), entries: w.entries.map(e =>
+        e.exerciseId === exercise.id
+          // type follows the target too: merging a "strength" squat into a
+          // machine entry that the library calls strength keeps them
+          // consistent, and a mismatch here breaks the logger's fields.
+          ? { ...e, exerciseId: target.id, name: target.name, type: target.type || e.type }
+          : e) };
+    }));
+    store.saveCollection("routines", beforeR.map(r => {
+      if(!(r.items||[]).some(it => it.exerciseId === exercise.id)) return r;
+      return { ...r, updatedAt: nowISO(), items: r.items.map(it =>
+        it.exerciseId === exercise.id
+          ? { ...it, exerciseId: target.id, name: target.name, type: target.type || it.type }
+          : it) };
+    }));
+    store.saveCollection("exercises", beforeX.filter(x => x.id !== exercise.id));
+
+    log("MERGE", exercise.name + " -> " + target.name +
+        " (" + affected.entries + " entries, " + affected.routineItems + " routine items)");
+    onDone({
+      message: exercise.name + " merged into " + target.name,
+      undo: () => {
+        store.saveCollection("workouts", beforeW);
+        store.saveCollection("routines", beforeR);
+        store.saveCollection("exercises", beforeX);
+      },
+    });
+  };
+
+  return (
+    <>
+      <div className="scrim" style={{zIndex:95}} onClick={onClose}></div>
+      <div className="sheet" style={{zIndex:96}}>
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Merge {exercise.name}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <p className="hint" style={{marginTop:0}}>
+          Everything logged as <strong>{exercise.name}</strong> becomes the
+          exercise you pick. The weights and reps are untouched, so the history
+          moves across intact and the two stop competing in Progress.
+        </p>
+
+        <div className="item-meta" style={{marginBottom:10}}>
+          <span className="chip amber">
+            {affected.entries} logged {affected.entries===1?"entry":"entries"}
+          </span>
+          {affected.workouts>0 &&
+            <span className="chip">across {affected.workouts} workout{affected.workouts===1?"":"s"}</span>}
+          {affected.routineItems>0 &&
+            <span className="chip blue">
+              {affected.routineItems} routine {affected.routineItems===1?"slot":"slots"}
+            </span>}
+        </div>
+
+        {!(store.data.exercises||[]).length || others.length===0
+          ? <p className="hint">Nothing else in the library to merge into yet.</p>
+          : <>
+              <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+                placeholder="Search your library" />
+              <div style={{maxHeight:260,overflowY:"auto",marginTop:8}}>
+                {others.slice(0,60).map(x => (
+                  <button key={x.id} className="set-row"
+                    style={{textAlign:"left",opacity: target && target.id===x.id ? 1 : .75}}
+                    onClick={()=>setTarget(x)}>
+                    <span className="set-main" style={{fontWeight: target && target.id===x.id ? 700 : 500}}>
+                      {x.name}
+                    </span>
+                    {x.muscleGroup && <span className="chip" style={{flex:"0 0 auto"}}>{x.muscleGroup}</span>}
+                    {target && target.id===x.id &&
+                      <span className="chip amber" style={{flex:"0 0 auto"}}>keep this one</span>}
+                  </button>
+                ))}
+              </div>
+            </>}
+
+        <button className="btn btn-primary btn-block" style={{marginTop:12}}
+          disabled={!target || busy} onClick={merge}>
+          {target ? "Merge into " + target.name : "Pick what to keep"}
+        </button>
+        <p className="hint center" style={{marginTop:8,marginBottom:0}}>
+          {exercise.name} is removed afterwards. You can undo it.
+        </p>
+      </div>
+    </>
+  );
+}
+
+function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable }){
+  const [merging, setMerging] = useState(false);
   const [name, setName] = useState(exercise ? (exercise.name||"") : "");
   const [type, setType] = useState(exercise ? (exercise.type||"strength") : "strength");
   const [group, setGroup] = useState(exercise ? (exercise.muscleGroup||"Full body") : "Full body");
@@ -2639,6 +2780,11 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
           {exercise ? "Save changes" : "Add exercise"}
         </button>
         {exercise &&
+          <button className="btn btn-ghost btn-block" style={{marginTop:10}}
+            onClick={()=>setMerging(true)}>
+            Merge into another exercise
+          </button>}
+        {exercise &&
           <button className="btn btn-danger btn-block" style={{marginTop:10}}
             onClick={()=>{ if(confirm("Delete this exercise? Logged workouts keep their history.")) onDelete(exercise.id); }}>
             Delete exercise
@@ -2650,6 +2796,13 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose }){
       {help &&
         <ExerciseHelp store={store} name={name} exerciseId={exercise ? exercise.id : null}
           onClose={()=>setHelp(false)} />}
+
+      {merging && exercise &&
+        <MergeExerciseSheet store={store} exercise={exercise}
+          onClose={()=>setMerging(false)}
+          onDone={({message, undo})=>{ setMerging(false);
+            if(undoable) undoable(message, undo);
+            onClose(); }} />}
     </>
   );
 }
@@ -4222,7 +4375,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable }){
+function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -4427,6 +4580,12 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
           <button className="entry-x" onClick={onMoveUp} aria-label={"Move "+entry.name+" earlier"}
             title="Move earlier">
             <Icon d={ICONS.up} size={16}/>
+          </button>}
+        {active && onSwap &&
+          <button className="entry-x" onClick={onSwap}
+            aria-label={"Change "+entry.name+" to a different exercise"}
+            title="Change the exercise, keep the sets">
+            <Icon d={ICONS.repeat} size={15}/>
           </button>}
         {active &&
           <button className="entry-x" onClick={onRemove} aria-label={"Remove "+entry.name}>
@@ -4935,7 +5094,31 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     patch({ entries: before.filter(x=>x.id!==id) });
     if(undoable) undoable((e ? e.name : "Exercise") + " removed", () => patch({ entries: before }));
   };
+  /* SWAPPING an entry's exercise, keeping its sets. The case Chris hit: a
+     year of sessions logged as the vague "Squat" that were really barbell
+     squats, and Progress groups by exercise ID, so they sat in their own
+     stranded history.
+
+     This is a CORRECTION, not a substitution. `substitutedFor` deliberately
+     stays unset - that field means "I did something else because the kit was
+     missing", and recording an honest relabel as a swap would poison the
+     strength trend it exists to protect. The sets are facts; only the label
+     was wrong. */
+  const [swapId, setSwapId] = useState(null);
+
   const addExercise = (x) => {
+    if(swapId){
+      const before = (workout.entries||[]).slice();
+      const was = before.find(e => e.id === swapId);
+      patch({ entries: before.map(e => e.id === swapId
+        ? { ...e, exerciseId: x.id, name: x.name, type: x.type || e.type }
+        : e) });
+      setSwapId(null); setPicker(false);
+      log("SWAP", (was ? was.name : "entry") + " -> " + x.name);
+      if(undoable && was) undoable(was.name + " changed to " + x.name,
+                                   () => patch({ entries: before }));
+      return;
+    }
     patch({ entries: [...(workout.entries||[]), { id: uid(), exerciseId: x.id, name: x.name, type: x.type, sets: [], cardio: null }] });
     setPicker(false);
   };
@@ -5072,7 +5255,8 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
-            onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable} />
+            onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable}
+            onSwap={()=>{ setSwapId(e.id); setPicker(true); }} />
         ))}
 
         {canEdit &&
@@ -5117,7 +5301,8 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
 
       {picker &&
         <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
-          onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })} onClose={()=>setPicker(false)} />}
+          onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })}
+          onClose={()=>{ setPicker(false); setSwapId(null); }} />}
 
       {help &&
         <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId} gym={gym}
@@ -8239,7 +8424,8 @@ function App(){
           onPick={pickAdd} onClose={()=>setAddSheet(false)} />}
 
       {exSheet &&
-        <ExerciseSheet store={store} exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise} onClose={()=>setExSheet(null)} />}
+        <ExerciseSheet store={store} exercise={exSheet.exercise} onSave={saveExercise} onDelete={deleteExercise}
+          onClose={()=>setExSheet(null)} undoable={showUndo} />}
 
       {gymView &&
         <GymDetail store={store} gymId={gymView} onEdit={(g)=>setGymSheet({gym:g})}
