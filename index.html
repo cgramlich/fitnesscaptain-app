@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.74.0";
+const APP_VERSION = "0.75.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -3955,6 +3955,23 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
     finally{ setVidBusy(false); }
   };
 
+  /* One picker, two kinds of file. Videos go through frame extraction and
+     images through downscale, and the user should not have to know which
+     button does which. Only the FIRST video is used: two videos would each
+     want the whole frame budget, and silently keeping half of each is worse
+     than saying so. */
+  const addPicked = async (fileList) => {
+    const all = Array.from(fileList || []);
+    const vids = all.filter(f => /^video\//.test(f.type || ""));
+    const pics = all.filter(f => /^image\//.test(f.type || ""));
+    if(pics.length) await addFiles(pics);
+    if(vids.length){
+      await addVideo(vids[0]);
+      if(vids.length > 1) setErr("One video per scan - the first was used. Scan again for the others.");
+    }
+    if(!vids.length && !pics.length) setErr("That file isn't a photo or a video.");
+  };
+
   const addFiles = async (fileList) => {
     setErr("");
     const files = Array.from(fileList||[]).filter(f=>/^image\//.test(f.type||""));
@@ -4043,8 +4060,9 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
 
         {phase==="pick" && <>
           <p className="hint" style={{marginTop:4}}>
-            Film a walk round the room, or add photos - plus receipts or order
-            screenshots if you have them, they nail exact models. Up to{" "}
+            Film a walk round the room, or upload a clip you already have, or add
+            photos - plus receipts or order screenshots if you have them, they
+            nail exact models. Up to{" "}
             {SCAN_MAX_IMAGES} shots per scan; you review everything before it
             saves to {gym.name}.
           </p>
@@ -4069,8 +4087,13 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
             onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; if(f) addVideo(f); }} />
           <input ref={camRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}}
             onChange={e=>{ addFiles(e.target.files); e.target.value=""; }} />
-          <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}}
-            onChange={e=>{ addFiles(e.target.files); e.target.value=""; }} />
+          {/* Photos OR video. "Record a walkthrough" uses capture, which forces
+              the camera, so before this there was NO way to use a clip you had
+              already filmed - or one somebody sent you. Chris asked for the
+              label to say both; the accept attribute had to change first, or
+              the label would have been a lie. */}
+          <input ref={fileRef} type="file" accept="image/*,video/*" multiple style={{display:"none"}}
+            onChange={e=>{ addPicked(e.target.files); e.target.value=""; }} />
 
           <button className="btn btn-primary btn-block" style={{marginTop:14}}
             disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
@@ -4092,7 +4115,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
             <button className="btn btn-ghost btn-sm" style={{flex:1}}
               disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
               onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
-              Upload
+              Upload photos or video
             </button>
           </div>
           {imgs.length>0 &&
