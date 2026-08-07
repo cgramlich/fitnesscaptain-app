@@ -372,7 +372,7 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.73.0";
+const APP_VERSION = "0.74.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
 const BUILD = "2026-08-06.6";
@@ -3519,6 +3519,14 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
    ============================================================ */
 const SESSION_MINS = [20, 30, 45, 60, 75, 90];
 
+/* A planned movement may or may not already be in the library. When it is,
+   the help panel gets the real record and with it any saved cues and demo
+   video; when it is not, the panel still works from the name alone. */
+function libByName(store, name){
+  const n = normName(name);
+  return (store.data.exercises||[]).find(x => normName(x.name) === n) || null;
+}
+
 function parsePlan(text){
   const m = String(text||"").match(/```plan\s*([\s\S]*?)```/);
   if(!m) return { body: String(text||"").trim(), plan: null };
@@ -3540,6 +3548,7 @@ function SessionBuilderLayer({ store, onClose, onStart }){
   const [draft, setDraft] = useState("");
   const [busy, setBusy]   = useState(false);
   const [err, setErr]     = useState("");
+  const [help, setHelp]   = useState(null);   // {name, exerciseId} for the Show me panel
   const endRef = useRef(null);
 
   const gym = gyms.find(g => g.id === gymId) || null;
@@ -3743,9 +3752,21 @@ function SessionBuilderLayer({ store, onClose, onStart }){
                       <div style={{fontSize:14}}>{it.name}</div>
                       {it.note && <div className="hint" style={{margin:0}}>{it.note}</div>}
                     </div>
-                    <div className="hint" style={{margin:0,whiteSpace:"nowrap"}}>
-                      {Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
-                        : (it.type==="cardio" ? "cardio" : "mobility")}
+                    <div className="row" style={{gap:8,alignItems:"center",flex:"0 0 auto"}}>
+                      <div className="hint" style={{margin:0,whiteSpace:"nowrap"}}>
+                        {Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
+                          : (it.type==="cardio" ? "cardio" : "mobility")}
+                      </div>
+                      {/* A planned session is the LIKELIEST place to meet a
+                          movement you have never done, since the point of it
+                          is to suggest things. Same InfoBtn and same gesture
+                          as a routine row, so it needs no learning. Resolves
+                          against the library so a known movement carries its
+                          saved cues and demo. */}
+                      <InfoBtn name={it.name}
+                        hasVideo={!!(libByName(store, it.name)||{}).demoVideoId}
+                        onClick={()=>setHelp({ name: it.name,
+                          exerciseId: (libByName(store, it.name)||{}).id || null })} />
                     </div>
                   </div>
                 ))}
@@ -3781,6 +3802,9 @@ function SessionBuilderLayer({ store, onClose, onStart }){
           A coach, not a doctor. Nothing here is medical or nutrition advice.
         </p>
       </div>
+      {help &&
+        <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
+          gym={gym} onClose={()=>setHelp(null)} />}
     </div>
   );
 }
@@ -4055,7 +4079,8 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
                      : <><Icon d={ICONS.play} size={15}/> Record a walkthrough</>}
           </button>
           <p className="hint center" style={{marginTop:6,marginBottom:0}}>
-            Walk the floor filming. It pulls {SCAN_MAX_IMAGES} frames out and reads those.
+            Walk the floor filming. Scanning again later ADDS to what is already
+            on file, so you can come back with photos of anything it missed.
           </p>
 
           <div className="row" style={{marginTop:10}}>
