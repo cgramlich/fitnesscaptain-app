@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.82.0";
+const APP_VERSION = "0.83.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-07.1";
+const BUILD = "2026-08-09.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2874,6 +2874,18 @@ async function placeErr(r){
   return "Couldn't search right now (" + r.status + ").";
 }
 
+/* Coordinates ONLY if the permission is already granted. Never prompts: a
+   text search is the wrong moment to ask, but somebody who has already said
+   yes should not then get results from another state. */
+async function locationIfAlreadyAllowed(){
+  try{
+    if(!navigator.geolocation || !navigator.permissions) return null;
+    const st = await navigator.permissions.query({ name:"geolocation" });
+    if(st.state !== "granted") return null;
+    return await askForLocation();
+  }catch(e){ return null; }
+}
+
 function askForLocation(){
   return new Promise((resolve, reject) => {
     if(!navigator.geolocation){ reject(new Error("This device can't do location. Type the name instead.")); return; }
@@ -2895,6 +2907,13 @@ function PlaceLinkField({ value, name, onPick, onClear }){
   const [err, setErr] = useState("");
   const [open, setOpen] = useState(false);
   const [nearBusy, setNearBusy] = useState(false);
+  /* Held once the device has given it, so a search BY NAME can be local too.
+     Chris typed "Jw" while standing in the JW Marriott Chicago and got the JW
+     Marriott Reston Station, in Virginia, because the name search sent no
+     coordinates at all. Hotel chains repeat the same name in every city, so
+     an unbiased name search is close to useless for exactly the buildings
+     this feature exists for. */
+  const [where, setWhere] = useState(null);
 
   /* The type is a REAL filter (Google's includedType), not words in the query.
      The first version searched the literal phrase "gym fitness center" and
@@ -2912,21 +2931,29 @@ function PlaceLinkField({ value, name, onPick, onClear }){
   const searchNear = async (mode) => {
     setErr(""); setNearBusy(true); setOpen(true);
     try{
-      const where = await askForLocation();
+      const w = await askForLocation();
+      setWhere(w);
       const token = await authToken();
-      const r = await fetch(API_BASE + "/api/places/search", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
-        body: JSON.stringify({ query: mode.query, max_results: 8,
-                               included_type: mode.type,
-                               lat: where.lat, lng: where.lng }),
-      });
-      if(r.status === 503) throw new Error("Place search isn't switched on yet.");
-      if(r.status === 429) throw new Error("You've hit this month's place lookups. Add it by hand instead.");
-      if(!r.ok) throw new Error(await placeErr(r));
-      const j = await r.json();
-      setHits(j.places || []);
-      if(!(j.places||[]).length) setErr("Nothing found nearby. Try searching by name.");
+      const ask = async (radius) => {
+        const r = await fetch(API_BASE + "/api/places/search", {
+          method:"POST",
+          headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+          body: JSON.stringify({ query: mode.query, max_results: 12,
+                                 included_type: mode.type, radius_m: radius,
+                                 lat: w.lat, lng: w.lng }),
+        });
+        if(r.status === 503) throw new Error("Place search isn't switched on yet.");
+        if(r.status === 429) throw new Error("You've hit this month's place lookups. Add it by hand instead.");
+        if(!r.ok) throw new Error(await placeErr(r));
+        return (await r.json()).places || [];
+      };
+      // Tight first, because in a city the building you are standing in is
+      // the answer. Widen only if that genuinely finds nothing, which is the
+      // sparse-suburb case rather than the common one.
+      let places = await ask(3000);
+      if(!places.length) places = await ask(20000);
+      setHits(places);
+      if(!places.length) setErr("Nothing found nearby. Try searching by name.");
     }catch(e){ setErr(e.message || "Couldn't search nearby."); }
     finally{ setNearBusy(false); }
   };
@@ -2936,11 +2963,18 @@ function PlaceLinkField({ value, name, onPick, onClear }){
     if(term.length < 2){ setErr("Type a bit more of the name."); return; }
     setErr(""); setBusy(true);
     try{
+      const w = where || await locationIfAlreadyAllowed();
+      if(w && !where) setWhere(w);
       const token = await authToken();
       const r = await fetch(API_BASE + "/api/places/search", {
         method:"POST",
         headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
-        body: JSON.stringify({ query: term, max_results: 6 }),
+        body: JSON.stringify({ query: term, max_results: 8,
+                               // 30km: wide enough to cover a metro area, narrow
+                               // enough that "Jw" cannot return another state.
+                               radius_m: 30000,
+                               lat: w ? w.lat : undefined,
+                               lng: w ? w.lng : undefined }),
       });
       if(r.status === 503){ throw new Error("Place search isn't switched on yet."); }
       if(r.status === 429){ throw new Error("You've hit this month's place lookups. Add it by hand instead."); }
@@ -2997,10 +3031,25 @@ function PlaceLinkField({ value, name, onPick, onClear }){
               ))}
             </div>
             <div className="row" style={{gap:8}}>
-              <input className="input" style={{flex:1}} value={q} autoFocus
-                onChange={e=>setQ(e.target.value)}
-                onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); search(); } }}
-                placeholder="Hyatt Regency Austin" />
+              {/* Chris: "we just have to go hit a small x and clear the text
+                  box." Retyping over a previous search on a phone is fiddly,
+                  and the field is pre-filled from the gym name so there is
+                  usually something to clear. */}
+              <div style={{flex:1,position:"relative"}}>
+                <input className="input" style={{width:"100%",paddingRight:34}} value={q} autoFocus
+                  onChange={e=>setQ(e.target.value)}
+                  onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); search(); } }}
+                  placeholder="Hyatt Regency Austin" />
+                {q &&
+                  <button aria-label="Clear search"
+                    onClick={()=>{ setQ(""); setHits(null); setErr(""); }}
+                    style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",
+                            width:24,height:24,borderRadius:12,background:"var(--bg-4)",
+                            border:"1px solid var(--line-2)",color:"var(--ink-2)",
+                            display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                    <Icon d={ICONS.x} size={12}/>
+                  </button>}
+              </div>
               <button className="btn btn-primary btn-sm" onClick={search} disabled={busy}>
                 {busy ? <span className="spin"></span> : "Search"}
               </button>
@@ -3090,6 +3139,8 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
             // found the building it is silly to make you type it out again.
             // Fills a BLANK name only: your own wording always wins.
             if(!name.trim() && p && p.name) setName(p.name);
+            // Same argument for the kind, and only on a NEW gym.
+            if(!gym){ const k = kindFromPlace(p); if(k) setKind(k); }
           }} onClear={()=>setPlace(null)} />
 
         <div className="field">
@@ -3192,6 +3243,21 @@ async function communityPost(path, body){
 /* Google's formatted address is "1 Main St, Austin, TX 78701, USA". The town
    is the second-to-last component before the country, which is right far more
    often than any cleverer parse, and the field stays editable anyway. */
+/* Google already knows what the building is, so asking again is asking a
+   question we have the answer to. Chris added the JW Marriott Chicago with
+   KIND still on its "Home" default, which then feeds availability, the
+   start check and the session planner as though a hotel gym were his
+   garage.
+
+   Only applied when ADDING, never when editing: on an existing gym the
+   kind is a decision somebody already made. */
+function kindFromPlace(p){
+  const t = String((p && p.primary_type) || "").toLowerCase();
+  if(/hotel|lodging|motel|resort|inn|guest_house|bed_and_breakfast/.test(t)) return "hotel";
+  if(/gym|fitness|sports_club|athletic/.test(t)) return "club";
+  return null;
+}
+
 function placeCity(address){
   const parts = String(address||"").split(",").map(s=>s.trim()).filter(Boolean);
   if(parts.length < 3) return parts.length ? parts[parts.length-1] : "";
