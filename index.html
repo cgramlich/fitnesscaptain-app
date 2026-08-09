@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.88.0";
+const APP_VERSION = "0.89.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-09.6";
+const BUILD = "2026-08-09.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1060,10 +1060,18 @@ const CATALOG_CATEGORIES = ["Racks & stations","Free weights","Machines & cables
 
    The two tags are independent, NOT hierarchical. A Smith machine does not
    give you a leg extension, and a leg extension does not give you a Smith
-   rack, so a gym with both carries both. Leg press and hack squat have the
-   same argument available to them and deliberately do not get it: the line is
-   "does its absence make the movement impossible", and it is worth holding. */
-const GATING_EQUIP = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","band","treadmill","bike","rower"];
+   rack, so a gym with both carries both.
+
+   RACK and PULL-UP BAR join on the same test. Without a rack you cannot
+   barbell squat or bench, whatever else is in the room; without a bar you
+   cannot do a pull-up, and neither is implied by "machine". Both are the
+   difference between a hotel gym you can train properly in and one you
+   cannot, which is exactly the question this vocabulary exists to answer.
+
+   Leg press and hack squat have the same argument available and deliberately
+   do not get it: they are movements you can substitute, not capabilities the
+   room either has or lacks. */
+const GATING_EQUIP = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","rack","pull-up bar","band","treadmill","bike","rower"];
 // Can this exercise be done at this gym? Only meaningful when the gym has tags.
 function availableAt(x, gym){
   if(!gym || !Array.isArray(gym.equipment) || !gym.equipment.length) return true;
@@ -1125,7 +1133,7 @@ function refToGroup(muscles){
   }
   return "Full body";
 }
-const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","bodyweight","band","treadmill","bike","rower","none","other"];
+const EQUIPMENT = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","rack","pull-up bar","bodyweight","band","treadmill","bike","rower","none","other"];
 function typeClass(t){ return t==="strength" ? "amber" : (t==="cardio" ? "blue" : "green"); }
 // Deterministic demo link - a YouTube SEARCH, never an AI-invented URL
 // (generated video links rot; search results stay current).
@@ -4638,7 +4646,11 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         'conservatively; when unsure use count 1 and confidence "low". Receipts and order screenshots ' +
         'are authoritative for exact model names - prefer them over guesses from photos. name = short ' +
         'item name; detail = specifics you can actually see (brand, model, weight range, attachments), ' +
-        'or "" if none. tags: the subset of ' + JSON.stringify(GATING_EQUIP) + ' present in the photos.';
+        'or "" if none. tags: the subset of ' + JSON.stringify(GATING_EQUIP) + ' the room can ' +
+        'actually support. Read COMPOUND STATIONS for what they provide, not just what they are ' +
+        'called: a functional trainer or cable tower with a chin-up bar on top means both "cable" ' +
+        'and "pull-up bar"; a half rack or squat stand means "rack"; a Smith machine means ' +
+        '"smith machine" and usually "rack" too. Tag what could be trained there.';
       const content = imgs.map(im => ({ type:"image", source:{ type:"base64", media_type:"image/jpeg", data: im.b64 } }));
       content.push({ type:"text", text:"Inventory this gym's equipment from the photos." });
       const out = await aiRelay("inventory_gym", [{ role:"user", content }], { system, maxTokens: 4000 });

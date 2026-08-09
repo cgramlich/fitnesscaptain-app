@@ -175,8 +175,14 @@ h2{color:var(--ink);font-size:13px;font-weight:700;letter-spacing:.1em;
         html += '</div>';
       }
 
-      if(tags.length){
-        html += '<h2>At a glance</h2><div class="tags">';
+      // Tags are a FALLBACK, not a summary. They come from a ten-word
+      // vocabulary that exists to answer "can this movement be done here",
+      // so next to a real inventory they are a lossy duplicate: a Life
+      // Fitness Synrgy360 with lat pulldown, pulleys and a chin-up bar
+      // renders as the word "machine", which reads as though that is all
+      // the room has. Shown only when there is nothing better.
+      if(tags.length && !lines.length){
+        html += '<h2>What is in the room</h2><div class="tags">';
         tags.forEach(function(t){ html += '<span class="tag">' + esc(title(t)) + '</span>'; });
         html += '</div>';
       }
