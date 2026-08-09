@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>A gym on FitnessCaptain</title>
+<meta name="description" content="Someone shared a gym with you: what equipment is there, and what the room looks like.">
+<meta name="theme-color" content="#16181d">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="legal.css">
+<!-- Shared links get pasted into messages, so the card matters. The title is
+     filled in from the gym once it loads; this is the fallback. -->
+<meta property="og:title" content="A gym on FitnessCaptain">
+<meta property="og:description" content="What equipment is there, and what the room looks like.">
+<meta property="og:type" content="website">
+<style>
+  .shots{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:16px 0;}
+  .shots img{width:100%;border-radius:12px;display:block;aspect-ratio:1/1;object-fit:cover;}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0;}
+  .tag{border:1px solid var(--line-2,#2c313b);border-radius:999px;padding:4px 11px;
+       font-size:13px;color:var(--ink-2);}
+  .inv{background:var(--bg-2);border-radius:var(--radius);padding:14px 16px;margin-top:14px;
+       white-space:pre-wrap;font-size:14.5px;}
+  .kind{color:var(--amber);font-size:13px;font-weight:700;letter-spacing:.08em;
+        text-transform:uppercase;}
+  .load{color:var(--ink-3);text-align:center;padding:60px 0;}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <a class="back" href="./welcome.html">FitnessCaptain</a>
+    <div id="body"><p class="load">Loading…</p></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var API = "https://fitnesscaptain-backend-production.up.railway.app";
+  var el  = document.getElementById("body");
+  var tok = new URLSearchParams(location.search).get("s") || "";
+
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function fail(msg){
+    el.innerHTML =
+      '<h1>Link not available</h1>' +
+      '<p class="dateline">' + esc(msg) + '</p>' +
+      '<div class="rule"></div>' +
+      '<p>The person who shared this can send a new link.</p>' +
+      '<p><a class="cta" href="./welcome.html">See what FitnessCaptain is</a></p>';
+  }
+
+  if(!tok){ fail("This link is missing its code."); return; }
+
+  fetch(API + "/api/share/gym/" + encodeURIComponent(tok))
+    .then(function(r){
+      if(r.status === 404) throw new Error("This link has been turned off, or never existed.");
+      if(!r.ok) throw new Error("Couldn't load that just now. Try again in a moment.");
+      return r.json();
+    })
+    .then(function(g){
+      document.title = g.name + " on FitnessCaptain";
+      var lines = String(g.inventory || "").split("\n").filter(function(l){ return l.trim(); });
+      var html = "";
+      html += '<div class="kind">' + esc(g.kind) + (g.city ? " &middot; " + esc(g.city) : "") + '</div>';
+      html += '<h1>' + esc(g.name) + '</h1>';
+      html += '<div class="rule"></div>';
+
+      if((g.photos || []).length){
+        html += '<div class="shots">';
+        g.photos.forEach(function(u){
+          html += '<img src="' + esc(u) + '" alt="Photo of ' + esc(g.name) + '">';
+        });
+        html += '</div>';
+      }
+
+      if((g.equipment || []).length){
+        html += '<h2>What is there</h2><div class="tags">';
+        g.equipment.forEach(function(t){ html += '<span class="tag">' + esc(t) + '</span>'; });
+        html += '</div>';
+      }
+
+      if(lines.length){
+        html += '<h2>The detail</h2><div class="inv">' + esc(lines.join("\n")) + '</div>';
+      }
+
+      if(!(g.photos||[]).length && !(g.equipment||[]).length && !lines.length){
+        html += '<p>Nothing has been recorded about this one yet.</p>';
+      }
+
+      html += '<div class="note" style="margin-top:26px">' +
+              '<p><strong>This is a gym someone tracks in FitnessCaptain.</strong> ' +
+              'The app remembers what equipment each place has, so it can tell you ' +
+              'which of your exercises work there and plan a session around what is ' +
+              'actually in the room.</p></div>';
+      html += '<p><a class="cta" href="./?signup=1">Try it free</a></p>' +
+              '<p class="dateline">No card needed. You can also just look, ' +
+              'which is what you are doing.</p>';
+
+      html += '<p class="foot"><a href="./welcome.html">FitnessCaptain</a> &middot; ' +
+              '<a href="./privacy.html">Privacy</a> &middot; ' +
+              '<a href="./terms.html">Terms</a></p>';
+      el.innerHTML = html;
+    })
+    .catch(function(e){
+      var m = String((e && e.message) || "");
+      // "Failed to fetch" / "Load failed" are the BROWSER talking, and they
+      // tell a stranger nothing. Same rule the app applies to its own relay.
+      if(/failed to fetch|load failed|networkerror|network request failed/i.test(m)){
+        m = "Couldn't reach FitnessCaptain. Check your connection and try again.";
+      }
+      fail(m || "Something went wrong.");
+    });
+})();
+</script>
+</body>
+</html>
