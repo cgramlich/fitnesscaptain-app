@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.84.0";
+const APP_VERSION = "0.85.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-09.2";
+const BUILD = "2026-08-09.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3428,7 +3428,9 @@ function FindGymLayer({ store, onClose, onAdded }){
               your own when you get there.
             </p>}
 
-          <div className="set-group">What's here</div>
+          <GymPhotos store={store} gym={gym} notify={notify} />
+
+        <div className="set-group">What's here</div>
           {(preview.equipment||[]).length>0 &&
             <div className="row" style={{flexWrap:"wrap",gap:6,marginBottom:10}}>
               {(preview.equipment||[]).map((e,i)=>
@@ -3572,6 +3574,199 @@ function GymsScreen({ store, onOpen, onAdd, onDelete, onFind }){
    computed against the user's OWN exercise library, and the inventory as a
    categorized catalog (AI-organized from the free text; raw text stays the
    source of truth). */
+/* PHOTOS OF A GYM, up to four.
+
+   Different job from the gym SCAN, which exists to be read by the AI and
+   throws its images away afterwards. These are kept, and they answer the
+   question the equipment list cannot: what is this room actually like. Is
+   the rack in a corridor. Is it three treadmills and a bench. Chris asked
+   for it after standing in a hotel gym that the inventory described
+   accurately and unhelpfully.
+
+   FOUR, not sixteen. This is a memory aid, not a survey, and a wall of
+   thumbnails on a place page is worse than a handful.
+
+   Storage rides the same private-bucket endpoints as progress photos: the
+   same per-user prefix, the same signed links that expire, the same purge on
+   account deletion. Only the RECORD differs - these hang off the gym rather
+   than the photos list. */
+const GYM_PHOTO_MAX = 4;
+
+function GymPhotos({ store, gym, notify }){
+  const photos = Array.isArray(gym.photos) ? gym.photos : [];
+  const [urls, setUrls] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [viewing, setViewing] = useState(null);
+  const camRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const urlFor = async (id) => {
+    if(urls[id]) return urls[id];
+    const token = await authToken();
+    const r = await fetch(API_BASE + "/api/progress/photo/" + id,
+      { headers:{ "Authorization":"Bearer "+token } });
+    if(!r.ok) throw new Error(r.status===404 ? "That photo is gone." : "Couldn't open that photo.");
+    const j = await r.json();
+    setUrls(u => ({ ...u, [id]: j.url }));
+    return j.url;
+  };
+
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      for(const p of photos){
+        if(stop || urls[p.id]) continue;
+        try{ await urlFor(p.id); }catch(e){ /* a missing one just stays blank */ }
+      }
+    })();
+    return () => { stop = true; };
+  }, [photos.length]);
+
+  const patchPhotos = (next) => store.saveGyms((store.gyms||[]).map(g =>
+    g.id===gym.id ? { ...g, photos: next, updatedAt: nowISO() } : g));
+
+  const add = async (file) => {
+    if(!file) return;
+    if(photos.length >= GYM_PHOTO_MAX){
+      setErr("Four photos is the limit. Remove one first."); return;
+    }
+    setErr(""); setBusy(true);
+    try{
+      // Same downscale as everywhere else, which also strips the EXIF and
+      // with it the GPS tag the camera attached.
+      const b64 = await new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try{
+            const MAX = 1400;
+            const scale = Math.min(1, MAX/Math.max(img.width, img.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.width*scale));
+            cv.height = Math.max(1, Math.round(img.height*scale));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            const dataUrl = cv.toDataURL("image/jpeg", 0.82);
+            URL.revokeObjectURL(url);
+            resolve(dataUrl.split(",")[1]);
+          }catch(e){ URL.revokeObjectURL(url); reject(e); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that image.")); };
+        img.src = url;
+      });
+      const id = uid();
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/progress/photo", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ b64, photo_id: id }),
+      });
+      if(!r.ok){
+        let msg = "Couldn't save that photo.";
+        try{ const j = await r.json(); if(j && j.detail) msg = j.detail; }catch(_){}
+        throw new Error(msg);
+      }
+      patchPhotos([...photos, { id, createdAt: nowISO() }]);
+      log("GYM","photo added to "+gym.name);
+      if(notify) notify("Photo saved");
+    }catch(e){ setErr(e.message || "Couldn't save that photo."); log("ERROR","gym photo: "+e.message); }
+    finally{ setBusy(false); }
+  };
+
+  const remove = async (p) => {
+    setErr("");
+    const before = photos.slice();
+    // Record first so the strip responds, then the object. If the object
+    // delete fails the record goes back, because a photo you believe you
+    // deleted must not reappear on another device.
+    patchPhotos(before.filter(x => x.id !== p.id));
+    setViewing(null);
+    try{
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/progress/photo/" + p.id,
+        { method:"DELETE", headers:{ "Authorization":"Bearer "+token } });
+      if(!r.ok) throw new Error("Couldn't delete that photo.");
+      log("GYM","photo deleted from "+gym.name);
+    }catch(e){ patchPhotos(before); setErr(e.message || "Couldn't delete that photo."); }
+  };
+
+  if(viewing){
+    return (
+      <div className="layer" style={{zIndex:90}}>
+        <div className="layer-inner">
+          <div className="layer-top">
+            <button className="icon-btn" onClick={()=>setViewing(null)} aria-label="Back">
+              <Icon d={ICONS.back} size={20}/></button>
+            <h2 style={{flex:1,minWidth:0}}>{gym.name}</h2>
+          </div>
+          {urls[viewing.id]
+            ? <img src={urls[viewing.id]} alt="" style={{width:"100%",borderRadius:12,marginTop:10,display:"block"}} />
+            : <div className="row center" style={{padding:40}}><span className="spin"></span></div>}
+          {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}}
+            onClick={()=>remove(viewing)}>
+            <Icon d={ICONS.trash} size={15}/> Delete this photo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="set-group">Photos</div>
+
+      <input ref={camRef} type="file" accept="image/*" capture="environment" style={{display:"none"}}
+        onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+      <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+        onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+
+      {photos.length > 0 &&
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+          {photos.map(p => (
+            <button key={p.id} onClick={async ()=>{
+                try{ await urlFor(p.id); }catch(e){ setErr(e.message); }
+                setViewing(p);
+              }}
+              style={{position:"relative",padding:0,borderRadius:10,overflow:"hidden",
+                      border:"1px solid var(--line-2)",background:"var(--bg-3)",aspectRatio:"1/1"}}>
+              {urls[p.id]
+                ? <img src={urls[p.id]} alt={"Photo of "+gym.name}
+                    style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+                : <span className="spin" style={{position:"absolute",top:"50%",left:"50%",
+                    transform:"translate(-50%,-50%)"}}></span>}
+            </button>
+          ))}
+        </div>}
+
+      {!photos.length &&
+        <p className="hint" style={{marginTop:0}}>
+          What the room actually looks like. The equipment list says what is
+          here; a photo says whether it is a proper gym or a treadmill in a
+          corridor.
+        </p>}
+
+      {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+
+      {photos.length < GYM_PHOTO_MAX &&
+        <div className="row" style={{gap:8,marginTop:10}}>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} disabled={busy}
+            onClick={()=>{ if(camRef.current) camRef.current.click(); }}>
+            {busy ? <span className="spin"></span> : "Take a photo"}
+          </button>
+          <button className="btn btn-ghost btn-sm" style={{flex:1}} disabled={busy}
+            onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
+            Upload one
+          </button>
+        </div>}
+      {photos.length >= GYM_PHOTO_MAX &&
+        <p className="hint center" style={{marginTop:8,marginBottom:0}}>
+          Four is the limit. Tap one to remove it.
+        </p>}
+    </>
+  );
+}
+
 function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
   const [organizing, setOrganizing] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -3664,6 +3859,8 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
             small ghost button buried under the third one. Chris asked for the
             scan to be prominent and the page to read better; those are the
             same fix. */}
+        <GymPhotos store={store} gym={gym} notify={notify} />
+
         <div className="set-group">What's here</div>
 
         {!hasTags && !invLines.length
