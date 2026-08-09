@@ -7,31 +7,92 @@
 <meta name="description" content="Someone shared a gym with you: what equipment is there, and what the room looks like.">
 <meta name="theme-color" content="#16181d">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="legal.css">
-<!-- Shared links get pasted into messages, so the card matters. The title is
-     filled in from the gym once it loads; this is the fallback. -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta property="og:title" content="A gym on FitnessCaptain">
 <meta property="og:description" content="What equipment is there, and what the room looks like.">
 <meta property="og:type" content="website">
+
 <style>
-  .shots{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:16px 0;}
-  .shots img{width:100%;border-radius:12px;display:block;aspect-ratio:1/1;object-fit:cover;}
-  .tags{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0;}
-  .tag{border:1px solid var(--line-2,#2c313b);border-radius:999px;padding:4px 11px;
-       font-size:13px;color:var(--ink-2);}
-  .inv{background:var(--bg-2);border-radius:var(--radius);padding:14px 16px;margin-top:14px;
-       white-space:pre-wrap;font-size:14.5px;}
-  .kind{color:var(--amber);font-size:13px;font-weight:700;letter-spacing:.08em;
-        text-transform:uppercase;}
-  .load{color:var(--ink-3);text-align:center;padding:60px 0;}
+:root{
+  --bg:#16181d; --bg-2:#1c1f26; --bg-3:#242832; --bg-4:#2b3039;
+  --ink:#eef0f3; --ink-2:#c1c6cc; --ink-3:#8b93a0;
+  --amber:#e8853d; --amber-2:#f2a366; --amber-line:#e8853d55; --amber-dim:#e8853d14;
+  --line:#2c313b; --radius:16px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+html{-webkit-text-size-adjust:100%;}
+body{background:var(--bg);color:var(--ink-2);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  line-height:1.55;font-size:15.5px;
+  padding:0 20px calc(48px + env(safe-area-inset-bottom));}
+.page{max-width:640px;margin:0 auto;}
+
+/* Brand first. Somebody lands here cold from a text message and has no idea
+   what this is; the mark answers that before the content does. */
+.brand{display:flex;align-items:center;gap:9px;padding:20px 0 26px;}
+.brand svg{width:26px;height:26px;flex:0 0 auto;}
+.brand-name{font-weight:800;font-size:16px;color:var(--ink);letter-spacing:-0.01em;}
+.brand-name span{color:var(--amber);}
+
+.eyebrow{color:var(--amber);font-size:12.5px;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;}
+h1{color:var(--ink);font-size:clamp(28px,8vw,38px);font-weight:800;
+  letter-spacing:-0.025em;line-height:1.1;margin:6px 0 0;}
+.count{color:var(--ink-3);font-size:14px;margin-top:10px;}
+
+.shots{display:grid;gap:8px;margin:22px 0 0;}
+.shots.n1{grid-template-columns:1fr;}
+.shots.n2,.shots.n4{grid-template-columns:1fr 1fr;}
+.shots.n3{grid-template-columns:1fr 1fr;}
+.shots.n3 img:first-child{grid-column:1 / -1;}
+.shots img{width:100%;border-radius:14px;display:block;
+  aspect-ratio:4/3;object-fit:cover;background:var(--bg-3);}
+
+h2{color:var(--ink);font-size:13px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;margin:34px 0 12px;}
+
+/* Equipment tags are an INTERNAL vocabulary. Shown to a stranger they read as
+   debug output, so they are title-cased, tightened, and framed as a summary
+   rather than as the main event. */
+.tags{display:flex;flex-wrap:wrap;gap:7px;}
+.tag{background:var(--bg-3);border-radius:999px;padding:6px 13px;
+  font-size:13.5px;color:var(--ink-2);white-space:nowrap;}
+
+/* The inventory arrives as "Item - description" per line, which was being
+   rendered as one undifferentiated block of prose. Split at the first dash
+   and the structure that was already in the data does the work. */
+.kit{border-top:1px solid var(--line);}
+.kit .row{padding:13px 0;border-bottom:1px solid var(--line);}
+.kit .what{color:var(--ink);font-weight:650;font-size:15.5px;}
+.kit .desc{color:var(--ink-3);font-size:14px;margin-top:2px;}
+
+.pitch{background:var(--bg-2);border:1px solid var(--line);
+  border-radius:var(--radius);padding:20px 18px;margin-top:36px;text-align:center;}
+.pitch h3{color:var(--ink);font-size:18px;font-weight:800;letter-spacing:-0.01em;}
+.pitch p{color:var(--ink-3);font-size:14.5px;margin-top:8px;}
+.cta{display:block;background:var(--amber);color:#16181d;font-weight:800;font-size:16.5px;
+  text-decoration:none;padding:15px 26px;border-radius:999px;margin-top:16px;}
+.cta:active{transform:translateY(1px);}
+.fine{color:var(--ink-3);font-size:12.5px;margin-top:10px;}
+
+.foot{border-top:1px solid var(--line);margin-top:34px;padding-top:18px;
+  color:var(--ink-3);font-size:12.5px;text-align:center;}
+.foot a{color:var(--ink-2);}
+.load{color:var(--ink-3);text-align:center;padding:70px 0;}
+.empty{color:var(--ink-3);}
 </style>
 </head>
 <body>
 <div class="page">
-  <div class="top">
-    <a class="back" href="./welcome.html">FitnessCaptain</a>
-    <div id="body"><p class="load">Loading…</p></div>
+  <div class="brand">
+    <svg viewBox="0 0 56 56" fill="none" stroke="#e8853d" stroke-width="4" stroke-linecap="round" aria-hidden="true">
+      <line x1="15" y1="15" x2="15" y2="41"/><line x1="41" y1="15" x2="41" y2="41"/>
+      <line x1="7" y1="21" x2="7" y2="35"/><line x1="49" y1="21" x2="49" y2="35"/>
+      <line x1="15" y1="28" x2="41" y2="28"/>
+    </svg>
+    <div class="brand-name">Fitness<span>Captain</span></div>
   </div>
+  <div id="body"><p class="load">Loading…</p></div>
 </div>
 
 <script>
@@ -45,62 +106,95 @@
       return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
     });
   }
+  function title(s){
+    return String(s || "").replace(/\b[a-z]/g, function(c){ return c.toUpperCase(); });
+  }
 
   function fail(msg){
     el.innerHTML =
-      '<h1>Link not available</h1>' +
-      '<p class="dateline">' + esc(msg) + '</p>' +
-      '<div class="rule"></div>' +
-      '<p>The person who shared this can send a new link.</p>' +
-      '<p><a class="cta" href="./welcome.html">See what FitnessCaptain is</a></p>';
+      '<div class="eyebrow">Link</div>' +
+      '<h1>Not available</h1>' +
+      '<p class="count">' + esc(msg) + '</p>' +
+      '<div class="pitch">' +
+        '<h3>FitnessCaptain</h3>' +
+        '<p>A training log that remembers what equipment every gym has, so it can ' +
+        'plan a session around what is actually in the room.</p>' +
+        '<a class="cta" href="./welcome.html">See what it does</a>' +
+      '</div>';
   }
 
   if(!tok){ fail("This link is missing its code."); return; }
 
   fetch(API + "/api/share/gym/" + encodeURIComponent(tok))
     .then(function(r){
-      if(r.status === 404) throw new Error("This link has been turned off, or never existed.");
+      if(r.status === 404) throw new Error("This link has been turned off, or it never existed.");
       if(!r.ok) throw new Error("Couldn't load that just now. Try again in a moment.");
       return r.json();
     })
     .then(function(g){
       document.title = g.name + " on FitnessCaptain";
-      var lines = String(g.inventory || "").split("\n").filter(function(l){ return l.trim(); });
-      var html = "";
-      html += '<div class="kind">' + esc(g.kind) + (g.city ? " &middot; " + esc(g.city) : "") + '</div>';
-      html += '<h1>' + esc(g.name) + '</h1>';
-      html += '<div class="rule"></div>';
 
-      if((g.photos || []).length){
-        html += '<div class="shots">';
-        g.photos.forEach(function(u){
-          html += '<img src="' + esc(u) + '" alt="Photo of ' + esc(g.name) + '">';
+      var lines = String(g.inventory || "").split("\n")
+        .map(function(l){ return l.trim(); })
+        .filter(function(l){ return l; });
+      var photos = g.photos || [];
+      var tags = g.equipment || [];
+      var html = "";
+
+      html += '<div class="eyebrow">' + esc(title(g.kind)) +
+              (g.city ? " &middot; " + esc(g.city) : "") + '</div>';
+      html += '<h1>' + esc(g.name) + '</h1>';
+      if(lines.length){
+        html += '<p class="count">' + lines.length +
+                ' piece' + (lines.length === 1 ? "" : "s") + ' of equipment logged</p>';
+      }
+
+      if(photos.length){
+        html += '<div class="shots n' + Math.min(photos.length, 4) + '">';
+        photos.slice(0,4).forEach(function(u){
+          html += '<img src="' + esc(u) + '" alt="Inside ' + esc(g.name) + '" loading="lazy">';
         });
         html += '</div>';
       }
 
-      if((g.equipment || []).length){
-        html += '<h2>What is there</h2><div class="tags">';
-        g.equipment.forEach(function(t){ html += '<span class="tag">' + esc(t) + '</span>'; });
+      if(lines.length){
+        html += '<h2>What is in the room</h2><div class="kit">';
+        lines.forEach(function(l){
+          // Split on the FIRST dash that has spaces around it. Anything else
+          // (hyphenated words, "5-70 lb") stays in the description untouched.
+          var m = l.match(/^(.+?)\s+[-–]\s+(.+)$/);
+          html += '<div class="row">';
+          if(m){
+            html += '<div class="what">' + esc(m[1]) + '</div>' +
+                    '<div class="desc">' + esc(m[2]) + '</div>';
+          }else{
+            html += '<div class="what">' + esc(l) + '</div>';
+          }
+          html += '</div>';
+        });
         html += '</div>';
       }
 
-      if(lines.length){
-        html += '<h2>The detail</h2><div class="inv">' + esc(lines.join("\n")) + '</div>';
+      if(tags.length){
+        html += '<h2>At a glance</h2><div class="tags">';
+        tags.forEach(function(t){ html += '<span class="tag">' + esc(title(t)) + '</span>'; });
+        html += '</div>';
       }
 
-      if(!(g.photos||[]).length && !(g.equipment||[]).length && !lines.length){
-        html += '<p>Nothing has been recorded about this one yet.</p>';
+      if(!photos.length && !tags.length && !lines.length){
+        html += '<p class="empty" style="margin-top:20px">Nothing has been ' +
+                'recorded about this one yet.</p>';
       }
 
-      html += '<div class="note" style="margin-top:26px">' +
-              '<p><strong>This is a gym someone tracks in FitnessCaptain.</strong> ' +
-              'The app remembers what equipment each place has, so it can tell you ' +
-              'which of your exercises work there and plan a session around what is ' +
-              'actually in the room.</p></div>';
-      html += '<p><a class="cta" href="./?signup=1">Try it free</a></p>' +
-              '<p class="dateline">No card needed. You can also just look, ' +
-              'which is what you are doing.</p>';
+      html += '<div class="pitch">' +
+                '<h3>Train here without guessing</h3>' +
+                '<p>FitnessCaptain remembers what every gym has, tells you which of ' +
+                'your exercises work there, and builds a session around the room ' +
+                'you are standing in.</p>' +
+                '<a class="cta" href="./?signup=1">Try it free</a>' +
+                '<p class="fine">No card needed. Or just keep looking, ' +
+                'which is also fine.</p>' +
+              '</div>';
 
       html += '<p class="foot"><a href="./welcome.html">FitnessCaptain</a> &middot; ' +
               '<a href="./privacy.html">Privacy</a> &middot; ' +
@@ -109,8 +203,8 @@
     })
     .catch(function(e){
       var m = String((e && e.message) || "");
-      // "Failed to fetch" / "Load failed" are the BROWSER talking, and they
-      // tell a stranger nothing. Same rule the app applies to its own relay.
+      // "Failed to fetch" is the BROWSER talking and means nothing to somebody
+      // who has never heard of this app.
       if(/failed to fetch|load failed|networkerror|network request failed/i.test(m)){
         m = "Couldn't reach FitnessCaptain. Check your connection and try again.";
       }
