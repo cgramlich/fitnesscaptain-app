@@ -372,10 +372,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.91.0";
+const APP_VERSION = "0.92.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-09.9";
+const BUILD = "2026-08-09.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3934,10 +3934,167 @@ function GymLinkShare({ store, gym, onClose, notify }){
     </>
   );
 }
+/* EDITING ONE PIECE OF EQUIPMENT.
+
+   The inventory has always been a single block of text: fine for pasting a
+   list in, useless for "add a cable crossover" or "that treadmill is gone".
+   Chris asked to add by looking something up, and to edit and delete
+   individual items.
+
+   THE TEXT STAYS THE SOURCE OF TRUTH. Lines in, lines out, no migration and
+   no second representation to drift out of step with the first. The editor
+   just stops you having to do surgery on a paragraph with a phone keyboard.
+
+   There is no equipment database worth matching against - no open catalogue
+   of gym machines exists, manufacturer lists are proprietary and would rot as
+   lines are discontinued. So the lookup is a curated list of what is actually
+   in gyms, plus everything already recorded across YOUR OWN gyms, which is
+   the vocabulary that matters to you and grows on its own. Anything not on
+   either list can still be typed. */
+const COMMON_KIT = [
+  // Racks and benches
+  "Squat rack", "Half rack", "Power rack", "Smith machine", "Flat bench",
+  "Adjustable bench", "Decline bench", "Preacher bench", "Hyperextension bench",
+  // Free weights
+  "Dumbbells", "Barbell", "EZ curl bar", "Trap bar", "Kettlebells",
+  "Weight plates", "Fixed barbells", "Medicine balls", "Slam ball",
+  // Cable and functional
+  "Cable crossover", "Functional trainer", "Lat pulldown", "Seated cable row",
+  "Tricep rope", "Straight bar attachment", "Pull-up bar", "Dip station",
+  "Assisted pull-up machine", "Battle rope", "TRX straps", "Resistance bands",
+  // Machines
+  "Leg press", "Hack squat", "Leg extension", "Leg curl", "Calf raise machine",
+  "Chest press machine", "Shoulder press machine", "Pec deck", "Rear delt fly",
+  "Seated row machine", "Ab crunch machine", "Glute machine", "Hip abductor",
+  "Hip adductor", "Belt squat",
+  // Cardio
+  "Treadmill", "Curved treadmill", "Exercise bike", "Air bike", "Spin bike",
+  "Rowing machine", "Stairmill", "Elliptical", "Ski erg", "Jacobs ladder",
+  // Other
+  "Sled", "Plyo box", "Foam roller", "Ab wheel", "Landmine", "Yoga mat",
+  "Stretching area", "Sauna", "Water fountain",
+];
+
+function InventoryEditSheet({ store, gym, line, onClose }){
+  // A line is "Name x3 - detail". Split it so each part gets its own field.
+  const parse = (l) => {
+    let t = String(l||""), name = t, detail = "", count = 1;
+    const dash = t.search(/\s+[-–]\s+/);
+    if(dash !== -1){ name = t.slice(0, dash); detail = t.slice(dash).replace(/^\s+[-–]\s+/, ""); }
+    const m = name.match(/^(.*?)\s+x\s*(\d+)\s*$/i);
+    if(m){ name = m[1]; count = Math.max(1, Math.min(99, Number(m[2])||1)); }
+    return { name: name.trim(), detail: detail.trim(), count };
+  };
+  const init = parse(line);
+  const [name, setName] = useState(init.name);
+  const [detail, setDetail] = useState(init.detail);
+  const [count, setCount] = useState(init.count);
+  const [err, setErr] = useState("");
+
+  const lines = () => String(gym.inventory||"").split("\n").map(s=>s.trim()).filter(Boolean);
+
+  const write = (next) => store.saveGyms((store.gyms||[]).map(g => g.id===gym.id
+    // The catalog is derived from this text, so it is stale the moment the
+    // text changes. Dropping it is what makes the page offer "organize" again.
+    ? { ...g, inventory: next.join("\n"), catalog: undefined, updatedAt: nowISO() } : g));
+
+  const save = () => {
+    if(!name.trim()){ setErr("Give it a name."); return; }
+    const composed = name.trim() + (count>1 ? " x"+count : "") +
+                     (detail.trim() ? " - "+detail.trim() : "");
+    const all = lines();
+    const i = all.indexOf(String(line||"").trim());
+    if(i === -1) all.push(composed); else all[i] = composed;
+    write(all);
+    log("GYM","inventory line saved at "+gym.name);
+    onClose();
+  };
+
+  const remove = () => {
+    const all = lines();
+    const i = all.indexOf(String(line||"").trim());
+    if(i !== -1){ all.splice(i,1); write(all); log("GYM","inventory line removed at "+gym.name); }
+    onClose();
+  };
+
+  return (
+    <>
+      <div className="scrim" style={{zIndex:95}} onClick={onClose}></div>
+      <div className="sheet" style={{zIndex:96}}>
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">{line ? "Edit equipment" : "Add equipment"}</h2>
+          <button className="sheet-x" onClick={onClose}><Icon d={ICONS.x} size={18}/></button>
+        </div>
+
+        <div className="title-field">
+          <label className="label">What it is</label>
+          <input className="title-input" value={name} autoFocus={!line}
+            onChange={e=>{ setName(e.target.value); setErr(""); }}
+            placeholder="e.g. Cable crossover" />
+        </div>
+
+        {/* Suggestions from the common list AND from your other gyms, filtered
+            as you type. Hidden once the name matches one exactly, so it stops
+            nagging the moment you have picked. */}
+        {(() => {
+          const q = normName(name);
+          if(!q) return null;
+          const mine = [];
+          (store.gyms||[]).forEach(g => String(g.inventory||"").split("\n").forEach(l => {
+            const n = String(l||"").split(/\s+[-–]\s+/)[0].replace(/\s+x\s*\d+\s*$/i,"").trim();
+            if(n) mine.push(n);
+          }));
+          const pool = Array.from(new Set(COMMON_KIT.concat(mine)));
+          const hits = pool.filter(k => normName(k).indexOf(q) !== -1 && normName(k) !== q).slice(0,6);
+          if(!hits.length) return null;
+          return (
+            <div className="row" style={{flexWrap:"wrap",gap:6,marginTop:8}}>
+              {hits.map(h =>
+                <button key={h} className="pill" onClick={()=>setName(h)}>{h}</button>)}
+            </div>
+          );
+        })()}
+
+        <div className="field">
+          <label className="label">How many</label>
+          <div className="stepper" style={{marginTop:4}}>
+            <button className="step-btn" onClick={()=>setCount(c=>Math.max(1,c-1))}>-</button>
+            <span className="step-val" style={{minWidth:40,textAlign:"center"}}>{count}</span>
+            <button className="step-btn" onClick={()=>setCount(c=>Math.min(99,c+1))}>+</button>
+          </div>
+        </div>
+
+        <div className="field">
+          <label className="label">Detail (optional)</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            Brand, model, weight range, attachments. This is what the AI reads
+            when it plans a session here.
+          </div>
+          <input className="input" value={detail} onChange={e=>setDetail(e.target.value)}
+            placeholder="Life Fitness, dual pulley, 5-90 lb stack" />
+        </div>
+
+        {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+
+        <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={save}>
+          {line ? "Save" : "Add it"}
+        </button>
+        {line &&
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:8}} onClick={remove}>
+            <Icon d={ICONS.trash} size={15}/> Remove this
+          </button>}
+      </div>
+    </>
+  );
+}
+
 function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
   const [organizing, setOrganizing] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [linking, setLinking] = useState(false);
+  // null closed, "" adding, a line string editing that line.
+  const [editKit, setEditKit] = useState(null);
   const [orgErr, setOrgErr] = useState("");
   const [scan, setScan] = useState(false);        // Gym Scan layer
   const [openCats, setOpenCats] = useState({});   // catalog sections start collapsed
@@ -4025,6 +4182,9 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
         {linking &&
           <GymLinkShare store={store} gym={gym} notify={notify}
             onClose={()=>setLinking(false)} />}
+        {editKit !== null &&
+          <InventoryEditSheet store={store} gym={gym} line={editKit}
+            onClose={()=>setEditKit(null)} />}
         {sharing &&
           <ShareGymSheet store={store} gym={gym} notify={notify}
             onClose={()=>setSharing(false)} />}
@@ -4112,7 +4272,11 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
                     </div>}
                 </div>
               ))}
-              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:12}} disabled={organizing} onClick={organize}>
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:12}}
+                onClick={()=>setEditKit("")}>
+                <Icon d={ICONS.plus} size={15}/> Add equipment
+              </button>
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} disabled={organizing} onClick={organize}>
                 {organizing ? <span className="spin"></span> : "Re-organize from the inventory text"}
               </button>
             </>
@@ -4120,11 +4284,17 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
             ? <>
                 <div className="card">
                   {invLines.map((line,i)=>(
-                    <div key={i} className="set-row" style={{cursor:"default"}}>
+                    <button key={i} className="set-row" style={{textAlign:"left"}}
+                      onClick={()=>setEditKit(line)}>
                       <span className="set-main" style={{fontWeight:500}}>{line}</span>
-                    </div>
+                      <Icon d={ICONS.edit} size={14} style={{flex:"0 0 auto",opacity:.5}}/>
+                    </button>
                   ))}
                 </div>
+                <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+                  onClick={()=>setEditKit("")}>
+                  <Icon d={ICONS.plus} size={15}/> Add equipment
+                </button>
                 <button className="btn btn-primary btn-block" style={{marginTop:12}} disabled={organizing} onClick={organize}>
                   {organizing ? <span className="spin"></span> : "Organize with AI"}
                 </button>
