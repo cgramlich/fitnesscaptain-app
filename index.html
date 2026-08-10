@@ -376,10 +376,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.95.0";
+const APP_VERSION = "0.96.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-10.4";
+const BUILD = "2026-08-10.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5043,17 +5043,41 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
    ============================================================ */
 function Stepper({ label, value, onChange, step, min }){
   const clamp = v => Math.max(min===undefined?0:min, Math.round(v*100)/100);
+
+  /* WHILE TYPING, the box shows exactly what was typed. It used to show
+     String(value), reformatted on every keystroke: type "42." and parseFloat
+     gives 42, which is written straight back and eats the point you just
+     pressed. 42.5 was unreachable - Chris hit it on a machine at 42 1/2 lb.
+
+     The draft holds the raw text only while the field is being edited. null
+     means 'show the real value', so the steppers and every outside change
+     still drive the display exactly as before. */
+  const [draft, setDraft] = useState(null);
+  const shown = draft !== null ? draft : String(value);
+
+  const typed = (raw) => {
+    setDraft(raw);
+    // Commit whatever it parses to NOW, so a set logged mid-typing is not
+    // stale, but leave the text alone so a trailing point survives.
+    const v = parseFloat(raw);
+    onChange(isNaN(v) ? 0 : clamp(v));
+  };
+
+  const settle = () => {
+    setDraft(null);              // hand the display back to the real value
+  };
   return (
     <div className="stepper">
       <span className="lbl">{label}</span>
-      <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)-step))} aria-label={"Decrease "+label}>-</button>
+      <button className="step-btn" onClick={()=>{ setDraft(null); onChange(clamp((Number(value)||0)-step)); }} aria-label={"Decrease "+label}>-</button>
       {/* Select-on-focus is the part that made typing feel impossible: without
           it, tapping a field showing 45 and typing "12" gives you 4512, because
           the caret lands after the existing digits. Now a tap replaces. */}
-      <input className="step-val" inputMode="decimal" value={String(value)}
+      <input className="step-val" inputMode="decimal" value={shown}
         onFocus={e=>{ try{ e.target.select(); }catch(_){} }}
-        onChange={e=>{ const v=parseFloat(e.target.value); onChange(isNaN(v)?0:clamp(v)); }} />
-      <button className="step-btn" onClick={()=>onChange(clamp((Number(value)||0)+step))} aria-label={"Increase "+label}>+</button>
+        onChange={e=>typed(e.target.value)}
+        onBlur={settle} />
+      <button className="step-btn" onClick={()=>{ setDraft(null); onChange(clamp((Number(value)||0)+step)); }} aria-label={"Increase "+label}>+</button>
     </div>
   );
 }
@@ -5061,7 +5085,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel }){
+function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -5119,7 +5143,17 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
      The checkmark is the manual version: "I am done with this one", stored ON
      THE ENTRY so it survives closing and reopening the workout. */
   const closed = !!entry.closed;
-  const collapsed = (doneAll || closed) && !expanded;
+  /* Collapsing a finished exercise keeps a LIVE session focused - Chris:
+     "this done, completed 5 of 5 sets takes way too much space". But the
+     same rule was applied when reviewing a workout from last week, where
+     the sets ARE the content and a summary line is not what you came for.
+     He opened P1 from 4 August and could see neither the sets nor a way in,
+     because the pencil that expands a card is gated on `active` and a
+     finished workout is not active until you press Edit.
+
+     So: collapse only while the workout is still running. Reviewing or
+     editing a past one shows every set. */
+  const collapsed = live && (doneAll || closed) && !expanded;
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -5454,8 +5488,15 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
   // the answer, so the inventory is the input, not a generic substitution
   // list. Cached per gym on the exercise: asked once, then instant.
   const gyms = (store.gyms||[]).filter(g => (g.equipment||[]).length);
+  /* The gym you came from is selected whatever its inventory looks like.
+     It used to require equipment tags, which made sense when this section
+     only fed the AI suggestion - no inventory, nothing to suggest from. But
+     it now also carries the MACHINE LABEL, and naming the machine at a gym
+     has nothing to do with whether its tags are filled in. With several
+     gyms and no tags, nothing was selected and the field never appeared,
+     which is why Chris went looking for it and found nothing. */
   const [setupGym, setSetupGym] = useState(
-    (gym && (gym.equipment||[]).length) ? gym.id : (gyms.length===1 ? gyms[0].id : null));
+    (gym && gym.id) ? gym.id : (gyms.length===1 ? gyms[0].id : null));
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupErr, setSetupErr] = useState("");
   const ex = (store.data.exercises||[]).find(x => x.id === exerciseId)
@@ -5614,6 +5655,13 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
             {/* Which unit, at this gym. Sits above the AI suggestion because
                 it is a fact you know and that is a guess. Saves on blur, like
                 every other free-text field in the app. */}
+            {/* Named even when nothing is selected, so it is discoverable
+                rather than appearing only after a step you did not know to
+                take. */}
+            {!chosenGym && ex && gyms.length>1 &&
+              <p className="hint" style={{marginTop:0,marginBottom:10}}>
+                Pick a gym above to name the machine you use there.
+              </p>}
             {chosenGym && ex &&
               <div className="field" style={{marginTop:0,marginBottom:10}}>
                 <label className="label">Which machine, here</label>
@@ -5995,7 +6043,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
           </div>}
 
         {(workout.entries||[]).map((e, i) => (
-          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit}
+          <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit} live={!workout.endedAt}
             hasDemo={!!((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).demoVideoId}
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
