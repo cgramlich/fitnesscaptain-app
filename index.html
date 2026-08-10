@@ -376,10 +376,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.94.0";
+const APP_VERSION = "0.95.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-10.3";
+const BUILD = "2026-08-10.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1077,6 +1077,23 @@ const CATALOG_CATEGORIES = ["Racks & stations","Free weights","Machines & cables
    room either has or lacks. */
 const GATING_EQUIP = ["barbell","dumbbell","kettlebell","machine","smith machine","cable","rack","pull-up bar","band","treadmill","bike","rower"];
 // Can this exercise be done at this gym? Only meaningful when the gym has tags.
+/* Which machine this movement is done on AT A PARTICULAR GYM. Chris wanted
+   to write "IM2000" under Smith Machine Bench Press for his IronMaster.
+
+   Keyed by gym and NOT stored on the exercise itself, because the exercise
+   is the same movement everywhere and the machine is not: a brand written
+   on the exercise would follow him into a hotel and be wrong there. It sits
+   beside setups{}, which already works this way for the same reason.
+
+   It is also the concrete half of the cross-gym warning: knowing the numbers
+   are not comparable is useful, knowing "that was on the IM2000" is what",
+   makes them interpretable. */
+function machineAt(ex, gymId){
+  if(!ex || !gymId) return null;
+  const m = ex.machines || {};
+  return m[gymId] || null;
+}
+
 function availableAt(x, gym){
   if(!gym || !Array.isArray(gym.equipment) || !gym.equipment.length) return true;
   if(!x.equipment || !GATING_EQUIP.includes(x.equipment)) return true;
@@ -5044,7 +5061,7 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap }){
+function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel }){
   /* Chris added 90/90 Hip Switch to a fresh workout and got MINUTES and
      DIST (MI) steppers. A hip switch is 8 reps a side, not 20 minutes and
      zero miles. The bug: anything that was not strength fell into the cardio
@@ -5210,6 +5227,11 @@ function EntryCard({ entry, prev, units, active, hasDemo, restSecs, onHelp, onUp
               exercise looks like the app lost your plan. */}
           {entry.substitutedFor &&
             <div className="entry-last">standing in for {entry.substitutedFor}</div>}
+          {/* Which unit this is, at this gym. Sits with the substitution
+              note because both answer the same question: why is this not
+              quite the thing you were expecting. */}
+          {machineLabel &&
+            <div className="entry-last" style={{color:"var(--ink-2)"}}>on the {machineLabel}</div>}
           {/* Mobility carries targets too, so this can't be gated on strength. */}
           {plan
             ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -5469,6 +5491,15 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
 
   const chosenGym = gyms.find(g => g.id === setupGym) || null;
   const setups = (ex && ex.setups) ? ex.setups : {};
+  const machineHere = machineAt(ex, chosenGym && chosenGym.id);
+  const saveMachine = (v) => {
+    if(!ex || !chosenGym) return;
+    const label = String(v||'').trim().slice(0,24);
+    store.saveCollection('exercises', (store.data.exercises||[]).map(x => x.id===ex.id
+      ? { ...x, machines: { ...(x.machines||{}),
+          [chosenGym.id]: label || undefined }, updatedAt: nowISO() }
+      : x));
+  };
   const setupText = chosenGym ? setups[chosenGym.id] : null;
 
   const findSetup = async () => {
@@ -5579,6 +5610,22 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
                 {gyms.map(g =>
                   <button key={g.id} className={"pill "+(setupGym===g.id?"on":"")}
                     onClick={()=>setSetupGym(g.id)}>{g.name}</button>)}
+              </div>}
+            {/* Which unit, at this gym. Sits above the AI suggestion because
+                it is a fact you know and that is a guess. Saves on blur, like
+                every other free-text field in the app. */}
+            {chosenGym && ex &&
+              <div className="field" style={{marginTop:0,marginBottom:10}}>
+                <label className="label">Which machine, here</label>
+                <input className="input" defaultValue={machineHere || ""} maxLength={24}
+                  key={chosenGym.id + ":" + (machineHere||"")}
+                  placeholder="e.g. IM2000"
+                  onBlur={e=>{ const v=e.target.value.trim();
+                    if(v !== (machineHere||"")) saveMachine(v); }} />
+                <div className="hint" style={{marginTop:4}}>
+                  Shown against every set you log here, so a number from this
+                  room is never confused with the same movement somewhere else.
+                </div>
               </div>}
             {!chosenGym
               ? <p className="hint" style={{margin:0}}>Pick a gym and I'll work it out from what's actually there.</p>
@@ -5954,7 +6001,9 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
             onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable}
-            onSwap={()=>{ setSwapId(e.id); setPicker(true); }} />
+            onSwap={()=>{ setSwapId(e.id); setPicker(true); }}
+            machineLabel={machineAt((store.data.exercises||[]).find(x=>x.id===e.exerciseId),
+                                    workout.gymId)} />
         ))}
 
         {canEdit &&
