@@ -376,10 +376,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.93.0";
+const APP_VERSION = "0.94.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-10.2";
+const BUILD = "2026-08-10.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3840,6 +3840,7 @@ function GymPhotos({ store, gym, notify }){
    button, so the way out is where the way in was. */
 function GymLinkShare({ store, gym, onClose, notify }){
   const [link, setLink] = useState(gym.shareToken || null);
+  const [linkUrl, setLinkUrl] = useState(gym.shareUrl || null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
@@ -3850,10 +3851,15 @@ function GymLinkShare({ store, gym, onClose, notify }){
      message would only ever see the fallback tags. The backend knows the gym
      already, so it serves the name and photo in the HTML and then sends a
      human on to the designed page. */
-  const url = link ? (API_BASE + "/g/" + link) : "";
+  /* Prefers the URL the SERVER gave us. Pointing a custom domain at the
+     backend then needs one environment variable and no app release, because
+     nothing here assumes what the backend is called. The constructed form is
+     only a fallback for a link made before this existed. */
+  const url = linkUrl || (link ? (API_BASE + "/g/" + link) : "");
 
-  const remember = (token) => store.saveGyms((store.gyms||[]).map(g =>
-    g.id===gym.id ? { ...g, shareToken: token || undefined, updatedAt: nowISO() } : g));
+  const remember = (token, u) => store.saveGyms((store.gyms||[]).map(g =>
+    g.id===gym.id ? { ...g, shareToken: token || undefined,
+                      shareUrl: u || undefined, updatedAt: nowISO() } : g));
 
   const create = async () => {
     setErr(""); setBusy(true);
@@ -3870,7 +3876,7 @@ function GymLinkShare({ store, gym, onClose, notify }){
         throw new Error(msg);
       }
       const j = await r.json();
-      setLink(j.token); remember(j.token);
+      setLink(j.token); setLinkUrl(j.url || null); remember(j.token, j.url);
       log("SHARE","gym link ready for "+gym.name);
     }catch(e){ setErr(e.message || "Couldn't make a link."); }
     finally{ setBusy(false); }
@@ -3883,7 +3889,7 @@ function GymLinkShare({ store, gym, onClose, notify }){
       const r = await fetch(API_BASE + "/api/share/gym/" + gym.id, {
         method:"DELETE", headers:{ "Authorization":"Bearer "+token } });
       if(!r.ok) throw new Error("Couldn't turn that link off.");
-      setLink(null); remember(null);
+      setLink(null); setLinkUrl(null); remember(null, null);
       log("SHARE","gym link revoked for "+gym.name);
       if(notify) notify("Link turned off");
     }catch(e){ setErr(e.message || "Couldn't turn that link off."); }
