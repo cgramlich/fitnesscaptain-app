@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.98.0";
+const APP_VERSION = "0.99.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-10.7";
+const BUILD = "2026-08-10.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5121,7 +5121,140 @@ function Stepper({ label, value, onChange, step, min }){
 /* One exercise inside a workout. Strength: reps x weight sets. Cardio and
    mobility: minutes + distance. The steppers seed from the last set here,
    else from the previous workout ("same as last time"), else defaults. */
-function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel }){
+/* A PHOTO OF THE MACHINE, per gym.
+
+   Chris: "in the note section next to each exercise, I need to be able to
+   take a picture in case the machine is something I want to remember."
+
+   Stored the same way as the machine NAME - keyed by gym on the exercise -
+   because it answers the same question and would be equally wrong to carry
+   into another building. "on the IM2000" tells you which one; the photo tells
+   you which of the four identical-looking stations in the corner, and which
+   holes the pins were in.
+
+   Storage rides the same private endpoints as every other photo in the app:
+   downscaled on device (which strips EXIF and its GPS), signed links that
+   expire, purged with the account. */
+function MachinePhoto({ store, exercise, gymId, label }){
+  const photoId = (exercise && exercise.machinePhotos) ? exercise.machinePhotos[gymId] : null;
+  const [url, setUrl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [viewing, setViewing] = useState(false);
+  const camRef = useRef(null);
+
+  useEffect(() => {
+    let stop = false;
+    setUrl(null);
+    if(!photoId) return;
+    (async () => {
+      try{
+        const token = await authToken();
+        const r = await fetch(API_BASE + "/api/progress/photo/" + photoId,
+          { headers:{ "Authorization":"Bearer "+token } });
+        if(!r.ok) return;
+        const j = await r.json();
+        if(!stop) setUrl(j.url);
+      }catch(e){ /* a missing photo just shows nothing */ }
+    })();
+    return () => { stop = true; };
+  }, [photoId]);
+
+  const save = (id) => store.saveCollection("exercises",
+    (store.data.exercises||[]).map(x => x.id===exercise.id
+      ? { ...x, machinePhotos: { ...(x.machinePhotos||{}),
+          [gymId]: id || undefined }, updatedAt: nowISO() }
+      : x));
+
+  const add = async (file) => {
+    if(!file) return;
+    setErr(""); setBusy(true);
+    try{
+      const b64 = await new Promise((resolve, reject) => {
+        const u = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try{
+            // 1200 is plenty to read a pin setting or spot the right station.
+            const MAX = 1200;
+            const sc = Math.min(1, MAX/Math.max(img.width, img.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.width*sc));
+            cv.height = Math.max(1, Math.round(img.height*sc));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            const d = cv.toDataURL("image/jpeg", 0.82);
+            URL.revokeObjectURL(u);
+            resolve(d.split(",")[1]);
+          }catch(e){ URL.revokeObjectURL(u); reject(e); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(u); reject(new Error("Couldn't read that image.")); };
+        img.src = u;
+      });
+      const id = uid();
+      const token = await authToken();
+      const r = await fetch(API_BASE + "/api/progress/photo", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json", "Authorization":"Bearer "+token },
+        body: JSON.stringify({ b64, photo_id: id }),
+      });
+      if(!r.ok) throw new Error("Couldn't save that photo.");
+      save(id);
+      log("MACHINE","photo saved for "+exercise.name);
+    }catch(e){ setErr(e.message || "Couldn't save that photo."); }
+    finally{ setBusy(false); }
+  };
+
+  const remove = async () => {
+    const old = photoId;
+    save(null); setViewing(false);
+    try{
+      const token = await authToken();
+      await fetch(API_BASE + "/api/progress/photo/" + old,
+        { method:"DELETE", headers:{ "Authorization":"Bearer "+token } });
+    }catch(e){ /* the record is already gone; a stray object is purged with the account */ }
+  };
+
+  if(viewing && url){
+    return (
+      <div className="layer" style={{zIndex:92}}>
+        <div className="layer-inner">
+          <div className="layer-top">
+            <button className="icon-btn" onClick={()=>setViewing(false)} aria-label="Back">
+              <Icon d={ICONS.back} size={20}/></button>
+            <h2 style={{flex:1,minWidth:0}}>{label || exercise.name}</h2>
+          </div>
+          <img src={url} alt={"The machine for "+exercise.name}
+            style={{width:"100%",borderRadius:12,marginTop:10,display:"block"}} />
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}} onClick={remove}>
+            <Icon d={ICONS.trash} size={15}/> Remove this photo
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <input ref={camRef} type="file" accept="image/*" capture="environment" style={{display:"none"}}
+        onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+      {url
+        ? <button onClick={()=>setViewing(true)} aria-label={"Photo of "+(label||exercise.name)}
+            style={{padding:0,borderRadius:8,overflow:"hidden",border:"1px solid var(--line-2)",
+                    width:34,height:34,flex:"0 0 auto",background:"var(--bg-3)"}}>
+            <img src={url} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
+          </button>
+        : <button className="entry-x" disabled={busy}
+            onClick={()=>{ if(camRef.current) camRef.current.click(); }}
+            aria-label={"Photograph the machine for "+exercise.name}
+            title="Photograph this machine">
+            {busy ? <span className="spin"></span> : <Icon d={ICONS.image} size={16}/>}
+          </button>}
+      {err && <span className="entry-last" style={{color:"var(--red,#d1735c)"}}>{err}</span>}
+    </>
+  );
+}
+
+function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel, machinePhoto }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -5364,6 +5497,11 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
             opening each card. */}
         {targetCount > 0 && sets.length >= targetCount &&
           <span className="chip green" style={{flex:"0 0 auto",alignSelf:"flex-start"}}>done</span>}
+        {/* Beside the (i), because it answers the same kind of question:
+            what IS this thing in front of me. Supplied only for
+            machine-loaded work at a known gym, so a barbell lift gains
+            nothing. */}
+        {machinePhoto}
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
@@ -6129,6 +6267,13 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
                   ? { ...y, machines: { ...(y.machines||{}),
                       [workout.gymId]: label || undefined }, updatedAt: nowISO() }
                   : y));
+            })()}
+            machinePhoto={(() => {
+              const x = (store.data.exercises||[]).find(y=>y.id===e.exerciseId);
+              if(!x || !workout.gymId) return null;
+              if(MACHINE_LOADED.indexOf(x.equipment) === -1) return null;
+              return <MachinePhoto store={store} exercise={x} gymId={workout.gymId}
+                       label={machineAt(x, workout.gymId)} />;
             })()} />
         ))}
 
