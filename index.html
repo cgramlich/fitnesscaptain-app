@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.102.0";
+const APP_VERSION = "0.103.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-11.3";
+const BUILD = "2026-08-11.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5132,7 +5132,7 @@ function Stepper({ label, value, onChange, step, min }){
    Storage rides the same private endpoints as every other photo in the app:
    downscaled on device (which strips EXIF and its GPS), signed links that
    expire, purged with the account. */
-function MachinePhoto({ store, exercise, gymId, label }){
+function MachinePhoto({ store, exercise, gymId, label, wide }){
   const photoId = (exercise && exercise.machinePhotos) ? exercise.machinePhotos[gymId] : null;
   const [url, setUrl] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -5227,6 +5227,42 @@ function MachinePhoto({ store, exercise, gymId, label }){
           </button>
         </div>
       </div>
+    );
+  }
+
+  /* WIDE: the same photo, given room. On a logging card it is a 34px chip
+     beside the exercise name, because there you are mid-set and it only has
+     to be findable. In the help panel it IS the content - for a machine you
+     built yourself there is no illustration and often no useful video, so
+     your own picture is the best answer the screen has. */
+  const pick = () => { if(camRef.current) camRef.current.click(); };
+  const fileInput = (
+    <input ref={camRef} type="file" accept="image/*" style={{display:"none"}}
+      onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; add(f); }} />
+  );
+  if(wide){
+    return (
+      <>
+        {fileInput}
+        {url
+          ? <>
+              <button onClick={()=>setViewing(true)}
+                style={{display:"block",width:"100%",padding:0,border:0,background:"none"}}
+                aria-label={"Photo of "+(label||exercise.name)}>
+                <img src={url} alt={"Your "+(label||exercise.name)}
+                  style={{width:"100%",borderRadius:10,display:"block",background:"var(--bg-3)"}} />
+              </button>
+              <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
+                disabled={busy} onClick={pick}>
+                {busy ? <span className="spin"></span> : "Use a different photo"}
+              </button>
+            </>
+          : <button className="btn btn-ghost btn-sm btn-block" disabled={busy} onClick={pick}>
+              {busy ? <span className="spin"></span>
+                    : <><Icon d={ICONS.image} size={15}/> Add your own photo</>}
+            </button>}
+        {err && <div className="auth-msg err" style={{marginTop:8}}>{err}</div>}
+      </>
     );
   }
 
@@ -5722,14 +5758,18 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
   // "How do I do a Nordic curl HERE" - the gym you are standing in decides
   // the answer, so the inventory is the input, not a generic substitution
   // list. Cached per gym on the exercise: asked once, then instant.
-  const gyms = (store.gyms||[]).filter(g => (g.equipment||[]).length);
-  /* The gym you came from is selected whatever its inventory looks like.
-     It used to require equipment tags, which made sense when this section
-     only fed the AI suggestion - no inventory, nothing to suggest from. But
-     it now also carries the MACHINE LABEL, and naming the machine at a gym
-     has nothing to do with whether its tags are filled in. With several
-     gyms and no tags, nothing was selected and the field never appeared,
-     which is why Chris went looking for it and found nothing. */
+  /* EVERY gym, inventory or not. This used to filter to gyms with equipment
+     tags, which was right when the section only fed the AI suggestion - no
+     inventory, nothing to suggest from. It stopped being right when the
+     section also started carrying the machine NAME and now the photo, since
+     neither has anything to do with whether the tags are filled in.
+
+     I wrote the comment saying so and then left the filter in place, so a
+     freshly added gym was silently missing from the picker: Chris set up a
+     Smith machine at home, went to name it, and was told to pick a gym that
+     was not on the list. Only the AI suggestion needs an inventory, so only
+     the AI suggestion is gated on one now. */
+  const gyms = (store.gyms||[]);
   const [setupGym, setSetupGym] = useState(
     (gym && gym.id) ? gym.id : (gyms.length===1 ? gyms[0].id : null));
   const [setupBusy, setSetupBusy] = useState(false);
@@ -5766,6 +5806,9 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
   };
 
   const chosenGym = gyms.find(g => g.id === setupGym) || null;
+  // The AI works out a setup FROM an inventory. Naming and photographing a
+  // machine need no such thing.
+  const hasKit = !!(chosenGym && (chosenGym.equipment||[]).length);
   const setups = (ex && ex.setups) ? ex.setups : {};
   const machineHere = machineAt(ex, chosenGym && chosenGym.id);
   const saveMachine = (v) => {
@@ -5861,8 +5904,10 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
         {media === null &&
           <div className="card">
             <p className="hint" style={{margin:0}}>
-              No illustration on file for this one. The written how-to and the
-              demo video below still work.
+              No illustration on file for this one - which is expected for a
+              machine you named yourself. Add your own photo under "Set it up
+              where you are" below; the written how-to and the demo video
+              still work.
             </p>
           </div>}
 
@@ -5910,15 +5955,29 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
                   room is never confused with the same movement somewhere else.
                 </div>
               </div>}
+            {/* Beside the name because they are the same fact about the same
+                machine, and stored the same way - keyed by gym, so the photo
+                of the one at home never shows up against the one at the gym. */}
+            {chosenGym && ex &&
+              <div className="field" style={{marginTop:0,marginBottom:10}}>
+                <label className="label">What it looks like</label>
+                <MachinePhoto wide store={store} exercise={ex} gymId={chosenGym.id}
+                  label={machineHere} />
+              </div>}
             {!chosenGym
               ? <p className="hint" style={{margin:0}}>Pick a gym and I'll work it out from what's actually there.</p>
               : setupText
                 ? <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5}}>{setupText}</div>
-                : <p className="hint" style={{marginTop:0}}>
-                    {chosenGym.name} has {(chosenGym.equipment||[]).length} pieces of kit on file.
-                  </p>}
+                : hasKit
+                  ? <p className="hint" style={{marginTop:0}}>
+                      {chosenGym.name} has {(chosenGym.equipment||[]).length} pieces of kit on file.
+                    </p>
+                  : <p className="hint" style={{marginTop:0}}>
+                      Nothing on file for {chosenGym.name} yet. Scan it or add kit by hand
+                      and I can work out how to do this there.
+                    </p>}
             {setupErr && <div className="auth-msg err" style={{marginTop:10}}>{setupErr}</div>}
-            {chosenGym &&
+            {chosenGym && hasKit &&
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
                 disabled={setupBusy} onClick={findSetup}>
                 {setupBusy ? <span className="spin"></span>
