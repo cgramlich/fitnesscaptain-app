@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.101.0";
+const APP_VERSION = "0.102.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-11.2";
+const BUILD = "2026-08-11.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6079,7 +6079,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
 
 /* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
    Finish. Finished: view/edit history + delete. */
-function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, undoable }){
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, onRepeat, undoable }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
@@ -6315,8 +6315,15 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             <Icon d={ICONS.plus} size={15}/> Add exercise
           </button>}
 
+        {/* First of the two, because doing it again is the common wish and
+            saving a routine is the rarer, more deliberate one. */}
+        {!active && (workout.entries||[]).length>0 && onRepeat &&
+          <button className="btn btn-block" style={{marginTop:18}}
+            onClick={()=>onRepeat(workout)}>
+            <Icon d={ICONS.repeat} size={15}/> Do this workout again
+          </button>}
         {!active && (workout.entries||[]).length>0 &&
-          <button className="btn btn-ghost btn-block" style={{marginTop:18}} onClick={()=>onSaveAsRoutine(workout)}>
+          <button className="btn btn-ghost btn-block" style={{marginTop:10}} onClick={()=>onSaveAsRoutine(workout)}>
             Save as routine
           </button>}
         {!active &&
@@ -9378,6 +9385,58 @@ function App(){
     setStartCheck(null); setRoutineId(null); setTab("workouts"); setWorkoutId(w.id);
   };
   // Capture a finished workout as a reusable routine.
+  /* COPY A WORKOUT. Chris: "is there a way for me to copy a workout like cut
+     and paste?"
+
+     The only route before this was Save as routine, then Start from a
+     routine - two steps through a different concept, and a routine is a
+     PRESCRIPTION that keeps only sets and reps. The weights, which are the
+     whole reason you want last Tuesday back, were rounded into a target.
+
+     So this copies straight across. What you LIFTED last time becomes what
+     the steppers offer this time, set by set, and you either match it or you
+     do not.
+
+     Nothing is copied as done. The sets are cleared, cardio is nulled (an
+     entry with cardio on it counts as finished, so carrying it over would
+     hand you a workout that was complete before you had left the house), and
+     the plan is what you have to go and earn. */
+  const repeatWorkout = (w) => {
+    const entries = (w.entries||[]).map(e => {
+      const done = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0);
+      const item = { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
+                     cardio: null, sets: [],
+                     targetSets: Number(e.targetSets)||0,
+                     targetReps: Number(e.targetReps)||0 };
+      if(e.restSecs) item.restSecs = e.restSecs;
+      if(done.length){
+        item.plan = done.slice(0, MAX_PLAN_SETS)
+          .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+        item.targetSets = item.plan.length;
+        item.targetReps = Number(item.plan[0].reps)||0;
+      } else if(planOf(e)){
+        // Never started last time: carry its prescription rather than nothing.
+        item.plan = planOf(e).map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+      }
+      return item;
+    });
+    if(!entries.length){ showToast("There is nothing in this workout to copy"); return; }
+    const existing = (store.data.workouts||[]).find(x => !x.endedAt);
+    if(existing){
+      showToast("Finish the workout you have going first");
+      setWorkoutId(existing.id); return;
+    }
+    // The gym travels with it, but only if it still exists.
+    const gym = (store.gyms||[]).find(g => g.id === w.gymId) || null;
+    const nw = { id: uid(), name: w.name || dayPartName(), date: todayStr(),
+                 startedAt: nowISO(), endedAt: null, durationMin: 0, notes: "",
+                 entries, gymId: gym ? gym.id : null, gymName: gym ? gym.name : null };
+    store.saveCollection("workouts", [nw, ...(store.data.workouts||[])]);
+    if(gym) store.saveCfg({ ...store.cfg, lastGymId: gym.id });
+    setTab("workouts"); setWorkoutId(nw.id);
+    showToast("Copied - the weights are last time's");
+    log("REPEAT","copied \""+nw.name+"\" ("+entries.length+" exercises)");
+  };
   const saveAsRoutine = (w) => {
     const items = (w.entries||[]).filter(e => (e.sets||[]).length || e.cardio || e.type!=="strength")
       .map(e => {
@@ -9640,7 +9699,7 @@ function App(){
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId} undoable={showUndo}
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
-          onSaveAsRoutine={saveAsRoutine} />}
+          onSaveAsRoutine={saveAsRoutine} onRepeat={repeatWorkout} />}
 
       {routineId &&
         <RoutineEditor key={routineId} store={store} routineId={routineId}
