@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.107.0";
+const APP_VERSION = "0.108.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-13.3";
+const BUILD = "2026-08-13.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6369,6 +6369,26 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
               </button>)}
           </div>}
 
+        {/* WHAT ELSE HAPPENED. Chris: "how do I mark on Tuesday's workout that
+            I did the sauna and mobility work". Mobility is an exercise and
+            always could be added; the sauna is not, and there was nowhere to
+            put it. workout.notes has existed on every workout since the first
+            one and was written to storage empty and never shown - a field the
+            model had and the screen did not.
+
+            Saves on blur like every other free-text field here, so it keeps
+            what you typed if you close the workout without ceremony. */}
+        {canEdit &&
+          <div className="field" style={{marginTop:12}}>
+            <label className="label">What else happened</label>
+            <textarea className="textarea" style={{minHeight:64}}
+              key={workout.id}
+              defaultValue={workout.notes||""}
+              placeholder="Sauna, stretching, how it felt - anything that is not a set."
+              onBlur={e=>{ const v = e.target.value;
+                if(v !== (workout.notes||"")) patch({ notes: v }); }} />
+          </div>}
+
         {(workout.entries||[]).length===0 &&
           <div className="empty" style={{padding:"36px 20px"}}>
             <h3 className="title-sm">{active ? "Add your first exercise" : "Empty workout"}</h3>
@@ -8074,6 +8094,36 @@ function buildDigest(store){
   };
 }
 
+/* One row per muscle group, longest gap first.
+
+   Sorted by gap rather than anatomically, because the top of the list is then
+   always the thing you are most behind on - which is the reason you looked.
+   Never-trained sorts above everything: "you have not touched glutes at all"
+   outranks "glutes were nine days ago".
+
+   Seven days is where the chip turns amber. One turn of the week: below it
+   you are mid-rotation, not behind. */
+const MUSCLE_GAP_DUE = 7;
+// Sorts above any real gap without being Infinity, which subtracts to NaN
+// when two groups are both untrained and leaves the order undefined.
+const NEVER_RANK = 9999;
+function muscleGapRows(daysSince){
+  const ds = daysSince || {};
+  return Object.keys(ds)
+    .sort((a,b) => (ds[b] === null ? NEVER_RANK : ds[b]) - (ds[a] === null ? NEVER_RANK : ds[a]))
+    .map(g => {
+      const n = ds[g];
+      return {
+        group: g,
+        label: n === null ? "not in 4 weeks"
+             : n === 0 ? "today"
+             : n === 1 ? "yesterday"
+             : n + " days ago",
+        tone: (n === null || n >= MUSCLE_GAP_DUE) ? "amber" : "",
+      };
+    });
+}
+
 /* The card. Deterministic facts render immediately and cost nothing; the
    reading is one tap and cached for the week on cfg. */
 function CheckInCard({ store }){
@@ -8095,29 +8145,6 @@ function CheckInCard({ store }){
         .sort((a,b) => (d.groups[a]||0) - (d.groups[b]||0));
   const lowShown = low.slice(0, 3);
   const lowRest  = low.length - lowShown.length;
-  /* DUE: nothing logged for a week or more. Seven days because that is one
-     turn of the week - below it you are mid-rotation, not behind. A group
-     never trained in 28 days sorts to the front, since "you have not touched
-     legs at all" outranks "legs were nine days ago". */
-  const DUE_DAYS = 7;
-  const ds = d.daysSince || {};
-  const due = Object.keys(ds)
-    .filter(g => ds[g] === null || ds[g] >= DUE_DAYS)
-    .sort((a,b) => (ds[b] === null ? 999 : ds[b]) - (ds[a] === null ? 999 : ds[a]));
-  const dueShown = due.slice(0, 3);
-  const dueRest  = due.length - dueShown.length;
-  /* The all-clear is a RESULT, not an empty state. Hiding the row when
-     nothing was overdue made "you are covered" look identical to "this app
-     does not check", and Chris went hunting for a section that was working
-     perfectly and had simply found nothing to report. So it always says
-     something, and when there is no gap it names the longest one anyway -
-     "5d (Arms)" is the fact behind the all-clear rather than a pat on the
-     head. Groups never trained in 28 days are excluded from that maximum;
-     they are the `due` case and would always win it. */
-  const seen = Object.keys(ds).filter(g => ds[g] !== null);
-  const longest = seen.length
-    ? seen.reduce((a,b) => (ds[b] > ds[a] ? b : a))
-    : null;
   const best = d.lifts.length ? d.lifts[0] : null;
   const worst = d.lifts.length > 1 ? d.lifts[d.lifts.length-1] : null;
 
@@ -8152,6 +8179,33 @@ function CheckInCard({ store }){
 
   return (
     <>
+      {/* SINCE YOU LAST TRAINED IT. Chris: "I really just want to know that I
+          haven't done legs or lower body in four days, so why don't you just
+          divide out the muscle groups and mark how long it's been."
+
+          Right, and both earlier attempts talked around it. A single row that
+          named the three worst made you read a sentence to find one number,
+          and hiding the groups behind chevrons in the exercise list made you
+          go looking. This is the whole question, answered flat: every group,
+          every time, longest gap at the top so the answer is the first thing
+          on the card.
+
+          It leads the tab, above the four-week card, because "what should I
+          train" is the question you open Progress with. */}
+      <div className="set-group">Since you last trained it</div>
+      <div className="card">
+        {muscleGapRows(d.daysSince).map(r => (
+          <div key={r.group} className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">{r.group}</span>
+            <span className={"chip "+r.tone}>{r.label}</span>
+          </div>
+        ))}
+        <p className="hint" style={{marginTop:10,marginBottom:0}}>
+          Counted from the muscle group on each exercise. Anything tagged
+          "Full body" is left out - it cannot say what it actually worked.
+        </p>
+      </div>
+
       <div className="set-group">Your last 4 weeks</div>
       <div className="card">
         <div className="item-meta" style={{marginBottom:8}}>
@@ -8184,19 +8238,6 @@ function CheckInCard({ store }){
               {lowRest > 0 ? " +"+lowRest+" more" : ""}
             </span>
           </div>}
-        {dueShown.length > 0
-          ? <div className="set-row" style={{cursor:"default"}}>
-              <span className="set-main">Not trained in a week</span>
-              <span className="chip amber">
-                {dueShown.map(g => g + " " + (ds[g] === null ? "4wk+" : ds[g] + "d")).join(", ")}
-                {dueRest > 0 ? " +"+dueRest+" more" : ""}
-              </span>
-            </div>
-          : longest &&
-            <div className="set-row" style={{cursor:"default"}}>
-              <span className="set-main">Every group inside a week</span>
-              <span className="chip green">longest {ds[longest]}d - {longest}</span>
-            </div>}
         {d.body && d.body.tooFast &&
           <div className="set-row" style={{cursor:"default"}}>
             <span className="set-main">Weight falling</span>
