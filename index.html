@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.109.0";
+const APP_VERSION = "0.110.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-13.5";
+const BUILD = "2026-08-13.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4791,6 +4791,24 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
      locally and feed those through the SAME downscale path the photo picker
      uses. No backend change, no upload of a large file, and the review screen
      cannot tell the difference. */
+  /* HOW MANY FRAMES A CLIP IS WORTH, which is a question about the clip and
+     not about the budget. Chris: "so every time I upload a video, however
+     short or long it is, it's gonna be 16 photos?" It was - the loop ran to
+     the budget regardless of duration, so a three-second clip produced
+     sixteen stills 0.19s apart. Sixteen near-identical pictures of the same
+     corner, each one billed as a vision image, and between them they used up
+     the whole scan so real photos got dropped.
+
+     One frame per SECONDS_PER_FRAME, capped by whatever room is left. Walking
+     a gym floor you cover a new rack every few seconds, so sampling faster
+     than that buys duplicates. The floor of three is for the very short clip
+     where even one frame either side of the middle is worth having. */
+  const SECONDS_PER_FRAME = 2.5;
+  const MIN_VIDEO_FRAMES = 3;
+  const framesWanted = (dur, budget) =>
+    Math.max(1, Math.min(budget,
+      Math.max(MIN_VIDEO_FRAMES, Math.round(dur / SECONDS_PER_FRAME))));
+
   const framesFromVideo = (file, want) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const v = document.createElement("video");
@@ -4834,8 +4852,9 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         if(!isFinite(dur) || dur <= 0) throw new Error("That clip has no readable duration - try recording it again.");
         // Evenly spaced, skipping the very start and end - the first and last
         // frames of a hand-held clip are usually a blur or a pocket.
+        const n = framesWanted(dur, want);
         const times = [];
-        for(let i=0;i<want;i++) times.push(dur * (i+0.5) / want);
+        for(let i=0;i<n;i++) times.push(dur * (i+0.5) / n);
         const MAX = 1024;
         const scale = Math.min(1, MAX/Math.max(v.videoWidth||1, v.videoHeight||1));
         const cv = document.createElement("canvas");
@@ -4917,9 +4936,14 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
 
   /* One picker, two kinds of file. Videos go through frame extraction and
      images through downscale, and the user should not have to know which
-     button does which. Only the FIRST video is used: two videos would each
-     want the whole frame budget, and silently keeping half of each is worse
-     than saying so. */
+     button does which.
+
+     ALL the videos are used now, not just the first. That limit existed
+     because each clip wanted the entire frame budget, so a second one had
+     nowhere to go - and once a clip only takes what its duration warrants,
+     the reason evaporates. Two short walkthroughs and a few photos fit in one
+     scan, which is what Chris was trying to do when he was told to come back
+     and scan again. */
   const addPicked = async (fileList) => {
     const all = Array.from(fileList || []);
     const vids = all.filter(f => /^video\//.test(f.type || ""));
@@ -4941,16 +4965,16 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
       const n = await addFiles(pics);
       if(n) notes.push(n);
     }
-    if(vids.length){
-      if(roomLeft() <= 0){
-        notes.push("No room left for the video - it needs at least one of the "
-                   + SCAN_MAX_IMAGES + " shots. Scan it on its own.");
-      } else {
-        const n = await addVideo(vids[0]);
-        if(n) notes.push(n);
-        if(vids.length > 1) notes.push("One video per scan - the first was used.");
-      }
+    let skipped = 0;
+    for(const v of vids){
+      if(roomLeft() <= 0){ skipped++; continue; }
+      const n = await addVideo(v);
+      if(n) notes.push(n);
     }
+    if(skipped > 0)
+      notes.push(skipped + " video" + (skipped===1?"":"s") + " left out - "
+                 + SCAN_MAX_IMAGES + " shots is the limit per scan. Scan again to add "
+                 + (skipped===1?"it":"them") + ".");
     setErr(notes.join(" "));
   };
 
