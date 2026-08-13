@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.108.0";
+const APP_VERSION = "0.109.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-13.4";
+const BUILD = "2026-08-13.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4872,16 +4872,46 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
     v.src = url;
   });
 
+  /* THE SHOT BUDGET, read from a ref rather than from state.
+
+     `imgs` is only as fresh as the last render, and picking photos AND a
+     video in one go runs both intakes inside a single tick: the photos went
+     in via a setImgs updater, the video then measured the room left against
+     an `imgs` that had not caught up, and helped itself to the whole budget
+     a second time. Chris picked a handful of photos and two clips and ended
+     up staring at "20 of 16 shots ready" - with the button still live, and
+     the backend set to reject anything over 16, so the scan he had just
+     spent minutes assembling could only fail.
+
+     A ref updates synchronously, so the second intake sees what the first
+     one actually took. Both writers go through these two helpers, and the
+     render-body assignment below resyncs the ref afterwards - so state stays
+     the single source of truth and the ref is only ever a within-tick
+     shortcut ahead of it. */
+  const imgsRef = useRef(imgs);
+  imgsRef.current = imgs;
+  const roomLeft = () => Math.max(0, SCAN_MAX_IMAGES - imgsRef.current.length);
+  const writeShots = (next) => { imgsRef.current = next; setImgs(next); };
+  const addShots = (shots) => {
+    if(!shots.length) return;
+    writeShots([...imgsRef.current, ...shots]);
+  };
+  const removeShot = (i) => writeShots(imgsRef.current.filter((_,j) => j !== i));
+
+  // Returns what it could not take, so a caller picking several kinds of
+  // file can say so once at the end instead of each step overwriting the
+  // last one's message.
   const addVideo = async (file) => {
-    setErr(""); setVidBusy(true);
+    setVidBusy(true);
     try{
-      const room = SCAN_MAX_IMAGES - imgs.length;
-      if(room <= 0){ setErr("Already at "+SCAN_MAX_IMAGES+" shots - remove some first."); return; }
+      const room = roomLeft();
+      if(room <= 0) return "Already at "+SCAN_MAX_IMAGES+" shots - remove some first.";
       const frames = await framesFromVideo(file, room);
-      if(!frames.length) throw new Error("No frames came out of that video.");
-      setImgs(p => [...p, ...frames]);
+      if(!frames.length) return "No frames came out of that video.";
+      addShots(frames);
       log("SCAN","video -> "+frames.length+" frames");
-    }catch(e){ setErr(e.message||"Couldn't read that video."); log("ERROR","scan video: "+e.message); }
+      return null;
+    }catch(e){ log("ERROR","scan video: "+e.message); return e.message || "Couldn't read that video."; }
     finally{ setVidBusy(false); }
   };
 
@@ -4894,26 +4924,50 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
     const all = Array.from(fileList || []);
     const vids = all.filter(f => /^video\//.test(f.type || ""));
     const pics = all.filter(f => /^image\//.test(f.type || ""));
-    if(pics.length) await addFiles(pics);
-    if(vids.length){
-      await addVideo(vids[0]);
-      if(vids.length > 1) setErr("One video per scan - the first was used. Scan again for the others.");
+    if(!vids.length && !pics.length){ setErr("That file isn't a photo or a video."); return; }
+    setErr("");
+    /* PHOTOS FIRST, then the video takes whatever is left.
+
+       A video asked for four frames returns four spread across the clip; ask
+       for sixteen and it returns sixteen. It fills any budget it is handed,
+       which is exactly why it should go second. Photos cannot do that - each
+       one is a thing you stopped and framed, so dropping six of them to make
+       room for six more frames of the same room is a bad trade.
+
+       Running the video first meant a single clip swallowed all sixteen and
+       every photo Chris had chosen was thrown away. */
+    const notes = [];
+    if(pics.length){
+      const n = await addFiles(pics);
+      if(n) notes.push(n);
     }
-    if(!vids.length && !pics.length) setErr("That file isn't a photo or a video.");
+    if(vids.length){
+      if(roomLeft() <= 0){
+        notes.push("No room left for the video - it needs at least one of the "
+                   + SCAN_MAX_IMAGES + " shots. Scan it on its own.");
+      } else {
+        const n = await addVideo(vids[0]);
+        if(n) notes.push(n);
+        if(vids.length > 1) notes.push("One video per scan - the first was used.");
+      }
+    }
+    setErr(notes.join(" "));
   };
 
   const addFiles = async (fileList) => {
-    setErr("");
     const files = Array.from(fileList||[]).filter(f=>/^image\//.test(f.type||""));
-    if(!files.length) return;
-    const room = SCAN_MAX_IMAGES - imgs.length;
-    if(files.length > room) setErr("Max "+SCAN_MAX_IMAGES+" photos per scan - extras were dropped.");
+    if(!files.length) return null;
+    const room = roomLeft();
     const added = [];
-    for(const f of files.slice(0, Math.max(0, room))){
+    for(const f of files.slice(0, room)){
       try{ added.push(await downscale(f)); }
       catch(e){ log("ERROR","scan downscale: "+e.message); }
     }
-    if(added.length) setImgs(p=>[...p, ...added]);
+    addShots(added);
+    const dropped = files.length - added.length;
+    return dropped > 0
+      ? dropped + " photo" + (dropped===1?"":"s") + " left out - " + SCAN_MAX_IMAGES + " shots is the limit per scan."
+      : null;
   };
 
   const analyze = async () => {
@@ -5015,7 +5069,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
                 <div key={i} style={{position:"relative"}}>
                   <img src={im.thumb} alt="" style={{width:76,height:76,objectFit:"cover",
                     borderRadius:10,border:"1px solid var(--line-2)",display:"block"}} />
-                  <button onClick={()=>setImgs(p=>p.filter((_,j)=>j!==i))} aria-label="Remove photo"
+                  <button onClick={()=>removeShot(i)} aria-label="Remove photo"
                     style={{position:"absolute",top:-7,right:-7,width:22,height:22,borderRadius:11,
                             background:"var(--bg-4)",border:"1px solid var(--line-2)",
                             color:"var(--ink-2)",fontSize:12,lineHeight:"20px",padding:0}}>x</button>
@@ -5026,9 +5080,11 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
               Walking the floor filming beats framing eight stills; standing at
               one rack, a photo is faster; and receipts live in your library. */}
           <input ref={vidRef} type="file" accept="video/*" capture="environment" style={{display:"none"}}
-            onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; if(f) addVideo(f); }} />
+            onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value="";
+              if(f) addVideo(f).then(n => setErr(n||"")); }} />
           <input ref={camRef} type="file" accept="image/*" capture="environment" multiple style={{display:"none"}}
-            onChange={e=>{ addFiles(e.target.files); e.target.value=""; }} />
+            onChange={e=>{ const fl=e.target.files; e.target.value="";
+              addFiles(fl).then(n => setErr(n||"")); }} />
           {/* Photos OR video. "Record a walkthrough" uses capture, which forces
               the camera, so before this there was NO way to use a clip you had
               already filmed - or one somebody sent you. Chris asked for the
