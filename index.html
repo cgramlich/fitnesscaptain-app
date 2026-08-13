@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.105.0";
+const APP_VERSION = "0.106.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-13.1";
+const BUILD = "2026-08-13.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -8106,6 +8106,18 @@ function CheckInCard({ store }){
     .sort((a,b) => (ds[b] === null ? 999 : ds[b]) - (ds[a] === null ? 999 : ds[a]));
   const dueShown = due.slice(0, 3);
   const dueRest  = due.length - dueShown.length;
+  /* The all-clear is a RESULT, not an empty state. Hiding the row when
+     nothing was overdue made "you are covered" look identical to "this app
+     does not check", and Chris went hunting for a section that was working
+     perfectly and had simply found nothing to report. So it always says
+     something, and when there is no gap it names the longest one anyway -
+     "5d (Arms)" is the fact behind the all-clear rather than a pat on the
+     head. Groups never trained in 28 days are excluded from that maximum;
+     they are the `due` case and would always win it. */
+  const seen = Object.keys(ds).filter(g => ds[g] !== null);
+  const longest = seen.length
+    ? seen.reduce((a,b) => (ds[b] > ds[a] ? b : a))
+    : null;
   const best = d.lifts.length ? d.lifts[0] : null;
   const worst = d.lifts.length > 1 ? d.lifts[d.lifts.length-1] : null;
 
@@ -8172,14 +8184,19 @@ function CheckInCard({ store }){
               {lowRest > 0 ? " +"+lowRest+" more" : ""}
             </span>
           </div>}
-        {dueShown.length > 0 &&
-          <div className="set-row" style={{cursor:"default"}}>
-            <span className="set-main">Not trained in a week</span>
-            <span className="chip amber">
-              {dueShown.map(g => g + " " + (ds[g] === null ? "4wk+" : ds[g] + "d")).join(", ")}
-              {dueRest > 0 ? " +"+dueRest+" more" : ""}
-            </span>
-          </div>}
+        {dueShown.length > 0
+          ? <div className="set-row" style={{cursor:"default"}}>
+              <span className="set-main">Not trained in a week</span>
+              <span className="chip amber">
+                {dueShown.map(g => g + " " + (ds[g] === null ? "4wk+" : ds[g] + "d")).join(", ")}
+                {dueRest > 0 ? " +"+dueRest+" more" : ""}
+              </span>
+            </div>
+          : longest &&
+            <div className="set-row" style={{cursor:"default"}}>
+              <span className="set-main">Every group inside a week</span>
+              <span className="chip green">longest {ds[longest]}d - {longest}</span>
+            </div>}
         {d.body && d.body.tooFast &&
           <div className="set-row" style={{cursor:"default"}}>
             <span className="set-main">Weight falling</span>
