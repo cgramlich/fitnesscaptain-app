@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.106.0";
+const APP_VERSION = "0.107.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-13.2";
+const BUILD = "2026-08-13.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -8802,8 +8802,12 @@ function ProgressScreen({ store, weighIn, onWeighInDone, notify }){
       const sets = (e.sets||[]).filter(s => (Number(s.weight)||0)>0 && (Number(s.reps)||0)>0);
       if(!sets.length) continue;
       const id = e.exerciseId || e.name;
+      const rec = (store.data.exercises||[]).find(x=>x.id===e.exerciseId) || {};
       const st = exStats[id] || (exStats[id] = {id, name:e.name, sessions:[], pr:null,
-        equipment: ((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).equipment || null});
+        equipment: rec.equipment || null,
+        // Deleted exercises and free-typed entries have no record to read,
+        // so they land in Other rather than silently joining Full body.
+        group: rec.muscleGroup || "Other"});
       if(e.name) st.name = e.name;               // denormalized snapshot; latest wins
       let top = sets[0], vol = 0, est = 0;
       for(const s of sets){
@@ -8821,6 +8825,31 @@ function ProgressScreen({ store, weighIn, onWeighInDone, notify }){
   // Most recently trained first - the list mirrors what you're actually doing.
   const tracked = Object.values(exStats)
     .sort((a,b)=>String(b.sessions[b.sessions.length-1].date).localeCompare(String(a.sessions[a.sessions.length-1].date)));
+  /* BY MUSCLE GROUP, COLLAPSED. Chris: "this exercise list is gonna grow
+     pretty big and scrolling, so maybe we need a better way to organize it,
+     perhaps collapsing, chevrons". He is right and it only gets worse - the
+     list holds every exercise he has ever logged a weighted set for, and
+     nothing ever leaves it.
+
+     Grouped by muscle rather than alphabetically, because the question you
+     bring to this screen is almost always about a body part. Closed by
+     default: seven headers you can take in at once beats forty rows you
+     have to scroll, and the header carries enough - how many, and how long
+     since - to answer a lot of questions without opening anything.
+
+     Sections are ordered by recency like the flat list was, so what you are
+     currently training stays at the top. */
+  const [openGroups, setOpenGroups] = useState({});
+  const grouped = [];
+  const gIndex = {};
+  tracked.forEach(st => {
+    const g = st.group || "Other";
+    if(gIndex[g] === undefined){ gIndex[g] = grouped.length; grouped.push({ name:g, items:[] }); }
+    grouped[gIndex[g]].items.push(st);
+  });
+  const lastOf = (sec) => sec.items
+    .map(x => x.sessions[x.sessions.length-1].date)
+    .reduce((a,b) => (b > a ? b : a));
   const sel = exId ? exStats[exId] : null;
 
   return (
@@ -8864,20 +8893,48 @@ function ProgressScreen({ store, weighIn, onWeighInDone, notify }){
       <div className="set-group">By exercise</div>
       {!tracked.length
         ? <div className="card"><p className="subtle" style={{margin:0}}>Log weighted sets and each exercise shows up here with its trend and best lift.</p></div>
-        : <div className="list">
-            {tracked.map(s => (
-              <button key={s.id} className="item" onClick={()=>setExId(s.id)}>
-                <div className="item-body">
-                  <div className="item-title">{s.name}</div>
-                  <div className="item-meta">
-                    <span className="chip amber">best {fmtW(s.pr.weight)} {units} x {s.pr.reps}</span>
-                    <span className="chip">{s.sessions.length} session{s.sessions.length===1?"":"s"}</span>
-                    <span className="chip">{fmtDate(s.sessions[s.sessions.length-1].date)}</span>
+        : grouped.map(sec => {
+            const open = !!openGroups[sec.name];
+            const days = daysBetween(lastOf(sec), todayStr());
+            return (
+              <div key={sec.name} className="list" style={{marginBottom:8}}>
+                <button className="item" onClick={()=>setOpenGroups(o => ({...o, [sec.name]: !o[sec.name]}))}
+                  aria-expanded={open}>
+                  <div className="item-body">
+                    <div className="item-title">{sec.name}</div>
+                    <div className="item-meta">
+                      <span className="chip">{sec.items.length} exercise{sec.items.length===1?"":"s"}</span>
+                      {/* The same recency read as the check-in card, where you
+                          are already looking at the exercises it is about. */}
+                      <span className={"chip "+(days >= 7 ? "amber" : "")}>
+                        {days === 0 ? "today" : days === 1 ? "yesterday" : days+"d ago"}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              </button>
-            ))}
-          </div>}
+                  {/* One chevron, rotated - right when shut, down when open,
+                      which is the accordion everybody already reads. */}
+                  <span style={{flex:"0 0 auto",display:"flex",color:"var(--ink-3)",
+                               transform: open ? "rotate(90deg)" : "none",
+                               transition:"transform .18s var(--ease)"}}>
+                    <Icon d={ICONS.chev} size={18}/>
+                  </span>
+                </button>
+                {open && sec.items.map(s => (
+                  <button key={s.id} className="item" onClick={()=>setExId(s.id)}
+                    style={{paddingLeft:26}}>
+                    <div className="item-body">
+                      <div className="item-title">{s.name}</div>
+                      <div className="item-meta">
+                        <span className="chip amber">best {fmtW(s.pr.weight)} {units} x {s.pr.reps}</span>
+                        <span className="chip">{s.sessions.length} session{s.sessions.length===1?"":"s"}</span>
+                        <span className="chip">{fmtDate(s.sessions[s.sessions.length-1].date)}</span>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
 
       {sel && <ExerciseProgress stat={sel} units={units} onClose={()=>setExId(null)} />}
     </div>
