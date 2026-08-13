@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.104.0";
+const APP_VERSION = "0.105.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-11.5";
+const BUILD = "2026-08-13.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -442,6 +442,14 @@ function workoutSets(w){
   return n;
 }
 // Shift a YYYY-MM-DD string by N days (negative = back).
+/* Whole days from one YYYY-MM-DD to another. The same expression was
+   written inline in three places before this; a fourth copy for the
+   muscle-group recency read was the point to stop. Midnight-anchored, so
+   it counts DATES rather than elapsed hours - training last night and
+   asking this morning is one day, not zero. */
+function daysBetween(a, b){
+  return Math.round((new Date(b+"T00:00:00") - new Date(a+"T00:00:00")) / 86400000);
+}
 function shiftDay(dateStr, n){
   const d = new Date(String(dateStr||"").slice(0,10) + "T00:00:00");
   if(isNaN(d)) return null;
@@ -6814,6 +6822,27 @@ function ProgramCard({ store, undoable, onOpen }){
       store.saveCfg({ ...store.cfg, activeProgramId: wasActive });
     });
   };
+  /* PAUSE. Chris, mid-decision: "how do I pause a program from populating
+     today's activity because I'm thinking about changing programs".
+
+     Neither existing control fitted. Snoozing the home-screen card is keyed
+     to a date so it comes back tomorrow, and Delete is permanent - a fair
+     trade for stepping off for good, a terrible one while you are still
+     making your mind up about a ten-day block you spent time ordering.
+
+     Pausing clears only which program is being FOLLOWED. The program, its
+     order and its cursor all stay put; it drops into "Your programs" below
+     with Follow to pick it up on the same day you left it. Nothing else
+     needs to know: everything that prompts you reads activeProgram(), so
+     they all go quiet at once, and finishing a workout stops advancing a
+     cursor you are no longer following. */
+  const pauseProgram = () => {
+    const wasActive = store.cfg.activeProgramId;
+    store.saveCfg({ ...store.cfg, activeProgramId: null });
+    log("PROGRAM","paused "+prog.name);
+    if(undoable) undoable('"' + prog.name + '" paused', () =>
+      store.saveCfg({ ...store.cfg, activeProgramId: wasActive }));
+  };
   const setNextTo = (idx) => store.savePrograms((store.programs||[]).map(p =>
     p.id===prog.id ? { ...p, cursor: idx, updatedAt: nowISO() } : p));
 
@@ -6831,7 +6860,7 @@ function ProgramCard({ store, undoable, onOpen }){
   const OtherPrograms = () => !others.length ? null : (
     <div className="card" style={{marginBottom:12}}>
       <div className="subtle" style={{marginBottom:8}}>
-        {prog ? "Your other programs" : "Your programs"}
+        {prog ? "Your other programs" : "Your programs - none running"}
       </div>
       {others.map(p => {
         const open = expanded === p.id;
@@ -6913,7 +6942,15 @@ function ProgramCard({ store, undoable, onOpen }){
           );
         })}
         <p className="hint" style={{marginTop:8}}>Tap a day to open it, or make it the next one.</p>
-        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:6}} onClick={deleteProgram}>
+        {/* Above Delete, and worded as the reversible thing it is. The two
+            sat one tap apart and only one of them could be taken back. */}
+        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:6}} onClick={pauseProgram}>
+          Pause this program
+        </button>
+        <p className="hint" style={{marginTop:6,marginBottom:0}}>
+          Stops it suggesting a day. Keeps the program and your place in it.
+        </p>
+        <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}} onClick={deleteProgram}>
           Delete this program
         </button>
       </div>
@@ -7932,6 +7969,30 @@ function buildDigest(store){
     });
   });
 
+  /* ---- DAYS SINCE each group was last worked ----
+     `groups` above answers "is the volume there", which is not the same
+     question as "am I due". A week can hit its set range on chest and back
+     and still have left legs alone for eleven days, and volume-per-week
+     cannot see that at all. Looked at over 28 days rather than 7 so a group
+     you have genuinely dropped reports a real number instead of falling off
+     the window and going quiet. */
+  const lastTrained = {};
+  done.filter(w => w.date >= cut28).forEach(w => {
+    (w.entries||[]).forEach(e => {
+      if(!(e.sets||[]).some(x => (Number(x.reps)||0) > 0)) return;
+      const ex = byId[e.exerciseId] || byNm[normName(e.name)];
+      const g = (ex && ex.muscleGroup) ? ex.muscleGroup : "Full body";
+      if(!lastTrained[g] || w.date > lastTrained[g]) lastTrained[g] = w.date;
+    });
+  });
+  // Never in 28 days reads as null, which the card renders as "not in 4
+  // weeks" rather than a misleading 28.
+  const daysSince = {};
+  MUSCLE_GROUPS.forEach(g => {
+    if(g === "Full body") return;
+    daysSince[g] = lastTrained[g] ? daysBetween(lastTrained[g], todayStr()) : null;
+  });
+
   // ---- per-lift movement: best estimated 1RM, first half vs second half
   //      of the window. Only lifts trained in BOTH halves can be compared;
   //      anything else would report a change that never happened. ----
@@ -8008,7 +8069,7 @@ function buildDigest(store){
     units, generatedFor: thisWeek,
     sessionsLast28: recent.length,
     enough: recent.length >= CHECKIN_MIN_SESSIONS,
-    weekly, setsTarget: target, groups, lifts, marks:{up, down},
+    weekly, setsTarget: target, groups, daysSince, lifts, marks:{up, down},
     program, body, habits, gyms, notes,
   };
 }
@@ -8034,6 +8095,17 @@ function CheckInCard({ store }){
         .sort((a,b) => (d.groups[a]||0) - (d.groups[b]||0));
   const lowShown = low.slice(0, 3);
   const lowRest  = low.length - lowShown.length;
+  /* DUE: nothing logged for a week or more. Seven days because that is one
+     turn of the week - below it you are mid-rotation, not behind. A group
+     never trained in 28 days sorts to the front, since "you have not touched
+     legs at all" outranks "legs were nine days ago". */
+  const DUE_DAYS = 7;
+  const ds = d.daysSince || {};
+  const due = Object.keys(ds)
+    .filter(g => ds[g] === null || ds[g] >= DUE_DAYS)
+    .sort((a,b) => (ds[b] === null ? 999 : ds[b]) - (ds[a] === null ? 999 : ds[a]));
+  const dueShown = due.slice(0, 3);
+  const dueRest  = due.length - dueShown.length;
   const best = d.lifts.length ? d.lifts[0] : null;
   const worst = d.lifts.length > 1 ? d.lifts[d.lifts.length-1] : null;
 
@@ -8047,6 +8119,8 @@ function CheckInCard({ store }){
         "The notes array is what they wrote about individual sets in their own words - " +
         "use it where it explains a number, and quote it briefly when you do. " +
         "EVERY claim must cite the number it came from - say 'chest is at 7 sets against your 8-15 range', " +
+        "and 'legs were 11 days ago' from daysSince, never 'consider more leg work'. " +
+        "daysSince is days since each muscle group was last worked, null meaning not in 4 weeks - use it for whether they are DUE, and groups for whether the volume is there. They are different questions. " +
         "never 'consider more chest work'. If the data cannot support a claim, say so plainly instead of " +
         "inventing a trend; too little data is a real answer. " +
         "NEVER give calorie, protein, macro or medication advice, and never suggest a rate of weight loss - " +
@@ -8096,6 +8170,14 @@ function CheckInCard({ store }){
             <span className="chip amber">
               {lowShown.map(g => g+" "+(d.groups[g]||0)).join(", ")}
               {lowRest > 0 ? " +"+lowRest+" more" : ""}
+            </span>
+          </div>}
+        {dueShown.length > 0 &&
+          <div className="set-row" style={{cursor:"default"}}>
+            <span className="set-main">Not trained in a week</span>
+            <span className="chip amber">
+              {dueShown.map(g => g + " " + (ds[g] === null ? "4wk+" : ds[g] + "d")).join(", ")}
+              {dueRest > 0 ? " +"+dueRest+" more" : ""}
             </span>
           </div>}
         {d.body && d.body.tooFast &&
