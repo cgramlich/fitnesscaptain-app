@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.115.0";
+const APP_VERSION = "0.116.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-15.3";
+const BUILD = "2026-08-15.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -547,6 +547,13 @@ const REF_EQUIPMENT = {
    than only new imports being right. */
 function refEquipment(ref, name){
   if(name && /\bsmith\b/i.test(String(name))) return "smith machine";
+  /* Same rule, one step wider. The database files back extensions and crunches
+     as "body only" even when the movement is named for the machine it is done
+     on, which imports them as bodyweight - and a machine tagged bodyweight is
+     wrong twice over: it loses the machine label AND tells the gym filter you
+     can do it in a hotel room with nothing in it. Smith is checked first
+     because it is the more specific claim. */
+  if(name && /\bmachine\b/i.test(String(name))) return "machine";
   const raw = ref && ref.equipment ? String(ref.equipment).toLowerCase() : "";
   return REF_EQUIPMENT[raw] || null;
 }
@@ -6711,12 +6718,30 @@ const MACHINE_LOADED = ["machine","smith machine","cable"];
    So: everything except work with no apparatus at all. A push-up has nothing
    to name. The affordance is one grey line that appears only on an active
    card, so being generous here costs nothing when it goes unused. */
-const NO_APPARATUS = ["bodyweight","none"];
+/* Only bodyweight. "none" used to be in here too, and should not have been:
+   it is the value a hand-typed exercise is created with, so it means "nobody
+   has said yet" far more often than it means "this needs no equipment", and
+   suppressing the feature on it punished the exercises Chris made himself. */
+const NO_APPARATUS = ["bodyweight"];
+
+/* THE NAME OUTRANKS THE TAG. Same evidence rule refEquipment already applies
+   to Smith movements, for the same reason: the reference database files back
+   extensions as "body only", which imports as bodyweight, so Chris's "Seated
+   Back Extension Machine" was classed as needing no apparatus and offered
+   neither a label nor a photo - on an exercise with the word Machine in its
+   name, sitting in a room where he was looking straight at one.
+
+   Checking the name here rather than only at import means existing libraries
+   are fixed on sight, with no re-import and no Normalize run. */
+const NAMED_MACHINE = /\b(machine|smith)\b/i;
 function canName(ex){
-  return !!ex && NO_APPARATUS.indexOf(ex.equipment) === -1;
+  if(!ex) return false;
+  if(NAMED_MACHINE.test(String(ex.name||""))) return true;
+  return NO_APPARATUS.indexOf(ex.equipment) === -1;
 }
 // "Machine" is wrong for a barbell and pedantic for a bench, so pick the noun.
 function apparatusNoun(ex){
+  if(ex && NAMED_MACHINE.test(String(ex.name||""))) return "machine";
   return MACHINE_LOADED.indexOf(ex && ex.equipment) !== -1 ? "machine" : "equipment";
 }
 
