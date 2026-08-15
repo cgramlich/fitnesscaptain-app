@@ -17,7 +17,7 @@
      bytes is what makes the browser install the new worker.
 */
 
-const VERSION      = "0.112.0";                  // keep in lockstep with APP_VERSION
+const VERSION      = "0.113.0";                  // keep in lockstep with APP_VERSION
 const SHELL_CACHE  = "fc-shell-" + VERSION;
 const ASSET_CACHE  = "fc-assets-" + VERSION;
 const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versioned so it
@@ -25,10 +25,26 @@ const DATA_CACHE   = "fc-data-v1";              // user collections; UN-versione
 // Subpath-safe: resolves to "/fitnesscaptain-app/" (or "/" if served from a root).
 const SHELL_URL    = new URL("./", self.location).pathname;
 
-// Primed on install so even the very first offline open works.
-// Each is a Request with SRI (integrity) + CORS mode, mirroring the <script>
-// tags in index.html - the fetch fails (and is skipped by allSettled) if the
-// CDN response doesn't hash-match, so a tampered copy never enters the cache.
+/* Primed on install so even the very first offline open works.
+   Each is a Request with SRI (integrity) + CORS mode, mirroring the <script>
+   tags in index.html - the fetch fails (and is skipped by allSettled) if the
+   CDN response doesn't hash-match, so a tampered copy never enters the cache.
+
+   THIS LIST MUST HOLD EVERY <script src> IN index.html. It held React and
+   ReactDOM only, which is a shell that cannot boot: the whole app is one
+   inline type="text/babel" block, so without babel-standalone nothing is
+   transpiled, nothing renders, and you get a black screen with no error on
+   it. Chris hit exactly that offline.
+
+   It was survivable-looking because isImmutableAsset() below caches these on
+   first use, so any online load fills the gaps. But ASSET_CACHE is keyed to
+   VERSION and `activate` deletes the old one, so every single deploy reopens
+   the window: new worker installs with two of the four files, and until the
+   next full online load the app cannot start without a network. Priming all
+   four closes it.
+
+   The hashes must match index.html exactly. A stale hash here is silent -
+   allSettled swallows the failure and the file just never caches. */
 const CRITICAL_ASSETS = [
   new Request("https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js", {
     integrity: "sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8",
@@ -36,6 +52,17 @@ const CRITICAL_ASSETS = [
   }),
   new Request("https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js", {
     integrity: "sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh",
+    mode: "cors",
+  }),
+  // The one whose absence is fatal: it compiles the app.
+  new Request("https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js", {
+    integrity: "sha384-1qlE7MZPM2pHD/pBZCU/yB8UCP52RYL8bge/qNdfNBCWToySp8/M+JL2waXU4hjJ",
+    mode: "cors",
+  }),
+  // Sign-in needs the network anyway, but the script has to PARSE offline or
+  // the boot sequence throws before any of the local data is read.
+  new Request("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.js", {
+    integrity: "sha384-faMlYZUtkJj+Sh6Bmu/L0GzPcraRWN6CW+9RH3GUrK/Z0WS9tgaNNt0tHiLxsbdb",
     mode: "cors",
   }),
 ];

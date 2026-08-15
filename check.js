@@ -65,6 +65,40 @@ const offset = html.slice(0, contentStart).split("\n").length;
   }
 })();
 
+/* OFFLINE-BOOT TRIPWIRE. Every <script src> in index.html has to be primed
+   into the service worker's CRITICAL_ASSETS, or the app cannot start without a
+   network. babel-standalone was missing for months: the entire app is one
+   inline text/babel block, so with no Babel nothing is transpiled, nothing
+   renders, and the result is a black screen carrying no error at all.
+
+   It hid because the runtime cache fills these on first use, so any online
+   load papers over it - but ASSET_CACHE is keyed to VERSION and activate
+   deletes the old one, so EVERY deploy reopened the gap until the next online
+   load. The integrity strings are compared too: a stale hash in sw.js fails
+   silently, because install uses allSettled and a hash mismatch just means the
+   file quietly never caches. */
+(function offlineBootTripwire(){
+  const fs2 = require("fs"), p2 = require("path");
+  let sw;
+  try { sw = fs2.readFileSync(p2.join(p2.dirname(file), "sw.js"), "utf8"); }
+  catch (e) { return; }                     // no sw.js is not this script's problem
+
+  const tagRe = /<script\s+src="([^"]+)"[\s\S]{0,240}?integrity="([^"]+)"/g;
+  const missing = [];
+  let t;
+  while ((t = tagRe.exec(html)) !== null) {
+    const [, src, hash] = t;
+    if (sw.indexOf(src) === -1)       missing.push(src + "  (not primed at all)");
+    else if (sw.indexOf(hash) === -1) missing.push(src + "  (integrity differs from index.html)");
+  }
+  if (missing.length) {
+    console.error("[CHECK] FAIL: sw.js CRITICAL_ASSETS does not cover every boot script.");
+    console.error("  The app would black-screen offline. Add these to sw.js:");
+    missing.forEach(x => console.error("   - " + x));
+    process.exit(1);
+  }
+})();
+
 try {
   Babel.transform(code, { presets: ["react"], filename: file });
   const lines = code.split("\n").length;
