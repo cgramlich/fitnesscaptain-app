@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.114.0";
+const APP_VERSION = "0.115.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-15.2";
+const BUILD = "2026-08-15.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2108,7 +2108,34 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
   const workouts = (store.data.workouts||[]).slice()
     .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
   const activeW = workouts.find(w=>!w.endedAt);
-  const done = workouts.filter(w=>w.endedAt);
+  const allDone = workouts.filter(w=>w.endedAt);
+
+  /* WHERE, as a filter on the history. Chris: "a small chip for all gyms and
+     then my most frequent gyms, not all gyms - maybe it gives you the two or
+     three."
+
+     Ranked by how often he has actually trained there, not by the gyms list,
+     which is the difference that matters: the gyms list grows every time a
+     hotel gets scanned, and a chip row that grew with it would be unusable
+     inside a month. Three because the row has to stay on one line beside
+     "All gyms" on a phone; anything below the top three is reachable by
+     scrolling the list, which is what you were doing anyway.
+
+     Hidden entirely below two gyms - a filter offering one option is just a
+     label taking up space. */
+  const GYM_CHIPS = 3;
+  const [gymFilter, setGymFilter] = useState(null);   // null = all gyms
+  const gymCounts = {};
+  allDone.forEach(w => { if(w.gymId && w.gymName)
+    gymCounts[w.gymId] = { name: w.gymName, n: ((gymCounts[w.gymId]||{}).n || 0) + 1 }; });
+  const topGyms = Object.keys(gymCounts)
+    .map(id => ({ id, ...gymCounts[id] }))
+    .sort((a,b) => b.n - a.n || a.name.localeCompare(b.name))
+    .slice(0, GYM_CHIPS);
+  // A filter naming a gym that has scrolled out of the top three would show
+  // an empty list with no lit chip to explain it, so it clears itself.
+  const activeFilter = topGyms.some(g => g.id === gymFilter) ? gymFilter : null;
+  const done = activeFilter ? allDone.filter(w => w.gymId === activeFilter) : allDone;
 
   if(!workouts.length){
     return (
@@ -2184,7 +2211,18 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
         Import past workouts
       </button>
 
-      {!done.length
+      {topGyms.length > 1 &&
+        <div className="pills-row" style={{marginTop:14}}>
+          <button className={"pill "+(!activeFilter?"on":"")}
+            onClick={()=>setGymFilter(null)}>All gyms</button>
+          {topGyms.map(g =>
+            <button key={g.id} className={"pill "+(activeFilter===g.id?"on":"")}
+              onClick={()=>setGymFilter(g.id)}>{g.name}</button>)}
+        </div>}
+
+      {/* No empty state for the FILTERED list: every chip is built from
+          workouts that exist, so picking one can never return nothing. */}
+      {!allDone.length
         ? <div className="empty" style={{padding:"40px 20px"}}>
             <p>Finished workouts show up here as your history.</p>
           </div>
