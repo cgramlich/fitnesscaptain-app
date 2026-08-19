@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.116.0";
+const APP_VERSION = "0.117.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-15.4";
+const BUILD = "2026-08-19.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -793,6 +793,32 @@ function entryDone(e){
   if(e.cardio) return true;
   const target = (Array.isArray(e.plan) && e.plan.length) ? e.plan.length : (Number(e.targetSets)||0);
   return target > 0 && (e.sets||[]).length >= target;
+}
+
+/* ONE ENTRY, COPIED FORWARD - the shape both Do this workout again and Add
+   to today's workout produce. Two copies of this drifting apart is exactly
+   the sort of thing that ends with one route carrying the weights and the
+   other quietly dropping them.
+
+   Nothing arrives done: sets are cleared and cardio is nulled, because
+   entryDone() counts any entry carrying cardio as finished. */
+function copyEntryForToday(e){
+  const done = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0);
+  const item = { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
+                 cardio: null, sets: [],
+                 targetSets: Number(e.targetSets)||0,
+                 targetReps: Number(e.targetReps)||0 };
+  if(e.restSecs) item.restSecs = e.restSecs;
+  if(done.length){
+    item.plan = done.slice(0, MAX_PLAN_SETS)
+      .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+    item.targetSets = item.plan.length;
+    item.targetReps = Number(item.plan[0].reps)||0;
+  } else if(planOf(e)){
+    // Never started last time: carry its prescription rather than nothing.
+    item.plan = planOf(e).map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+  }
+  return item;
 }
 
 function planOf(x){
@@ -5478,7 +5504,7 @@ function MachinePhoto({ store, exercise, gymId, label, wide }){
   );
 }
 
-function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto }){
+function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -5787,6 +5813,15 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
         <InfoBtn name={entry.name} hasVideo={hasDemo}
           style={{alignSelf:"flex-start"}}
           onClick={()=>onHelp && onHelp(entry)} />
+        {/* Only while REVIEWING - a past workout, not a live one. On the
+            workout you are in, this exercise is already here; the useful
+            action there is the Last time line, which repeats it in place. */}
+        {!live && onAddToToday &&
+          <button className="entry-x" onClick={()=>onAddToToday(entry)}
+            aria-label={"Add "+entry.name+" to today's workout"}
+            title="Add to today's workout">
+            <Icon d={ICONS.plus} size={16}/>
+          </button>}
         {active && onMoveUp &&
           <button className="entry-x" onClick={onMoveUp} aria-label={"Move "+entry.name+" earlier"}
             title="Move earlier">
@@ -6363,7 +6398,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
 
 /* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
    Finish. Finished: view/edit history + delete. */
-function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, onRepeat, undoable }){
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, onRepeat, onAddToToday, undoable }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
@@ -6589,6 +6624,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
             onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable}
             onSwap={()=>{ setSwapId(e.id); setPicker(true); }}
+            onAddToToday={onAddToToday}
             machineLabel={machineAt((store.data.exercises||[]).find(x=>x.id===e.exerciseId),
                                     workout.gymId)}
             onMachineLabel={(() => {
@@ -9892,25 +9928,46 @@ function App(){
      entry with cardio on it counts as finished, so carrying it over would
      hand you a workout that was complete before you had left the house), and
      the plan is what you have to go and earn. */
+  /* ONE EXERCISE, FORWARD INTO TODAY. Chris: "I need to be able to copy a
+     set from my history and add it to an existing workout I'm doing now, or
+     start a workout with it."
+
+     The two existing routes each missed half of it. Do this workout again
+     takes the whole session and refuses while one is running; repeat it on
+     the Last time line only works once the exercise is ALREADY on today's
+     card, which is no help when the thing you remember is in Tuesday's
+     workout and you are looking at it.
+
+     So this goes the other direction, and covers both of his cases: append
+     to the live workout if there is one, otherwise start one holding just
+     this. Either way it opens the workout, because the point is to go and
+     do it. */
+  const addExerciseToToday = (entry) => {
+    const item = copyEntryForToday(entry);
+    const existing = (store.data.workouts||[]).find(x => !x.endedAt);
+    if(existing){
+      store.saveCollection("workouts", (store.data.workouts||[]).map(w =>
+        w.id === existing.id
+          ? { ...w, entries: [...(w.entries||[]), item], updatedAt: nowISO() }
+          : w));
+      setTab("workouts"); setWorkoutId(existing.id);
+      showToast(item.name + " added to your workout");
+      log("ADD-TODAY", item.name + " -> running workout");
+      return;
+    }
+    // No workout running: start one where you already are.
+    const gym = (store.gyms||[]).find(g => g.id === store.cfg.lastGymId) || null;
+    const nw = { id: uid(), name: dayPartName(), date: todayStr(),
+                 startedAt: nowISO(), endedAt: null, durationMin: 0, notes: "",
+                 entries: [item], gymId: gym ? gym.id : null,
+                 gymName: gym ? gym.name : null };
+    store.saveCollection("workouts", [nw, ...(store.data.workouts||[])]);
+    setTab("workouts"); setWorkoutId(nw.id);
+    showToast("Started a workout with " + item.name);
+    log("ADD-TODAY", item.name + " -> new workout");
+  };
   const repeatWorkout = (w) => {
-    const entries = (w.entries||[]).map(e => {
-      const done = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0);
-      const item = { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
-                     cardio: null, sets: [],
-                     targetSets: Number(e.targetSets)||0,
-                     targetReps: Number(e.targetReps)||0 };
-      if(e.restSecs) item.restSecs = e.restSecs;
-      if(done.length){
-        item.plan = done.slice(0, MAX_PLAN_SETS)
-          .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
-        item.targetSets = item.plan.length;
-        item.targetReps = Number(item.plan[0].reps)||0;
-      } else if(planOf(e)){
-        // Never started last time: carry its prescription rather than nothing.
-        item.plan = planOf(e).map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
-      }
-      return item;
-    });
+    const entries = (w.entries||[]).map(copyEntryForToday);
     if(!entries.length){ showToast("There is nothing in this workout to copy"); return; }
     const existing = (store.data.workouts||[]).find(x => !x.endedAt);
     if(existing){
@@ -10191,7 +10248,8 @@ function App(){
       {workoutId &&
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId} undoable={showUndo}
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
-          onSaveAsRoutine={saveAsRoutine} onRepeat={repeatWorkout} />}
+          onSaveAsRoutine={saveAsRoutine} onRepeat={repeatWorkout}
+          onAddToToday={addExerciseToToday} />}
 
       {routineId &&
         <RoutineEditor key={routineId} store={store} routineId={routineId}
