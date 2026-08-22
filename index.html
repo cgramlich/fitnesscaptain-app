@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.117.0";
+const APP_VERSION = "0.118.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-19.1";
+const BUILD = "2026-08-22.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1019,8 +1019,17 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   if(!r.ok){
     if(r.status===401) throw new Error("Session expired - sign in again.");
     if(r.status===402 || r.status===429) throw new Error("AI is at its limit for now. Try again later.");
-    if(r.status===503) throw new Error("AI is temporarily unavailable.");
-    throw new Error("AI error "+r.status+".");
+    /* The relay sends a plain-English reason for the failures a user can DO
+       something about - too much pasted at once, provider busy - and it is
+       written by us, never the upstream body, which can carry the API key.
+       Chris got a bare "AI error 502" importing history: a number that says
+       nothing and no hint that the fix was to paste less. */
+    let why = "";
+    try{ const j = await r.json(); if(j && typeof j.detail === "string") why = j.detail; }
+    catch(e){ /* no body, fall through to the status */ }
+    if(r.status===413) throw new Error(why || "That is too much to read at once - paste a few weeks at a time.");
+    if(r.status===503) throw new Error(why || "AI is temporarily unavailable.");
+    throw new Error(why || ("AI error "+r.status+"."));
   }
   let j;
   try{ j = await r.json(); }
