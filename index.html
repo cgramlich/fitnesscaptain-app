@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.118.0";
+const APP_VERSION = "0.119.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-22.1";
+const BUILD = "2026-08-22.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -802,6 +802,23 @@ function entryDone(e){
 
    Nothing arrives done: sets are cleared and cardio is nulled, because
    entryDone() counts any entry carrying cardio as finished. */
+/* SETS -> A PLAN, carrying the note each set was logged with.
+
+   Chris: "if we repeat an exercise I want the note for this set, like
+   machine setup, to carry over - that can be edited." The reps and the
+   weight already travelled; the note did not, so the one thing you wrote
+   down BECAUSE you would not remember it was the thing that got dropped.
+
+   It is a prescription, not a record: it pre-fills the note box when you
+   reach that set and you type over it, exactly like the numbers. */
+function planFromSets(sets){
+  return (sets||[]).slice(0, MAX_PLAN_SETS).map(x => {
+    const p = { reps: Number(x.reps)||0, weight: Number(x.weight)||0 };
+    if(x.note) p.note = String(x.note).slice(0,80);
+    return p;
+  });
+}
+
 function copyEntryForToday(e){
   const done = (e.sets||[]).filter(s => (Number(s.reps)||0) > 0);
   const item = { id: uid(), exerciseId: e.exerciseId, name: e.name, type: e.type,
@@ -809,14 +826,19 @@ function copyEntryForToday(e){
                  targetSets: Number(e.targetSets)||0,
                  targetReps: Number(e.targetReps)||0 };
   if(e.restSecs) item.restSecs = e.restSecs;
+  /* The machine setup is a fact about the MACHINE, not about how the session
+     went, so it is the most worth carrying and the least worth re-deriving -
+     seat 3, arm 2, the pin hole you found by trial and error last time. The
+     card showed last time's as grey text while leaving the editable box
+     empty, so it read as gone. */
+  if(e.settings) item.settings = e.settings;
   if(done.length){
-    item.plan = done.slice(0, MAX_PLAN_SETS)
-      .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+    item.plan = planFromSets(done);
     item.targetSets = item.plan.length;
     item.targetReps = Number(item.plan[0].reps)||0;
   } else if(planOf(e)){
     // Never started last time: carry its prescription rather than nothing.
-    item.plan = planOf(e).map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 }));
+    item.plan = planFromSets(planOf(e));
   }
   return item;
 }
@@ -5597,7 +5619,18 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
     if(!planned || selIdx >= 0) return;
     setReps(Number(planned.reps)||0);
     setWeight(Number(planned.weight)||0);
-  }, [sets.length]);
+    /* The note the plan carries, shown OPEN so it is obviously there and
+       obviously editable - a prescription you cannot see is not one. Only
+       written when the plan has one: it must never wipe a note being typed
+       for the set in hand. */
+    if(planned.note){ setNote(planned.note); setNoteOpen(true); }
+    /* `planned` is in the deps, not just the set count: tapping "repeat it"
+       gives this card a plan without logging anything, so sets.length never
+       moves and the effect would not run - the numbers and the note would sit
+       there unfilled until the first set was logged. Its identity is stable
+       across renders (planOf copies the array, not the entries), so this does
+       not re-fire on every paint. */
+  }, [sets.length, planned]);
 
   const logSet = () => {
     const next = sets.slice();
@@ -5791,8 +5824,10 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                 textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
                 textUnderlineOffset:3}}
               onClick={()=>onUpdate(e => ({ ...e,
-                plan: prev.sets.slice(0, MAX_PLAN_SETS)
-                  .map(s => ({ reps: Number(s.reps)||0, weight: Number(s.weight)||0 })) }))}>
+                plan: planFromSets(prev.sets),
+                // Same reasoning as a copied entry: only fill it if this
+                // card has none, so a setup you already typed is not lost.
+                settings: e.settings || (prev.settings || undefined) }))}>
               Last time: {setsLine(prev.sets, units)} - repeat it
             </button>}
           {prev && !isCardio && (plan || !active) &&
@@ -5945,7 +5980,14 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                 + Note for this set
               </button>}
           {!isMobility &&
-          <input className="input" style={{marginTop:10}} defaultValue={entry.settings||""}
+          /* KEYED on the value: this is an UNCONTROLLED input, so React will
+             not refresh it when entry.settings changes underneath - and it now
+             does change, when a repeat fills the setup in. Without the key the
+             box stays stubbornly empty while the line above shows the setup,
+             which is the worst of both. The key remounts it. */
+          <input className="input" style={{marginTop:10}}
+            key={"setup:" + entry.id + ":" + (entry.settings||"")}
+            defaultValue={entry.settings||""}
             placeholder="Machine setup - optional"
             onBlur={ev=>{ const v = ev.target.value.slice(0,80);
               if(v !== (entry.settings||"")) onUpdate(e => ({ ...e, settings: v || undefined })); }} />}
