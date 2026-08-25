@@ -379,10 +379,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.119.0";
+const APP_VERSION = "0.120.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-22.2";
+const BUILD = "2026-08-25.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6358,10 +6358,56 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
     return () => { alive = false; }; }, []);
   // Location-aware: flag exercises whose equipment this gym lacks.
   const notHere = (x) => !availableAt(x, gym);
+
+  /* WHAT YOU ACTUALLY TRAIN, at the top. Chris: "when I add an exercise it
+     should know my most popular or recent." The list was the whole library
+     in alphabetical order, which is the one ordering that ignores everything
+     the app knows about him - by the time you own 60 exercises, the five you
+     do every week are scattered through it.
+
+     Ranked by SESSIONS, not by recency alone: last-used-first would put a
+     thing you tried once on Tuesday above the press you have done forty
+     times. Count answers "popular", the recency tie-break answers "recent",
+     and the 90-day window is what stops a lift you abandoned in spring from
+     sitting at the top forever. */
+  const USUAL_WINDOW_DAYS = 90;
+  const USUAL_MAX = 8;
+  const usage = {};
+  (() => {
+    const cut = shiftDay(todayStr(), -(USUAL_WINDOW_DAYS - 1));
+    (store.data.workouts||[]).forEach(w => {
+      if(!w.endedAt || !w.date || w.date < cut) return;
+      const seen = {};
+      (w.entries||[]).forEach(e => {
+        // Once per WORKOUT: three sets of the same lift is one session of it,
+        // and counting entries would let one heavy day outrank a habit.
+        if(!e.exerciseId || seen[e.exerciseId]) return;
+        seen[e.exerciseId] = 1;
+        const u = usage[e.exerciseId] || (usage[e.exerciseId] = { n:0, last:"" });
+        u.n += 1;
+        if(w.date > u.last) u.last = w.date;
+      });
+    });
+  })();
+  const usualRank = (a,b) =>
+    (notHere(a)?1:0) - (notHere(b)?1:0) ||
+    (usage[b.id].n - usage[a.id].n) ||
+    String(usage[b.id].last).localeCompare(String(usage[a.id].last)) ||
+    (a.name||"").localeCompare(b.name||"");
   const list = (store.data.exercises||[])
     .filter(x => groupF==="all" || x.muscleGroup===groupF)
     .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
     .slice().sort((a,b)=> (notHere(a)?1:0)-(notHere(b)?1:0) || (a.name||"").localeCompare(b.name||""));
+
+  /* Only while BROWSING. Once you have typed a name you have said what you
+     want, and re-ranking the matches by how often you train them would just
+     move the thing you searched for. */
+  const browsing = !needle;
+  const usual = browsing
+    ? list.filter(x => usage[x.id]).sort(usualRank).slice(0, USUAL_MAX)
+    : [];
+  const usualIds = {}; usual.forEach(x => { usualIds[x.id] = 1; });
+  const rest = usual.length ? list.filter(x => !usualIds[x.id]) : list;
 
   /* 873 movements ship with the app already (the illustration index). Searching
      them is free and offline; only ADDING one fetches its record. Anything
@@ -6377,6 +6423,32 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
     finally{ setAdding(null); }
   };
 
+  /* Written once. Two sections rendering the same row from two copies is how
+     one of them quietly loses the availability chip. */
+  const Row = (x) => (
+    <div key={x.id} className="item" style={{alignItems:"center"}}>
+      <button style={{flex:1,minWidth:0,textAlign:"left",display:"block"}} onClick={()=>onPick(x)}>
+        <div className="item-title">{x.name}</div>
+        <div className="item-meta">
+          <span className={"chip "+typeClass(x.type)}>{x.type}</span>
+          {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
+          {notHere(x) && <span className="chip red">not at this gym</span>}
+          {/* How often, stated plainly - it is the reason this row is up
+              here, and a ranking you cannot see is just a mysterious order. */}
+          {usage[x.id] && usage[x.id].n > 1 &&
+            <span className="chip">{usage[x.id].n}x</span>}
+        </div>
+      </button>
+      {/* The moment you meet a name you don't know is the moment you
+          need the picture - so the way in lives right here. */}
+      {onHelp &&
+        <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}}
+          onClick={(e)=>{ e.stopPropagation(); onHelp(x); }}>
+          Show me
+        </button>}
+    </div>
+  );
+
   return (
     <div className="layer">
       <div className="layer-inner">
@@ -6387,8 +6459,13 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
         {gym && Array.isArray(gym.equipment) && gym.equipment.length>0 &&
           <div className="hint" style={{marginTop:2}}>Showing availability at {gym.name}.</div>}
         <div className="search-wrap" style={{marginTop:4}}>
+          {/* NO autoFocus. It opened the keyboard on arrival, which covered
+              the two-thirds of the screen holding the exercises you were most
+              likely to want - fine when the only way through was searching,
+              wrong now that the list leads with what you train. Tap the box
+              and the keyboard is still one tap away. */}
           <input className="input" value={q} onChange={e=>setQ(e.target.value)}
-            placeholder="Search the library" autoCapitalize="off" autoCorrect="off" autoFocus />
+            placeholder="Search the library" autoCapitalize="off" autoCorrect="off" />
           {q &&
             <button className="search-x" onClick={()=>setQ("")} aria-label="Clear search">
               <Icon d={ICONS.x} size={16}/>
@@ -6421,27 +6498,21 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
           <button className="btn btn-ghost btn-block" style={{marginTop:12}} onClick={()=>onCreate(q.trim())}>
             <Icon d={ICONS.plus} size={15}/> Create "{q.trim()}" myself
           </button>}
-        <div className="list">
-          {list.map(x => (
-            <div key={x.id} className="item" style={{alignItems:"center"}}>
-              <button style={{flex:1,minWidth:0,textAlign:"left",display:"block"}} onClick={()=>onPick(x)}>
-                <div className="item-title">{x.name}</div>
-                <div className="item-meta">
-                  <span className={"chip "+typeClass(x.type)}>{x.type}</span>
-                  {x.muscleGroup && <span className="chip">{x.muscleGroup}</span>}
-                  {notHere(x) && <span className="chip red">not at this gym</span>}
-                </div>
-              </button>
-              {/* The moment you meet a name you don't know is the moment you
-                  need the picture - so the way in lives right here. */}
-              {onHelp &&
-                <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}}
-                  onClick={(e)=>{ e.stopPropagation(); onHelp(x); }}>
-                  Show me
-                </button>}
-            </div>
-          ))}
-        </div>
+        {usual.length > 0 && <>
+          <div className="set-group">Your usual</div>
+          <div className="list">{usual.map(Row)}</div>
+        </>}
+        {rest.length > 0 && <>
+          {usual.length > 0 &&
+            <div className="set-group">Everything else</div>}
+          <div className="list">{rest.map(Row)}</div>
+        </>}
+        {!list.length &&
+          <div className="empty" style={{padding:"32px 20px"}}>
+            <p>{needle
+              ? "Nothing in your library matches that."
+              : "No exercises here yet."}</p>
+          </div>}
       </div>
     </div>
   );
