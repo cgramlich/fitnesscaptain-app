@@ -223,6 +223,18 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .set-num{width:46px;flex:0 0 auto;color:var(--ink-3);font-size:11px;font-weight:700;letter-spacing:.07em;}
 .set-main{flex:1;min-width:0;font-weight:600;}
 .set-row.sel .set-main{color:var(--amber-2);}
+/* A LOGGED set is numbers first, and they must never wrap. The effort chip
+   and the note were both flex:0 0 auto beside a flexible .set-main, so they
+   took their full width and left the numbers whatever remained - which on a
+   long note was almost nothing, and "16 x 55 lb" broke onto FOUR lines.
+   Now the numbers take exactly what they need and the note wraps onto its
+   own line, indented past the SET label so it still reads as that set's.
+   Scoped to .logged: plain .set-row is also used for prose rows like "This
+   week vs last", which must keep wrapping. */
+.set-row.logged{flex-wrap:wrap;}
+.set-row.logged .set-main{flex:0 0 auto;white-space:nowrap;}
+.set-note{flex:1 1 100%;margin-left:56px;font-size:12.5px;font-style:italic;
+  color:var(--ink-3);white-space:normal;line-height:1.4;}
 .logger{margin-top:10px;background:var(--bg-3);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px;}
 .stepper{display:flex;align-items:center;gap:8px;margin-top:8px;}
 .stepper .lbl{width:56px;flex:0 0 auto;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:700;}
@@ -379,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.120.0";
+const APP_VERSION = "0.121.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-25.1";
+const BUILD = "2026-08-25.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5885,7 +5897,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
 
       {!isCardio && sets.map((s,i)=>{
         const row =
-          <button className={"set-row "+(selIdx===i?"sel":"")} onClick={()=>pickSet(i)}>
+          <button className={"set-row logged "+(selIdx===i?"sel":"")} onClick={()=>pickSet(i)}>
             <span className="set-num">SET {i+1}</span>
             {/* "11 x 0 lb" for a hip switch reads like a broken record. No
                 load, no load column. */}
@@ -5911,9 +5923,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                   </span>;
             })()}
             {s.note &&
-              <span className="subtle" style={{flex:"0 0 auto",fontSize:12.5,fontStyle:"italic"}}>
-                {s.note}
-              </span>}
+              <span className="set-note">{s.note}</span>}
           </button>;
         // Swipe left to delete a set (portfolio standard); finished workouts stay read-only.
         return active
