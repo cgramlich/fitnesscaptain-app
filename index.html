@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.122.0";
+const APP_VERSION = "0.123.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-25.3";
+const BUILD = "2026-08-28.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4611,7 +4611,7 @@ function parsePlan(text){
   return { body: String(text||"").replace(m[0], "").trim(), plan };
 }
 
-function SessionBuilderLayer({ store, onClose, onStart }){
+function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
   const gyms = store.gyms || [];
   const [gymId, setGymId] = useState(
     (gyms.find(g => g.id === store.cfg.lastGymId) || gyms[0] || {}).id || null);
@@ -4851,7 +4851,11 @@ function SessionBuilderLayer({ store, onClose, onStart }){
                 {i === lastPlanIdx
                   ? <button className="btn btn-primary btn-block" style={{marginTop:12}}
                             onClick={()=>startPlan(m.plan)} disabled={busy}>
-                      <Icon d={ICONS.plus} size={16}/> Start this workout
+                      {/* The label has to match what the button DOES. Mid-workout
+                          it appends rather than starting, and saying "Start"
+                          there was a straight lie. */}
+                      <Icon d={ICONS.plus} size={16}/>
+                      {liveWorkout ? " Add these to your workout" : " Start this workout"}
                     </button>
                   : <p className="hint center" style={{marginTop:10,marginBottom:0}}>Replaced by the version below</p>}
               </div>}
@@ -6391,7 +6395,7 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
 /* Nested full-screen layer: pick an exercise from the library (or create one
    on the spot). Rendered INSIDE the editor at a higher z-index so the editor
    keeps its state (playbook rule: no two screens on one overlay variable). */
-function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
+function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose }){
   const [q, setQ] = useState("");
   const [groupF, setGroupF] = useState("all");
   const [refIdx, setRefIdx] = useState(null);
@@ -6521,6 +6525,18 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
               {g==="all" ? "All muscles" : g}
             </button>)}
         </div>
+        {/* THE DOOR, where the question actually gets asked. The coach could
+            always answer "I'm at River Crossing, give me ideas for biceps" -
+            it reads the gym's kit and what you have trained this week - but it
+            lived behind the centre + as one of eight items, labelled "Plan
+            today's workout", which reads as designing a whole session. Chris
+            had it for weeks without finding it. Not knowing what to add IS the
+            moment you are in when you open this screen. */}
+        {onIdeas &&
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
+            onClick={onIdeas}>
+            <Icon d={ICONS.sparkle} size={15}/> Not sure? Ask for ideas
+          </button>}
         {/* The reference database, offered only when your own library does not
             already answer. Adding one brings its equipment, muscle group and
             written how-to with it, so the (i) works immediately. */}
@@ -6564,7 +6580,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onClose }){
 
 /* Full-screen workout editor. active (no endedAt): elapsed clock, rest timer,
    Finish. Finished: view/edit history + delete. */
-function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, onRepeat, onAddToToday, undoable }){
+function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAsRoutine, onRepeat, onAddToToday, onIdeas, undoable }){
   const workout = (store.data.workouts||[]).find(w=>w.id===workoutId);
   const [picker, setPicker] = useState(false);
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the Show me panel
@@ -6864,8 +6880,11 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         </div>}
 
       {picker &&
+        /* onIdeas closes the picker on the way out, or it sits behind the
+           coach and is still open when you come back with your answer. */
         <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
           onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })}
+          onIdeas={onIdeas ? ()=>{ setPicker(false); setSwapId(null); onIdeas(); } : null}
           onClose={()=>{ setPicker(false); setSwapId(null); }} />}
 
       {help &&
@@ -9974,7 +9993,21 @@ function App(){
   const [sessionBuilder, setSessionBuilder] = useState(false);
   const startPlanned = ({ name, gym, entries }) => {
     const existing = (store.data.workouts||[]).find(w=>!w.endedAt);
-    if(existing){ setSessionBuilder(false); setTab("workouts"); setWorkoutId(existing.id); return; }
+    /* A plan made DURING a workout gets added to it. This used to bounce you
+       to the running workout and drop the plan on the floor, while the button
+       that sent you there said "Start this workout" - so asking for ideas
+       mid-session silently threw the answer away. One workout at a time still
+       holds; the plan just joins the one you are in. */
+    if(existing){
+      store.saveCollection("workouts", (store.data.workouts||[]).map(w =>
+        w.id === existing.id
+          ? { ...w, entries: [...(w.entries||[]), ...entries], updatedAt: nowISO() }
+          : w));
+      setSessionBuilder(false); setTab("workouts"); setWorkoutId(existing.id);
+      showToast(entries.length + " exercise" + (entries.length===1?"":"s") + " added");
+      log("PLAN", "added " + entries.length + " to the running workout");
+      return;
+    }
     const w = { id: uid(), name: name || dayPartName(), date: todayStr(), startedAt: nowISO(),
                 endedAt: null, durationMin: 0, notes: "", entries,
                 gymId: gym ? gym.id : null, gymName: gym ? gym.name : null };
@@ -10415,7 +10448,8 @@ function App(){
         <WorkoutEditor key={workoutId} store={store} workoutId={workoutId} undoable={showUndo}
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
           onSaveAsRoutine={saveAsRoutine} onRepeat={repeatWorkout}
-          onAddToToday={addExerciseToToday} />}
+          onAddToToday={addExerciseToToday}
+          onIdeas={()=>setSessionBuilder(true)} />}
 
       {routineId &&
         <RoutineEditor key={routineId} store={store} routineId={routineId}
@@ -10434,7 +10468,8 @@ function App(){
               : "Added "+nr+" routine"+(nr===1?"":"s")+(nx>0 ? " + "+nx+" new exercise"+(nx===1?"":"s") : "")); }} />}
 
       {sessionBuilder &&
-        <SessionBuilderLayer store={store} onClose={()=>setSessionBuilder(false)} onStart={startPlanned} />}
+        <SessionBuilderLayer store={store}
+          liveWorkout={!!(store.data.workouts||[]).find(w=>!w.endedAt)} onClose={()=>setSessionBuilder(false)} onStart={startPlanned} />}
 
       {!inSettings &&
         <nav className="nav">
