@@ -152,6 +152,15 @@ select; traded knowingly — the flip is one tap, against gaining the library in
 **The walkthrough recorder keeps its `capture` and is not a candidate**: it is one tap straight
 to filming, not a subset of anything.
 
+**The coach lives where the question is asked (2026-08-28).** `session_design` could always
+answer "I'm at River Crossing, ideas for biceps" — it reads the gym's kit, the week's training and
+the time available. It went unused for weeks because it sat behind the centre + labelled "Plan
+today's workout", which reads as designing a whole session. Rejected: a second, lighter "ideas"
+feature, which would have duplicated a working one. Chosen: a door from the exercise picker, the
+screen you are on when you do not know what to add. **A plan made during a workout APPENDS to it**
+— it used to offer "Start this workout", which was refused because one workout runs at a time, so
+the plan was silently discarded.
+
 **Sonnet is the floor (portfolio rule).** No task routes to Haiku. Models change from Railway
 variables alone — `AI_MODEL_DEFAULT` or `AI_MODEL_<TASK>` — and an unknown value falls back to
 the built-in choice and says so in the logs, so a typo never takes the app down.
