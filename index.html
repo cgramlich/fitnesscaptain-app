@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.123.0";
+const APP_VERSION = "0.124.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-08-28.1";
+const BUILD = "2026-09-04.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5842,10 +5842,20 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               trap - the card would go on telling you five sets were owed. */}
           {plan
             ? (active && onUpdate
-                ? <button className="entry-last" style={{color:"var(--amber-2)",textAlign:"left"}}
+                /* SAYS it is a button. It was styled exactly like the two lines
+                   under it - "Up next" and "Last time" - one of which is inert
+                   and one of which announces itself with an underline and a
+                   "- repeat it". So this sat between them as an invisible
+                   control, and Chris found it by hitting the confirm dialog
+                   without meaning to and having to ask what it was. Same
+                   affordance as its neighbour now, and the label says what
+                   tapping does rather than leaving it to the dialog. */
+                ? <button className="entry-last" style={{color:"var(--amber-2)",textAlign:"left",
+                      textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
+                      textUnderlineOffset:3}}
                     onClick={()=>{ if(confirm("Drop the plan for "+entry.name+"? Logged sets stay."))
                       onUpdate(e => ({ ...e, plan: undefined })); }}>
-                    Plan: {planLine(plan, units)}
+                    Plan: {planLine(plan, units)} - drop it
                   </button>
                 : <div className="entry-last" style={{color:"var(--amber-2)"}}>
                     Plan: {planLine(plan, units)}
