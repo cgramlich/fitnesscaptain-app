@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-08-28.** App `v0.123.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-04.** App `v0.125.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.123.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.125.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -160,6 +160,17 @@ feature, which would have duplicated a working one. Chosen: a door from the exer
 screen you are on when you do not know what to add. **A plan made during a workout APPENDS to it**
 — it used to offer "Start this workout", which was refused because one workout runs at a time, so
 the plan was silently discarded.
+
+**The set buttons ACT, they do not tag (2026-09-04). Read this before changing them again.**
+This control has now had three designs, and the history is the point. v0.26.0: direction arrows
+that MARKED a set. Then Chris asked for feeling — Easy / Struggle faces — on the grounds that how
+a set felt is what you can answer honestly a minute later. Now: two buttons that move the weight
+by one step there and then, `+5 lb` / `-5 lb`, because he wanted the control to *do* the thing
+rather than record an intention. That is a third design, not a return to the first. **Not tapping
+means "same again"** — the steppers already carry forward — which is why there is no third button.
+The direction still writes to `effort` via the existing `up`/`fail` aliases, because the logged-row
+chips, the progression nudge and the 28-day Progress lens all read that field and the real history
+holds both spellings; a new field would orphan all of it.
 
 **Sonnet is the floor (portfolio rule).** No task routes to Haiku. Models change from Railway
 variables alone — `AI_MODEL_DEFAULT` or `AI_MODEL_<TASK>` — and an unknown value falls back to
