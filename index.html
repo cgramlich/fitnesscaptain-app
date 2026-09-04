@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.124.0";
+const APP_VERSION = "0.125.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-04.1";
+const BUILD = "2026-09-04.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -901,9 +901,15 @@ function setsLine(sets, units){
    Three states, and the default is no longer silence: a finished set shows a
    thumbs up. Silence read as "I forgot to tag it"; a thumb reads as "that was
    the job, done". */
+/* The labels follow the buttons. These read out on a LOGGED row, and a set
+   recorded by tapping "-5 lb" was still captioned "struggle" - the feeling
+   word, from the design this replaced. The mark means a direction now, so it
+   should say one. Keys are untouched: `easy`/`hard` are what every existing
+   record, alias and reader already uses, and renaming them would orphan the
+   lot for a caption. */
 const EFFORTS = [
-  { k:"easy", label:"Easy",     icon:"smile", cls:"green" },
-  { k:"hard", label:"Struggle", icon:"frown", cls:"red"   },
+  { k:"easy", label:"Went up",   icon:"up",   cls:"green" },
+  { k:"hard", label:"Went down", icon:"down", cls:"red"   },
 ];
 /* Records already logged used up/fail (and older ones easy/solid/hard). Map
    them all onto the two marks so nothing imported or logged loses meaning -
@@ -1655,6 +1661,10 @@ const ICONS = {
   play:    ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M10.2 8.4l5.4 3.6-5.4 3.6z"],
   image:   ["M3 5h18v14H3z","M3 16l5-5 4 4 3-3 6 6"],
   up:      ["M12 19V5","M5 12l7-7 7 7"],
+  // The mirror of up. Added when the effort pills became weight actions -
+  // ICONS.down did not exist, and an undefined path throws only at RUNTIME,
+  // so the compile gate was perfectly happy with it.
+  down:    ["M12 5v14","M19 12l-7 7-7-7"],
   check:   ["M20 6L9 17l-5-5"],
   smile:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 14a4.6 4.6 0 0 0 7.6 0","M9 9.5h.01","M15 9.5h.01"],
   frown:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 16a4.6 4.6 0 0 1 7.6 0","M9 9.5h.01","M15 9.5h.01"],
@@ -6017,15 +6027,45 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               cannot press, sitting among pills you can, is a label pretending
               to be a button. Leave both unpicked and the logged row shows the
               thumb on its own. */}
+          {/* TWO BUTTONS THAT ACT, not two that tag.
+
+              Chris: "I'd rather it be a green increase-weight arrow and then I
+              have the amount increased... repeat the same one thing next time,
+              but elegant, not cluttery."
+
+              Easy/Struggle recorded how a set FELT and left the app to infer
+              what to do about it. These move the weight there and then: tap up
+              and the next set is +5 lb, already in the stepper. Same two
+              controls, so nothing is added to the card - they just do the thing
+              instead of describing it.
+
+              NOT TAPPING IS "same again", which is why there is no third
+              button: the steppers already carry the last set forward, so the
+              common case costs nothing and the row stays at two.
+
+              The direction is still written to `effort`, through the existing
+              up/fail aliases. That is deliberate: the logged-row chips, the
+              progression nudge and the 28-day Progress lens all read that
+              field, and his logged history already holds both spellings. A new
+              field would have orphaned all of it. */}
           {!isMobility &&
           <div className="pills" style={{marginTop:10}}>
-            {EFFORTS.map(e => (
-              <button key={e.k} className={"pill "+(effort===e.k?"on":"")}
-                style={{display:"inline-flex",alignItems:"center",gap:6}}
-                aria-label={e.label} onClick={()=>setEffort(effort===e.k ? null : e.k)}>
-                <Icon d={ICONS[e.icon]} size={14}/> {e.label}
-              </button>
-            ))}
+            <button className={"pill "+(effort==="easy"?"on":"")}
+              style={{display:"inline-flex",alignItems:"center",gap:6}}
+              aria-label={"Go up " + wStep + " " + units + " for this set"}
+              onClick={()=>{ const on = effort==="easy";
+                setEffort(on ? null : "easy");
+                setWeight(w => Math.max(0, (Number(w)||0) + (on ? -wStep : wStep))); }}>
+              <Icon d={ICONS.up} size={14}/> +{fmtW(wStep)} {units}
+            </button>
+            <button className={"pill "+(effort==="hard"?"on":"")}
+              style={{display:"inline-flex",alignItems:"center",gap:6}}
+              aria-label={"Go down " + wStep + " " + units + " for this set"}
+              onClick={()=>{ const on = effort==="hard";
+                setEffort(on ? null : "hard");
+                setWeight(w => Math.max(0, (Number(w)||0) + (on ? wStep : -wStep))); }}>
+              <Icon d={ICONS.down} size={14}/> -{fmtW(wStep)} {units}
+            </button>
           </div>}
           {/* Seat heights and arm positions are the thing you rediscover by
               trial and error on every club-gym visit. Save on blur. */}
