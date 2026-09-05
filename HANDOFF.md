@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-04.** App `v0.125.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-05.** App `v0.126.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.125.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.126.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -161,7 +161,7 @@ screen you are on when you do not know what to add. **A plan made during a worko
 — it used to offer "Start this workout", which was refused because one workout runs at a time, so
 the plan was silently discarded.
 
-**The set buttons ACT, they do not tag (2026-09-04). Read this before changing them again.**
+**The set control targets NEXT WORKOUT (2026-09-05). Read this before changing it again.**
 This control has now had three designs, and the history is the point. v0.26.0: direction arrows
 that MARKED a set. Then Chris asked for feeling — Easy / Struggle faces — on the grounds that how
 a set felt is what you can answer honestly a minute later. Now: two buttons that move the weight
@@ -170,7 +170,19 @@ rather than record an intention. That is a third design, not a return to the fir
 means "same again"** — the steppers already carry forward — which is why there is no third button.
 The direction still writes to `effort` via the existing `up`/`fail` aliases, because the logged-row
 chips, the progression nudge and the 28-day Progress lens all read that field and the real history
-holds both spellings; a new field would orphan all of it.
+holds both spellings; a new field would orphan all of it. Then a fourth: those buttons moved
+TODAY'S weight, and Chris wanted next workout's. They also had a real defect that shows why the
+current design stores numbers rather than a direction — toggling up then down returned the weight
+to its start but left the mark from whichever button was pressed last, so a set logged "went down"
+having changed nothing. **What is stored now is `set.next = {reps, weight}`**, absolute, per set,
+and only when it differs from what was logged — an untouched set keeps following what you lift
+rather than being frozen. `planFromSets` reads it, which is why all three repeat routes pick it up
+without knowing it exists. **`effort` is now read-only**: history renders it, imports write it, the
+Progress lens counts it, but nothing new sets it.
+
+**Weight step is per exercise (2026-09-05).** Same shape as rest — a global default with a
+per-movement override — because dumbbells move in 5s, a barbell with micro-plates in 2.5, and a
+stack can jump 10. It drives the weight stepper, the next-time targets and the progression nudge.
 
 **Sonnet is the floor (portfolio rule).** No task routes to Haiku. Models change from Railway
 variables alone — `AI_MODEL_DEFAULT` or `AI_MODEL_<TASK>` — and an unknown value falls back to
