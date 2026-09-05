@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.125.0";
+const APP_VERSION = "0.126.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-04.2";
+const BUILD = "2026-09-05.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -825,7 +825,12 @@ function entryDone(e){
    reach that set and you type over it, exactly like the numbers. */
 function planFromSets(sets){
   return (sets||[]).slice(0, MAX_PLAN_SETS).map(x => {
-    const p = { reps: Number(x.reps)||0, weight: Number(x.weight)||0 };
+    /* `next` is what you SAID this set should be next workout, so it beats
+       what you actually lifted. Set per set, which is the point: a pyramid can
+       progress unevenly - top set up 5, the back-offs left alone. Absent, the
+       set simply repeats, which is what most sets do. */
+    const t = x.next || x;
+    const p = { reps: Number(t.reps)||0, weight: Number(t.weight)||0 };
     if(x.note) p.note = String(x.note).slice(0,80);
     return p;
   });
@@ -2960,6 +2965,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
   const [notes, setNotes] = useState(exercise ? (exercise.notes||"") : "");
   // undefined = follow the app default, a number = this movement's own rest.
   const [rest, setRest] = useState(exercise && exercise.restSecs !== undefined ? exercise.restSecs : undefined);
+  const [wstep, setWstep] = useState(exercise && exercise.weightStep ? exercise.weightStep : undefined);
   const [explaining, setExplaining] = useState(false);
   const [explainErr, setExplainErr] = useState("");
   const [help, setHelp] = useState(false);   // the same panel the (i) opens
@@ -2990,6 +2996,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
       name: name.trim(), type, muscleGroup: group, equipment: equip,
       machines: Object.keys(machines).length ? machines : undefined,
       restSecs: rest,
+      weightStep: wstep,
       notes: notes.trim(),
       custom: exercise ? (exercise.custom!==false) : true,
       createdAt: exercise ? (exercise.createdAt||nowISO()) : nowISO(),
@@ -3059,6 +3066,31 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
               </div>
             ))}
           </div>}
+
+        {/* Chris: "what if I want different increments like 2.5 or 7.5?" One
+            number for every movement is wrong the same way one rest timer was:
+            dumbbells go up in 5s, a barbell with micro-plates in 2.5, a stack
+            can jump 10 or 15. Same shape as rest, deliberately - a global
+            default with a per-movement override, so it costs no new idea and
+            you never meet it unless you go looking. Drives the +/- next to the
+            weight, the next-time targets, and the progression nudge, which used
+            to offer +5 whether or not that was a plate you own. */}
+        <div className="field">
+          <label className="label">Weight step</label>
+          <div className="hint" style={{marginTop:0,marginBottom:6}}>
+            What the plus and minus jump by. Any weight can still be typed.
+          </div>
+          <div className="pills" style={{marginTop:4}}>
+            <button className={"pill "+(wstep===undefined?"on":"")} onClick={()=>setWstep(undefined)}>
+              App default
+            </button>
+            {[1.25,2.5,5,7.5,10,15,20].map(v => (
+              <button key={v} className={"pill "+(wstep===v?"on":"")} onClick={()=>setWstep(v)}>
+                {fmtW(v)}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="field">
           <label className="label">Rest between sets</label>
@@ -5595,7 +5627,7 @@ function MachinePhoto({ store, exercise, gymId, label, wide }){
   );
 }
 
-function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday }){
+function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -5613,7 +5645,9 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
      for a stretch. */
   const isCardio   = entry.type === "cardio";
   const isMobility = entry.type === "mobility";
-  const wStep = units==="kg" ? 2.5 : 5;
+  /* Per-movement first, global default second. Set on the exercise, so it
+     follows the movement into every workout rather than being re-chosen. */
+  const wStep = Number(exStep) > 0 ? Number(exStep) : (units==="kg" ? 2.5 : 5);
   const sets = entry.sets || [];
   const plan = planOf(entry);
   // A plan prescribes THIS set, so it beats both "same as the last set you
@@ -5629,6 +5663,12 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
   const [dist, setDist]   = useState(entry.cardio ? Number(entry.cardio.distance)||0 : 0);
   const [selIdx, setSelIdx] = useState(-1);   // set being edited, -1 = logging a new one
   const [effort, setEffort] = useState(null); // optional tag for the set being logged
+  /* Next time's targets for THIS set position. Held as null until touched, so
+     "untouched" is distinguishable from "deliberately the same" - only a
+     touched set writes anything, and an untouched one keeps following whatever
+     you actually lift. */
+  const [nextSet, setNextSet] = useState(null);   // {reps, weight} | null
+  const [nextOpen, setNextOpen] = useState(false);
   /* Chris: "I need to be able to put a note next to each set, like how many
      reps I was trying to do." The entry already carried a machine-setup note,
      but that is one note for the whole exercise - this is per SET, which is
@@ -5697,18 +5737,25 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
     const rec = { reps, weight };
     if(effort) rec.effort = effort;
     if(note.trim()) rec.note = note.trim().slice(0,80);
+    // Only when it actually differs: storing "next = what I just did" would
+    // freeze the set at today's numbers instead of letting it follow you.
+    if(nextSet && (nextSet.reps !== rec.reps || nextSet.weight !== rec.weight))
+      rec.next = { reps: nextSet.reps, weight: nextSet.weight };
     if(selIdx>=0 && selIdx<next.length){ next[selIdx] = rec; setSelIdx(-1); }
     else { next.push(rec); onSetLogged(entry); }
     setEffort(null);                          // next set starts untagged
     setNote(""); setNoteOpen(false);
+    setNextSet(null); setNextOpen(false);     // and untargeted
     onUpdate(e => ({ ...e, sets: next }));
   };
   const pickSet = (i) => {
     if(!active) return;
-    if(selIdx===i){ setSelIdx(-1); setEffort(null); setNote(""); setNoteOpen(false); return; }
+    if(selIdx===i){ setSelIdx(-1); setEffort(null); setNote(""); setNoteOpen(false);
+      setNextSet(null); setNextOpen(false); return; }
     setSelIdx(i); setReps(Number(sets[i].reps)||0); setWeight(Number(sets[i].weight)||0);
     setEffort(sets[i].effort || null);
     setNote(sets[i].note || ""); setNoteOpen(!!sets[i].note);
+    setNextSet(sets[i].next || null); setNextOpen(!!sets[i].next);
   };
 
   /* Progression nudge. Suggest more weight only when last time's heaviest set
@@ -5738,6 +5785,14 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
     const up = heavy + wStep;
     return weight >= up ? null : { weight: up, dir:"up" };
   })();
+  /* Shown, and edited, as the numbers themselves rather than a delta: "20 x
+     20 lb" is checkable at a glance, "+5" has to be added up against a set you
+     may have since changed. Falls back to what is in the steppers now. */
+  const nextReps   = nextSet ? nextSet.reps   : reps;
+  const nextWeight = nextSet ? nextSet.weight : weight;
+  const setNextReps   = (v) => setNextSet({ reps: Math.max(0, v), weight: nextWeight });
+  const setNextWeight = (v) => setNextSet({ reps: nextReps, weight: Math.max(0, v) });
+
   const removeSet = (i) => {
     const before = sets.slice();
     onUpdate(e => ({ ...e, sets: (e.sets||[]).filter((_,j)=>j!==i) }));
@@ -6027,46 +6082,49 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               cannot press, sitting among pills you can, is a label pretending
               to be a button. Leave both unpicked and the logged row shows the
               thumb on its own. */}
-          {/* TWO BUTTONS THAT ACT, not two that tag.
+          {/* NEXT TIME, per set. Chris: "for each set the # of reps and amount
+              of weight for next workout can be set to be incremented and
+              decremented."
 
-              Chris: "I'd rather it be a green increase-weight arrow and then I
-              have the amount increased... repeat the same one thing next time,
-              but elegant, not cluttery."
+              This replaces two earlier attempts at the same square inch, and
+              the difference is WHEN the change lands. Easy/Struggle recorded
+              how a set felt and left the app to infer. The buttons after that
+              moved TODAY'S weight, which was the wrong workout: Chris toggled
+              up then down, ended on the number he started with, and the set
+              still logged "went down" - because the weight had returned but
+              the mark was whichever button he pressed last. A control where
+              the label and the number can disagree is worse than none.
 
-              Easy/Struggle recorded how a set FELT and left the app to infer
-              what to do about it. These move the weight there and then: tap up
-              and the next set is +5 lb, already in the stepper. Same two
-              controls, so nothing is added to the card - they just do the thing
-              instead of describing it.
+              So it targets NEXT time, and it stores the numbers rather than a
+              direction, which is what makes disagreement impossible: what you
+              see is what the plan will say.
 
-              NOT TAPPING IS "same again", which is why there is no third
-              button: the steppers already carry the last set forward, so the
-              common case costs nothing and the row stays at two.
+              One line until you touch it, because most sets repeat and the
+              common case should cost no height. Underlined, per the rule this
+              card now follows: underlined does something, plain is telling you
+              something. */}
+          {!isMobility && !isCardio &&
+            <div style={{marginTop:10}}>
+              <button className="entry-last" style={{textAlign:"left",
+                  color: nextSet ? "var(--amber-2)" : "var(--ink-3)",
+                  textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
+                  textUnderlineOffset:3}}
+                onClick={()=>setNextOpen(v=>!v)}>
+                Next time: {nextReps} x {fmtW(nextWeight)} {units}
+                {nextSet ? "" : " - same"}
+              </button>
+              {nextOpen && <>
+                <Stepper label="Next time reps" value={nextReps} onChange={setNextReps}
+                  step={1} min={0}/>
+                <Stepper label={"Next time weight ("+units+")"} value={nextWeight}
+                  onChange={setNextWeight} step={wStep} min={0}/>
+                <p className="hint" style={{marginTop:6,marginBottom:0}}>
+                  Steps by {fmtW(wStep)} {units} - change that on the exercise
+                  itself if this movement moves in different jumps.
+                </p>
+              </>}
+            </div>}
 
-              The direction is still written to `effort`, through the existing
-              up/fail aliases. That is deliberate: the logged-row chips, the
-              progression nudge and the 28-day Progress lens all read that
-              field, and his logged history already holds both spellings. A new
-              field would have orphaned all of it. */}
-          {!isMobility &&
-          <div className="pills" style={{marginTop:10}}>
-            <button className={"pill "+(effort==="easy"?"on":"")}
-              style={{display:"inline-flex",alignItems:"center",gap:6}}
-              aria-label={"Go up " + wStep + " " + units + " for this set"}
-              onClick={()=>{ const on = effort==="easy";
-                setEffort(on ? null : "easy");
-                setWeight(w => Math.max(0, (Number(w)||0) + (on ? -wStep : wStep))); }}>
-              <Icon d={ICONS.up} size={14}/> +{fmtW(wStep)} {units}
-            </button>
-            <button className={"pill "+(effort==="hard"?"on":"")}
-              style={{display:"inline-flex",alignItems:"center",gap:6}}
-              aria-label={"Go down " + wStep + " " + units + " for this set"}
-              onClick={()=>{ const on = effort==="hard";
-                setEffort(on ? null : "hard");
-                setWeight(w => Math.max(0, (Number(w)||0) + (on ? wStep : -wStep))); }}>
-              <Icon d={ICONS.down} size={14}/> -{fmtW(wStep)} {units}
-            </button>
-          </div>}
           {/* Seat heights and arm positions are the thing you rediscover by
               trial and error on every club-gym visit. Save on blur. */}
           {noteOpen
@@ -6857,6 +6915,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null} onUndoable={undoable}
             onSwap={()=>{ setSwapId(e.id); setPicker(true); }}
             onAddToToday={onAddToToday}
+            exStep={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).weightStep}
             machineLabel={machineAt((store.data.exercises||[]).find(x=>x.id===e.exerciseId),
                                     workout.gymId)}
             onMachineLabel={(() => {
