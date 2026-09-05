@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-05.** App `v0.126.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-05.** App `v0.127.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.126.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.127.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -223,6 +223,13 @@ is one inline `text/babel` block, so with no `babel-standalone` nothing transpil
 use, but `ASSET_CACHE` is keyed to `VERSION` and `activate` deletes the old one, so **every
 deploy reopened the gap**. `check.js` now fails the build if any `<script src>` in `index.html`
 is missing from `CRITICAL_ASSETS` or its integrity string has drifted.
+
+**A destructive action needs an undo CHANNEL, not just an undo function.** Every delete keeps the
+whole previous array and offers it back for 12 seconds — but the channel is a prop, and the
+ExerciseSheet mounted inside the (i) panel was not given one, so deleting an exercise there
+dropped it silently and closed the panel. Delete and Merge are both gated on `undoable` now: a
+mount that cannot restore does not show the button. **Check the channel reaches any new mount of
+a sheet that can destroy something.**
 
 **Railway custom domains need TWO records** — the CNAME *and* a `_railway-verify.<sub>` TXT.
 Relaying only the CNAME burned 30 minutes proving correct DNS.
