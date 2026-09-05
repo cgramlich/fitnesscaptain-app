@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.126.0";
+const APP_VERSION = "0.127.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-05.1";
+const BUILD = "2026-09-05.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2500,7 +2500,7 @@ async function normalizeLibrary(store){
   return changes;
 }
 
-function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
+function ExercisesScreen({ store, onAdd, onEdit, onDelete, undoable }){
   const [help, setHelp] = useState(null);          // {name, exerciseId} for the (i) panel
   // Chris asked "did we get all the exercise pictures?" - a question the app
   // should be able to answer itself rather than needing a script run.
@@ -2789,7 +2789,7 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete }){
           panel offers its own picker instead of defaulting to one. */}
       {help &&
         <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId}
-          onClose={()=>setHelp(null)} />}
+          undoable={undoable} onClose={()=>setHelp(null)} />}
     </div>
   );
 }
@@ -3145,7 +3145,11 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
             onClick={()=>setMerging(true)}>
             Merge into another exercise
           </button>}
-        {exercise &&
+        {/* Gated on `undoable`, like Merge above and for the same reason: a
+            delete with no way back is not something to offer quietly. Every
+            mount that can restore passes the channel; one that cannot simply
+            does not show the button. */}
+        {exercise && undoable &&
           <button className="btn btn-danger btn-block" style={{marginTop:10}}
             onClick={()=>{ if(confirm("Delete this exercise? Logged workouts keep their history.")) onDelete(exercise.id); }}>
             Delete exercise
@@ -3156,7 +3160,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
           rather than the sheet having to close and lose unsaved edits. */}
       {help &&
         <ExerciseHelp store={store} name={name} exerciseId={exercise ? exercise.id : null}
-          onClose={()=>setHelp(false)} />}
+          undoable={undoable} onClose={()=>setHelp(false)} />}
 
       {merging && exercise &&
         <MergeExerciseSheet store={store} exercise={exercise}
@@ -6196,7 +6200,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
    demand and cached on the exercise), and a demo link. Reachable from the
    picker and from any exercise name mid-workout, because the moment you
    need it is the moment you meet a name you don't recognize. */
-function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
+function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
   /* Editing from HERE rather than only from the Library. Chris added an
      exercise mid-workout, noticed later that its title and muscle group were
      wrong, and had to go and find it in another tab. The moment you notice is
@@ -6490,10 +6494,19 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose }){
             if(prev && prev.name !== rec.name) renameExerciseEverywhere(store, rec.id, rec.name);
             setHelpEditing(false);
           }}
+          undoable={undoable}
           onDelete={(id)=>{
-            const list = store.data.exercises || [];
-            store.saveCollection("exercises", list.filter(x => x.id!==id));
+            /* Chris deleted an exercise from here and had nothing to press.
+               Every other delete in the app keeps the whole previous array and
+               offers it back for twelve seconds; this one just dropped the
+               record. It closes the panel too, so there was not even a screen
+               left to notice the loss on. */
+            const before = (store.data.exercises||[]).slice();
+            const gone = before.find(x => x.id===id);
+            store.saveCollection("exercises", before.filter(x => x.id!==id));
             setHelpEditing(false); onClose();
+            if(undoable) undoable((gone ? gone.name : "Exercise") + " deleted",
+                                  () => store.saveCollection("exercises", before));
           }}
           onClose={()=>setHelpEditing(false)} />}
     </div>
@@ -6998,7 +7011,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
 
       {help &&
         <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId} gym={gym}
-          onClose={()=>setHelp(null)} />}
+          undoable={undoable} onClose={()=>setHelp(null)} />}
     </div>
   );
 }
@@ -10491,7 +10504,7 @@ function App(){
                 onDiscard={(w)=>deleteWorkout(w.id)} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})}
                 onDelete={(g)=>deleteGym(g.id)} onFind={()=>setFindGym(true)} />}
-              {tab==="exercises" && <ExercisesScreen store={store} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
+              {tab==="exercises" && <ExercisesScreen store={store} undoable={showUndo} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
                 onDelete={(x)=>deleteExercise(x.id)} />}
               {tab==="routines"  && <RoutinesScreen store={store} onOpen={(r)=>setRoutineId(r.id)} onAdd={createRoutine} onStart={startRoutine} onImport={()=>setRoutineImporter("paste")} onBuild={()=>setRoutineImporter("build")}
                 onDelete={(r)=>deleteRoutine(r.id)} undoable={showUndo} />}
