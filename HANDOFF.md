@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-05.** App `v0.127.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-05.** App `v0.128.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.127.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.128.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -179,6 +179,14 @@ and only when it differs from what was logged — an untouched set keeps followi
 rather than being frozen. `planFromSets` reads it, which is why all three repeat routes pick it up
 without knowing it exists. **`effort` is now read-only**: history renders it, imports write it, the
 Progress lens counts it, but nothing new sets it.
+
+**The progression nudge is GONE (2026-09-05), and should not come back as it was.** It compared
+against the heaviest set of the whole PREVIOUS SESSION rather than the set you were on, so on set 4
+of a pyramid at 30 lb it offered 55 — last session's top set of 50 plus a step. Structurally wrong
+for anyone who pyramids. It also read `effort`, which nothing writes any more, and it argued with
+"Next time", which states the target for that set position explicitly and cannot be wrong about
+which set it means. **If it returns: compare set N to set N, and defer to an explicit next-time
+target.**
 
 **Weight step is per exercise (2026-09-05).** Same shape as rest — a global default with a
 per-movement override — because dumbbells move in 5s, a barbell with micro-plates in 2.5, and a
