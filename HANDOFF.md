@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-05.** App `v0.128.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-05.** App `v0.129.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.128.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.129.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -179,6 +179,12 @@ and only when it differs from what was logged — an untouched set keeps followi
 rather than being frozen. `planFromSets` reads it, which is why all three repeat routes pick it up
 without knowing it exists. **`effort` is now read-only**: history renders it, imports write it, the
 Progress lens counts it, but nothing new sets it.
+
+**Removing `effort` as an input left two orphans (2026-09-05).** Worth knowing as a pattern: when
+a signal stops being written, everything that DISPLAYED it silently changes meaning. The thumbs-up
+badge meant "finished, nothing to say" — a real distinction while Easy/Struggle existed, noise once
+every set qualified. The progression nudge below is the other. Both removed. The direction chips
+were kept, because old records still carry marks and there they still mean something.
 
 **The progression nudge is GONE (2026-09-05), and should not come back as it was.** It compared
 against the heaviest set of the whole PREVIOUS SESSION rather than the set you were on, so on set 4
