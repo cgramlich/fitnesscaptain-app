@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.127.0";
+const APP_VERSION = "0.128.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-05.2";
+const BUILD = "2026-09-05.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5762,33 +5762,27 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
     setNextSet(sets[i].next || null); setNextOpen(!!sets[i].next);
   };
 
-  /* Progression nudge. Suggest more weight only when last time's heaviest set
-     hit the target reps AND was not tagged hard or failed - the effort tag is
-     what keeps this from cheerfully pushing you after a grinder. */
-  const suggestion = (() => {
-    // A written plan already says what to lift; second-guessing it from last
-    // session's numbers would just argue with the program.
-    if(isCardio || !active || selIdx>=0 || planned) return null;
-    if(!prev || !prev.sets || !prev.sets.length) return null;
-    const t = topSet(prev.sets);
-    if(!t || !(Number(t.weight)>0)) return null;
-    const heavy = Number(t.weight);
-    // Every set at that weight counts, not just the one topSet returned -
-    // sets tie on reps and the marked one can lose the tie-break.
-    const atTop = prev.sets.filter(s => (Number(s.weight)||0) === heavy);
-    const marks = atTop.map(s => effortKey(s.effort));
-    // A red down mark is a decision, so act on it: offer the lighter weight
-    // rather than merely declining to push.
-    if(marks.indexOf("hard") !== -1){
-      const down = heavy - wStep;
-      return down > 0 && weight !== down ? { weight: down, dir:"down" } : null;
-    }
-    const goal = Number(entry.targetReps)>0 ? Number(entry.targetReps) : 12;
-    const hitGoal = Math.max.apply(null, atTop.map(s=>Number(s.reps)||0)) >= goal;
-    if(marks.indexOf("easy") === -1 && !hitGoal) return null;
-    const up = heavy + wStep;
-    return weight >= up ? null : { weight: up, dir:"up" };
-  })();
+  /* THE PROGRESSION NUDGE IS GONE, and the number it produced is why.
+
+     It compared against the heaviest set of the whole previous session, not
+     the set you were on. Chris was on set 4 of a pyramid at 30 lb; last
+     session's top set was 7 x 50 marked "went up", so it offered 55 - a weight
+     with no relationship to the set in front of him. Structurally wrong for
+     anyone who pyramids, which is most of how he trains.
+
+     It was also reading `effort`, a signal nothing writes any more. Marks like
+     "went up" now only exist on old records, so the nudge was drawing on a
+     vocabulary the app has stopped speaking.
+
+     And it duplicated a better mechanism. "Next time" states the target for
+     THIS set position explicitly, comes back as a plan, and cannot be wrong
+     about which set it means. A guess that argues with a decision you already
+     recorded is worse than no guess. Chris: "I only want to note that next
+     set I want to increase."
+
+     If it comes back it must be set-position aware - compare set N to set N -
+     and it must defer to an explicit next-time target. */
+
   /* Shown, and edited, as the numbers themselves rather than a delta: "20 x
      20 lb" is checkable at a glance, "+5" has to be added up against a set you
      may have since changed. Falls back to what is in the steppers now. */
@@ -6070,15 +6064,6 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
           <Stepper label={isMobility ? "Reps (or per side)" : "Reps"} value={reps} onChange={setReps} step={1} min={0}/>
           {!isMobility &&
             <Stepper label={"Weight ("+units+")"} value={weight} onChange={setWeight} step={wStep} min={0}/>}
-          {suggestion &&
-            <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10,
-              borderColor: suggestion.dir==="up" ? "var(--amber-line)" : "#d1735c55",
-              color: suggestion.dir==="up" ? "var(--amber-2)" : "#e79b86"}}
-              onClick={()=>setWeight(suggestion.weight)}>
-              {suggestion.dir==="up"
-                ? "Ready for "+fmtW(suggestion.weight)+" "+units+"?"
-                : "Drop to "+fmtW(suggestion.weight)+" "+units+"?"}
-            </button>}
           {/* Optional. No mark means hold this weight. Meaningless on a
               mobility drill - there is no load to take up or down. */}
           {/* Two optional marks, nothing else. Chris: "default is just a
