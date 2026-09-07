@@ -391,10 +391,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.128.0";
+const APP_VERSION = "0.129.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-05.3";
+const BUILD = "2026-09-05.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1673,7 +1673,6 @@ const ICONS = {
   check:   ["M20 6L9 17l-5-5"],
   smile:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 14a4.6 4.6 0 0 0 7.6 0","M9 9.5h.01","M15 9.5h.01"],
   frown:   ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z","M8.2 16a4.6 4.6 0 0 1 7.6 0","M9 9.5h.01","M15 9.5h.01"],
-  thumbUp: ["M7 22V11","M11 11V6a2.5 2.5 0 0 1 5 0c0 1.6-.6 3-1.3 4H19a2 2 0 0 1 2 2.3l-1 6A2 2 0 0 1 18 20H7"],
   text:    ["M5 5h14","M5 10h14","M5 15h9"],
 };
 
@@ -6020,18 +6019,22 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                 he could not read it - because the row printed the GLYPH alone
                 while the only place the word appears is the button that sets
                 it. A mark you cannot interpret where you see it is noise. */}
-            {/* A finished set is not silent any more: no face means it went as
-                expected, which deserves the thumb rather than a blank. */}
+            {/* THE THUMB IS GONE. It marked "finished, and nothing to say about
+                it", which was a real distinction while Easy/Struggle existed -
+                an unmarked set meant you had chosen not to mark it. Nothing
+                writes `effort` any more, so every new set earned a thumb: on
+                every row, distinguishing nothing, and Chris reasonably asked
+                what it was for. A badge that is always present is decoration.
+
+                The direction chips stay, because old records still carry
+                marks and there they still mean something. */}
             {(() => {
               const e = effortOf(s.effort);
               return e
                 ? <span className={"chip "+e.cls} style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",gap:5}}>
                     <Icon d={ICONS[e.icon]} size={14}/> {e.label.toLowerCase()}
                   </span>
-                : <span className="chip" style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",
-                                                 gap:5,opacity:.62}} title="Finished">
-                    <Icon d={ICONS.thumbUp} size={13}/>
-                  </span>;
+                : null;
             })()}
             {s.note &&
               <span className="set-note">{s.note}</span>}
