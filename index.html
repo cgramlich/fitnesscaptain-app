@@ -403,10 +403,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.130.0";
+const APP_VERSION = "0.131.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-05.5";
+const BUILD = "2026-09-19.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6048,6 +6048,22 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                   </span>
                 : null;
             })()}
+            {/* NEXT TIME, on the row itself. Chris: "next to the finished set, what
+                the next set will be for the next time that exercise is done." The
+                target was only visible in the panel while you set it; once the set
+                was logged it vanished from sight, so a pyramid with three sets
+                pushed up read exactly like one with none.
+
+                Shown only when it DIFFERS from what you did. "Same" on every row
+                would be a badge on every row - the thumb we just removed for being
+                exactly that. Tap the row to change it: that already loads the set,
+                target included, back into the panel. */}
+            {s.next && (s.next.reps !== s.reps || s.next.weight !== s.weight) &&
+              <span className="chip green set-next"
+                style={{flex:"0 0 auto",display:"inline-flex",alignItems:"center",gap:4}}
+                title="What this set will be next time">
+                next {s.next.reps} x {fmtW(s.next.weight)}
+              </span>}
             {s.note &&
               <span className="set-note">{s.note}</span>}
           </button>;
