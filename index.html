@@ -403,10 +403,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.133.0";
+const APP_VERSION = "0.134.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-27.1";
+const BUILD = "2026-09-27.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -5642,7 +5642,7 @@ function MachinePhoto({ store, exercise, gymId, label, wide }){
   );
 }
 
-function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, upNext, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
+function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -5726,25 +5726,28 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
 
      So: collapse only while the workout is still running. Reviewing or
      editing a past one shows every set. */
-  /* NOT STARTED COLLAPSES TOO. Chris, on a fresh two-exercise session: "it's
-     hard to see all the exercises when I open up a new workout - maybe there's
-     a way to start with them collapsed." An untouched card is ~320px of
-     steppers, plan line and note box, so three exercises put the third one off
-     the bottom of the phone and there was no way to see the shape of the
-     session you were about to do.
+  /* NOT STARTED COLLAPSES TOO. Chris, on a fresh session: "it's hard to see
+     all the exercises when I open up a new workout - maybe there's a way to
+     start with them collapsed." An untouched card is ~320px of steppers, plan
+     line and note box, so three exercises put the third one off the bottom of
+     the phone and there was no way to see the shape of the session.
 
-     The rule, in one line: while a workout is live, the exercise you are UP TO
-     is open and every other unstarted one is shut. `upNext` is the first
-     not-done entry, decided by the editor because a card cannot see its
-     siblings. Anything with a set logged in it stays open - that is the one you
-     are in the middle of, and shutting it as you work would be absurd.
+     The rule, in one line: while a workout is live, every exercise you have not
+     started is shut. Anything with a set logged in it stays open - that is the
+     one you are in the middle of, and shutting it as you work would be absurd.
 
-     Chosen over "collapse everything, open nothing", which reads as an empty
-     screen and costs a tap before you can log your first set, and over a
-     remembered per-workout preference, which makes the same workout look
-     different on two days for reasons you cannot see. */
+     FIRST SHIPPED with the exercise you were up to left open, on the reasoning
+     that a screen of shut cards reads as empty and costs a tap before your
+     first set. Chris looked at it and said "whole list": you open a workout to
+     see what you are in for, not to be handed the first movement, and the tap
+     spent choosing is a tap you wanted to spend. Do NOT reinstate the
+     open-the-first-one exception - it was built, seen and rejected by the
+     person using it.
+
+     Also rejected: a remembered per-workout preference, which makes the same
+     workout look different on two days for reasons you cannot see. */
   const started = sets.length > 0 || !!entry.cardio;
-  const collapsed = live && !expanded && (doneAll || closed || (!started && !upNext));
+  const collapsed = live && !expanded && (doneAll || closed || !started);
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -6915,11 +6918,6 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
   const entries = workout.entries || [];
   const doneCount = entries.filter(entryDone).length;
   const allDone = entries.length > 0 && doneCount === entries.length;
-  /* THE ONE YOU ARE UP TO - the first exercise that is not finished. The cards
-     collapse themselves; only the editor can see which one this is. -1 when
-     everything is done, which collapses the lot, and that is correct: the
-     "Everything's done" card above is what you want to be looking at then. */
-  const upNextIdx = entries.findIndex(e => !entryDone(e));
   const gym = (store.gyms||[]).find(g=>g.id===workout.gymId) || null;
   const setGym = (g) => {
     patch({ gymId: g ? g.id : null, gymName: g ? g.name : null });
@@ -7032,7 +7030,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             onUpdate={fn=>updateEntry(e.id, fn)} onRemove={()=>removeEntry(e.id)} onSetLogged={onSetLogged}
             onMoveUp={i>0 ? ()=>moveEntryUp(e.id) : null}
             onMoveDown={i < entries.length-1 ? ()=>moveEntryDown(e.id) : null}
-            upNext={i === upNextIdx} onUndoable={undoable}
+            onUndoable={undoable}
             onSwap={()=>{ setSwapId(e.id); setPicker(true); }}
             onAddToToday={onAddToToday}
             exStep={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).weightStep}
