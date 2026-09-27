@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-19.** App `v0.132.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-27.** App `v0.133.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.132.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.133.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -111,6 +111,23 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**In a live workout, only the exercise you are up to is open (2026-09-27).** An untouched card is
+~320px of steppers, plan line and note box, so three exercises pushed the third off the phone and
+you could not see the shape of the session you were about to do. The rule: a card collapses while
+the workout is live unless it is the first **not-done** entry, or it already has a set logged in
+it. `upNext` is computed in `WorkoutEditor` and passed in, because a card cannot see its siblings.
+Rejected: collapsing everything, which reads as an empty screen and costs a tap before the first
+set; and a remembered per-workout preference, which makes the same workout look different on two
+days for reasons you cannot see. Reviewing a **past** workout still expands everything -
+`collapsed` is gated on `live` and that gate is deliberate.
+
+**Move down exists because bubble-up alone is not discoverable (2026-09-27).** Up-only is
+sufficient to reach any order, which is why it shipped alone, but only if you work out that
+demoting the second exercise means promoting the third. Both arrows now sit on the open card AND
+on the collapsed one - with unstarted cards collapsed by default, arrows only on the open card
+would mean opening a card to move it and closing it again. Still not drag-and-drop: a drag handle
+fights the scroll on a phone.
 
 **Cross-gym comparability is LOCAL, not global (2026-08-10).** No usable open catalogue of gym
 machines exists; manufacturer lists are proprietary and rot. Rejected: building or licensing an
