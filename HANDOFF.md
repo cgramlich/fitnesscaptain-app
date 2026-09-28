@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** Live: app `v0.139.0`, backend `v0.29.0`. Committed, NOT deployed: app `v0.140.0` + backend `v0.30.0` (Pro billing), waiting on `billing.sql` — see What is open.
+**State as of 2026-09-28.** App `v0.140.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
