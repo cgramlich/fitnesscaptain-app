@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** App `v0.137.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-28.** App `v0.138.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.137.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.138.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -126,6 +126,16 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Borrowing an exercise copies your LATEST session of it, not the one you tapped (2026-09-28).**
+Chris asked what history came along when he borrowed from an old workout; the answer was "that
+day's sets", so a three-week-old curl arrived planned at three-week-old weights with the newer
+numbers in grey on the Last time line beneath it. The `+` means "this exercise, today", not "redo
+that date". `latestEntryFor()` picks the most recent FINISHED entry with a logged set, sorted by
+`startedAt` - the same key as the Last time line, so the two can never disagree. The tapped entry
+is only the fallback. Machine setup comes from that latest session too, so a setup noted only on
+an older one does not carry. Chosen over labelling the old plan with its date (option B), which
+Chris declined. Reviving a whole day exactly as it was is still "Do this workout again".
 
 **Exercise cards swipe left to delete (2026-09-28).** Every other list row in the app already did
 - workouts, gyms, routines, and the sets inside the card - so the exercise card was the one place

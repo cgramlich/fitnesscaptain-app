@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.137.0";
+const APP_VERSION = "0.138.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-28.3";
+const BUILD = "2026-09-28.4";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -875,6 +875,23 @@ function copyEntryForToday(e){
     item.plan = planFromSets(planOf(e));
   }
   return item;
+}
+
+/* The most recent FINISHED session of an exercise that actually has a set in
+   it. Finished only: the live workout is where the copy is going, and a
+   half-done entry there is not "last time". Sorted by startedAt, the same key
+   the card's Last time line uses, so the plan a copy arrives with and the
+   Last time line under it can never disagree. */
+function latestEntryFor(workouts, exerciseId){
+  if(!exerciseId) return null;
+  const ws = (workouts||[]).filter(w => w.endedAt).slice()
+    .sort((a,b) => String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+  for(const w of ws){
+    const e = (w.entries||[]).find(x => x.exerciseId === exerciseId &&
+      (x.sets||[]).some(s => (Number(s.reps)||0) > 0));
+    if(e) return e;
+  }
+  return null;
 }
 
 function planOf(x){
@@ -10439,9 +10456,22 @@ function App(){
      many are in today's workout now: you are adding to something you cannot
      see, and "added" alone cannot tell you whether the second tap registered.
      Getting there is the bottom nav, or the in-progress card at the top of the
-     workouts list - both one tap, and both chosen by you. */
+     workouts list - both one tap, and both chosen by you.
+
+     IT COPIES YOUR LATEST, NOT THE ONE YOU TAPPED. Chris asked what history
+     came along when he borrowed an exercise from an old workout, and the answer
+     was "that day's sets" - so a curl borrowed from three weeks ago arrived
+     planned at three-weeks-ago weights, with the newer numbers sitting in grey
+     on the Last time line beneath it. The + means "I want this exercise
+     today", not "I want to redo that date"; the old workout is just where you
+     happened to find it. So the plan, the next-time targets and the machine
+     setup all come from the most recent FINISHED session of this exercise.
+
+     The tapped entry is the fallback, for an exercise you have never logged a
+     set of anywhere else. Reviving a whole day exactly as it was is still
+     "Do this workout again", which deliberately keeps its own dates. */
   const addExerciseToToday = (entry) => {
-    const item = copyEntryForToday(entry);
+    const item = copyEntryForToday(latestEntryFor(store.data.workouts, entry.exerciseId) || entry);
     const existing = (store.data.workouts||[]).find(x => !x.endedAt);
     if(existing){
       const count = (existing.entries||[]).length + 1;
