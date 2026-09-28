@@ -121,7 +121,9 @@ it.
 
 - **No real training data, bodyweight, body-composition or health metrics.** These are personal
   health information. Every example must be fabricated and labelled as such.
-- **No Pro pricing, tiers or launch date.** Undecided as of 2026-08-28; billing is unbuilt.
+- **No Pro launch date, and no pricing as if it were on sale.** Pricing and the free allowance
+  were decided 2026-09-28 and billing is built, but it is switched off and untested with real
+  payments. Say "a Pro tier is built"; do not quote prices publicly until it is live.
 - **No API keys, variable values, backend hostnames, database URLs or internal endpoints.**
 - **Do not call it a medical, nutrition or coaching product.** It deliberately refuses that
   advice.

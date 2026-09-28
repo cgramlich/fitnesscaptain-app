@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.139.0";
+const APP_VERSION = "0.140.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-28.5";
+const BUILD = "2026-09-28.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1104,6 +1104,24 @@ function transportError(e){
   return e;
 }
 
+/* THE FREE ALLOWANCE RAN OUT. The backend answers 402 with a structured
+   detail ({code:"free_limit", kind, limit, used, message}) so this can tell
+   "your free scans are used up" apart from the monthly abuse ceiling, which
+   is also a 402 but carries a plain string.
+
+   Announced as a window event rather than returned, because the thing that
+   hit the limit is buried in some screen (a scan, a gym search, a chat) and
+   the Pro sheet belongs to the app shell. Every caller still gets an Error
+   with the message, so a screen that shows errors inline keeps working. */
+const FREE_LIMIT_EVENT = "fc:free-limit";
+function freeLimitMessage(body){
+  const d = body && body.detail;
+  if(!d || typeof d !== "object" || d.code !== "free_limit") return null;
+  try{ window.dispatchEvent(new CustomEvent(FREE_LIMIT_EVENT, { detail: d })); }catch(_){}
+  log("BILLING", "free " + d.kind + " used up (" + d.used + "/" + d.limit + ")");
+  return d.message || "You've used your free allowance.";
+}
+
 async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   const token = await authToken();
   if(!token) throw new Error("Not signed in.");
@@ -1117,6 +1135,12 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   }catch(e){ log("ERROR","relay transport: "+(e&&e.message)); throw transportError(e); }
   if(!r.ok){
     if(r.status===401) throw new Error("Session expired - sign in again.");
+    if(r.status===402){
+      let body = null;
+      try{ body = await r.clone().json(); }catch(_){}
+      const free = freeLimitMessage(body);
+      if(free) throw new Error(free);
+    }
     if(r.status===402 || r.status===429) throw new Error("AI is at its limit for now. Try again later.");
     /* The relay sends a plain-English reason for the failures a user can DO
        something about - too much pasted at once, provider busy - and it is
@@ -1136,6 +1160,36 @@ async function aiRelay(task, messages, { system=null, maxTokens=4096 } = {}){
   return (j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
 }
 function stripFences(s){ return String(s).replace(/```json/gi,"").replace(/```/g,"").trim(); }
+
+/* ---- Pro billing (ported from MenuCaptain's startCheckout / openBillingPortal).
+   Stripe owns the card form entirely: we ask the backend for a Stripe page and
+   go there. Nothing about a payment ever passes through this app. */
+async function billingCall(path, init){
+  const token = await authToken();
+  if(!token) throw new Error("Not signed in.");
+  let r;
+  try{
+    r = await fetch(API_BASE + path, { ...(init||{}),
+      headers: { "Authorization":"Bearer "+token, "Content-Type":"application/json" } });
+  }catch(e){ throw transportError(e); }
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error((j && typeof j.detail === "string" && j.detail) || ("Billing error " + r.status + "."));
+  return j;
+}
+const fetchBillingStatus = () => billingCall("/api/billing/status");
+async function startCheckout(plan){
+  log("BILLING", "starting checkout: " + plan);
+  const j = await billingCall("/api/stripe/create-checkout",
+                              { method:"POST", body: JSON.stringify({ plan }) });
+  if(!j.url) throw new Error("Checkout didn't start. Try again.");
+  location.href = j.url;
+}
+async function openBillingPortal(){
+  log("BILLING", "opening portal");
+  const j = await billingCall("/api/stripe/portal", { method:"POST" });
+  if(!j.url) throw new Error("Couldn't open billing. Try again.");
+  location.href = j.url;
+}
 
 /* Resolve a movement name to one YouTube video id. The key lives on the
    backend; the answer is cached on the exercise record by the caller, so a
@@ -3263,7 +3317,9 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
 async function placeErr(r){
   try{
     const j = await r.json();
-    if(j && j.detail) return j.detail;
+    const free = freeLimitMessage(j);
+    if(free) return free;
+    if(j && typeof j.detail === "string") return j.detail;
   }catch(_){}
   return "Couldn't search right now (" + r.status + ").";
 }
@@ -10176,7 +10232,136 @@ function AddSheet({ hasRoutines, active, onPick, onClose }){
 
 // More hub: the two demoted tabs (their screens are unchanged) plus a second
 // path to Settings - the header gear stays canonical.
-function MoreScreen({ store, onOpenGyms, onOpenExercises, onOpenSettings }){
+/* ============================================================
+   PRO. Ported from MenuCaptain's plan card (the signed-off version): same
+   states, same button order, same yearly-first pricing. What differs is the
+   free line - three separate allowances here where MenuCaptain has one,
+   because Chris chose a counter per feature (2026-09-28).
+   ============================================================ */
+const FREE_KINDS = [
+  { k:"ai",     one:"AI request",  many:"AI requests" },
+  { k:"scan",   one:"gym scan",    many:"gym scans" },
+  { k:"search", one:"gym search",  many:"gym searches" },
+];
+const PRO_PERKS = [
+  "Unlimited AI: plan a session, import your history, explain any exercise",
+  "Unlimited gym scans: film the room, get the equipment list",
+  "Unlimited gym searches",
+];
+const fmtBillDate = (iso) => { try{ return iso ? new Date(iso).toLocaleDateString() : ""; }catch(_){ return ""; } };
+
+function ProButtons({ busy, go }){
+  return (
+    <>
+      <div style={{margin:"10px 0 12px"}}>
+        {PRO_PERKS.map((p,i)=>(
+          <div key={i} className="hint" style={{display:"flex",gap:8,alignItems:"flex-start",margin:"0 0 5px"}}>
+            <span style={{color:"var(--amber-2)",fontWeight:700}}>✓</span><span>{p}</span>
+          </div>
+        ))}
+      </div>
+      <button className="btn btn-primary btn-block" disabled={!!busy} onClick={()=>go("yearly")}>
+        {busy==="yearly" ? "Opening..." : "Go Pro - $19.99/year"}
+      </button>
+      <button className="btn btn-block" style={{marginTop:8}} disabled={!!busy} onClick={()=>go("monthly")}>
+        {busy==="monthly" ? "Opening..." : "$2.99/month"}
+      </button>
+    </>
+  );
+}
+
+/* Shared by the card and the sheet so both behave the same when Stripe opens
+   as a sheet ON TOP of an installed app (iOS): the page underneath never
+   navigates, so without the reset the button spins forever after the user
+   closes Stripe with its X. MenuCaptain hit this first. */
+function useBillingGo(){
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const go = async (kind) => {
+    setErr(""); setBusy(kind);
+    try{
+      if(kind === "portal") await openBillingPortal(); else await startCheckout(kind);
+      setTimeout(() => setBusy(""), 1500);
+    }catch(e){ setErr(e.message || "Something went wrong."); setBusy(""); }
+  };
+  return { busy, err, go };
+}
+
+function PlanCard({ bill, loadErr, onRetry }){
+  const { busy, err, go } = useBillingGo();
+  // Billing switched off on the server: the whole Pro surface stays hidden,
+  // so nothing here can be seen before launch.
+  if(bill && !bill.billing_enabled) return null;
+  let body;
+  if(!bill){
+    // Quiet while loading, and quiet on a failure unless billing was LAST
+    // SEEN switched on. This app is used offline in gyms; without that
+    // check every offline visit to More would show a billing error for a
+    // feature that is not even live.
+    if(!loadErr || !lsGet("billingOn", false)) return null;
+    body = <>
+      <div className="hint" style={{margin:"0 0 8px"}}>Couldn't check your plan just now.</div>
+      <button className="btn btn-ghost btn-sm" onClick={onRetry}>Try again</button>
+    </>;
+  } else if(bill.tier === "pro" && bill.owner){
+    body = <div className="hint" style={{margin:0}}>Pro - complimentary.</div>;
+  } else if(bill.tier === "pro"){
+    body = <>
+      <div className="hint" style={{margin:"0 0 10px"}}>
+        Pro{bill.plan==="yearly" ? " - $19.99/year" : bill.plan==="monthly" ? " - $2.99/month" : ""}
+        {bill.current_period_end ? (bill.cancel_at_period_end ? " - ends " : " - renews ") + fmtBillDate(bill.current_period_end) : ""}
+      </div>
+      {bill.has_billing_profile &&
+        <button className="btn btn-block" disabled={!!busy} onClick={()=>go("portal")}>
+          {busy==="portal" ? "Opening..." : "Manage subscription"}
+        </button>}
+    </>;
+  } else {
+    // LEFT, not used: the number worth knowing is what you can still do.
+    const left = FREE_KINDS.map(f => {
+      const a = (bill.free||{})[f.k] || { remaining:0, limit:0 };
+      return a.remaining + " of " + a.limit + " " + (a.limit===1 ? f.one : f.many);
+    });
+    body = <>
+      <div className="hint" style={{margin:0}}>Free plan - left to use:</div>
+      <div className="hint" style={{margin:"2px 0 0",color:"var(--ink-2)"}}>{left.join(" · ")}</div>
+      <ProButtons busy={busy} go={go}/>
+    </>;
+  }
+  return (
+    <div className="card" style={{marginBottom:14}}>
+      <div style={{fontWeight:700,marginBottom:6}}>Your plan</div>
+      {body}
+      {err && <div className="hint" style={{color:"var(--red,#e7a99e)",margin:"8px 0 0"}}>{err}</div>}
+    </div>
+  );
+}
+
+/* Opens the moment a free allowance runs out, wherever that happened. Says
+   WHICH one ran out in the backend's own words - "you've used your 3 free gym
+   scans" - because a generic "upgrade to continue" leaves you guessing what
+   you are paying to get back. */
+function ProSheet({ hit, onClose }){
+  const { busy, err, go } = useBillingGo();
+  return (
+    <>
+      <div className="scrim" style={{zIndex:97}} onClick={onClose}></div>
+      <div className="sheet" style={{zIndex:98}}>
+        <div className="sheet-grip"></div>
+        <div className="sheet-head">
+          <h2 className="sheet-title">Go Pro</h2>
+          <button className="sheet-x" onClick={onClose} aria-label="Not now"><Icon d={ICONS.x} size={18}/></button>
+        </div>
+        <p className="hint" style={{marginTop:0}}>{hit.message}</p>
+        <ProButtons busy={busy} go={go}/>
+        {err && <div className="hint" style={{color:"var(--red,#e7a99e)",margin:"8px 0 0"}}>{err}</div>}
+        <button className="btn btn-ghost btn-block" style={{marginTop:8}} onClick={onClose}>Not now</button>
+      </div>
+    </>
+  );
+}
+
+function MoreScreen({ store, onOpenGyms, onOpenExercises, onOpenSettings, bill, billErr, onBillRetry }){
   const gyms = (store.gyms||[]).length;
   const exs  = (store.data.exercises||[]).length;
   const rows = [
@@ -10186,6 +10371,7 @@ function MoreScreen({ store, onOpenGyms, onOpenExercises, onOpenSettings }){
   ];
   return (
     <div>
+      <PlanCard bill={bill} loadErr={billErr} onRetry={onBillRetry}/>
       {rows.map(r=>(
         <button key={r.b} className="act-row" onClick={r.go}>
           <span className="act-ic"><Icon d={r.ic} size={20}/></span>
@@ -10234,6 +10420,54 @@ function App(){
   const [addSheet, setAddSheet] = useState(false);    // center-+ create ActionSheet
   const [weighIn, setWeighIn]   = useState(false);    // open the Body sheet on arrival
   const [blocked, setBlocked]   = useState(null);     // {existing, routine} - start blocked by an open one
+
+  // ---- Pro billing ----
+  const [bill, setBill]       = useState(null);      // /api/billing/status, null until loaded
+  const [billErr, setBillErr] = useState(false);
+  const [proHit, setProHit]   = useState(null);      // the free_limit detail that opened the Pro sheet
+  const loadBill = useCallback(() => {
+    setBillErr(false);
+    return fetchBillingStatus()
+      .then(b => { setBill(b); lsSet("billingOn", !!(b && b.billing_enabled)); return b; })
+      .catch(e => { log("BILLING", "status failed: " + e.message); setBillErr(true); return null; });
+  }, []);
+  useEffect(() => {
+    if(!store.authed) return;
+    loadBill();
+    // Coming back from Stripe (checkout or the portal) does not remount
+    // anything, so re-read the plan whenever the app becomes visible again.
+    const onVis = () => { if(document.visibilityState === "visible") loadBill(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [store.authed, loadBill]);
+  useEffect(() => {
+    const onHit = (e) => { setProHit(e.detail || {}); loadBill(); };
+    window.addEventListener(FREE_LIMIT_EVENT, onHit);
+    return () => window.removeEventListener(FREE_LIMIT_EVENT, onHit);
+  }, [loadBill]);
+  /* BACK FROM CHECKOUT. Stripe returns to /?checkout=success before our
+     webhook has necessarily landed, so "you're Pro" is only said once the
+     backend agrees - polled briefly - rather than on the URL's word. The
+     parameter is stripped either way so a refresh does not replay it. */
+  useEffect(() => {
+    if(!store.authed) return;
+    let outcome = null;
+    try{ outcome = new URLSearchParams(location.search).get("checkout"); }catch(_){}
+    if(!outcome) return;
+    try{ history.replaceState(null, "", location.pathname); }catch(_){}
+    if(outcome !== "success") return;
+    let tries = 0, alive = true;
+    const poll = async () => {
+      const b = await loadBill();
+      if(!alive) return;
+      if(b && b.tier === "pro"){ showToast("You're Pro. Thank you!"); setTab("more"); return; }
+      if(++tries < 8) setTimeout(poll, 2000);
+      else showToast("Payment received - Pro switches on in a moment.");
+    };
+    poll();
+    return () => { alive = false; };
+    // eslint-disable-next-line
+  }, [store.authed]);
 
   // ---- gym CRUD ----
   const saveGym = (rec) => {
@@ -10747,7 +10981,8 @@ function App(){
                 onDelete={(r)=>deleteRoutine(r.id)} undoable={showUndo} />}
               {tab==="progress"  && <ProgressScreen store={store} weighIn={weighIn} onWeighInDone={()=>setWeighIn(false)} notify={showToast} />}
               {tab==="more"      && <MoreScreen store={store} onOpenGyms={()=>setTab("gyms")}
-                onOpenExercises={()=>setTab("exercises")} onOpenSettings={()=>setInSettings(true)} />}
+                onOpenExercises={()=>setTab("exercises")} onOpenSettings={()=>setInSettings(true)}
+                bill={bill} billErr={billErr} onBillRetry={loadBill} />}
             </>}
       </div>
 
@@ -10771,6 +11006,8 @@ function App(){
 
       {gymSheet &&
         <GymSheet gym={gymSheet.gym} onSave={saveGym} onDelete={deleteGym} onClose={()=>setGymSheet(null)} />}
+
+      {proHit && <ProSheet hit={proHit} onClose={()=>setProHit(null)} />}
 
       {blocked &&
         <BlockedSheet existing={blocked.existing} routine={blocked.routine}

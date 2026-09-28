@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** App `v0.139.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-28.** Live: app `v0.139.0`, backend `v0.29.0`. Committed, NOT deployed: app `v0.140.0` + backend `v0.30.0` (Pro billing), waiting on `billing.sql` — see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.139.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.140.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -126,6 +126,31 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Pro billing: separate lifetime counts, shared Stripe, off until tested (2026-09-28).** Price is
+MenuCaptain's: $2.99/month, $19.99/year. Free is a LIFETIME allowance per feature - 40 AI
+requests, 3 gym scans, 10 gym searches - each with its own counter, because a scan costs about
+ten chat calls and must not be able to eat the chat budget. Chris chose this over one pooled
+credit ("why did that cost 8?") and over MenuCaptain's single 75-call counter. Pro removes all
+three; the monthly abuse ceilings still apply behind it. Counters start at zero on launch day:
+nothing is counted while `BILLING_ENABLED` is off.
+
+How it is enforced, in the backend: the free check runs BEFORE any provider spend and returns
+402 with a structured detail (`code: free_limit`, `kind`, `message`); the app turns that into the
+Pro sheet. **A scan is whatever carries images**, never the client's task label, so a scan cannot
+be sent as a chat to dodge the smaller counter. A use is counted only AFTER the call succeeds - a
+provider failure never costs somebody one of their three scans. Cached gym searches are free.
+Both guards were proven by breaking them on purpose: the tests fail without them.
+
+**WARNING - shared Stripe account.** MenuCaptain sells from the same MilSpo Life account, and a
+Stripe webhook receives every subscription event on the account. Everything FitnessCaptain
+creates is tagged `metadata.app = fitnesscaptain`; the webhook ignores anything neither tagged
+nor on one of our prices. Without that, a MenuCaptain subscriber would be written into this
+app's table. MenuCaptain's own webhook has the mirror-image gap; that finding was routed to the
+MenuCaptain session (single-writer), not fixed from here.
+
+Also closed in `billing.sql`: `record_ai_usage` was executable with the public anon key, so
+anyone could inflate `system_meter` past the $25 breaker and switch AI off for every user.
 
 **Borrowing an exercise copies your LATEST session of it, not the one you tapped (2026-09-28).**
 Chris asked what history came along when he borrowed from an old workout; the answer was "that
@@ -330,8 +355,14 @@ without logging anything, so the count never moves; `planned` belongs in the dep
 ## What is open
 
 **Blocked on Chris:**
-- **Pro billing and quotas** — the only large feature left. Zero Stripe in the backend, no Pro
-  gating in the app. Needs his pricing decisions before anything can be built.
+- **Pro billing — BUILT, NOT LIVE (2026-09-28).** Code complete in both repos behind
+  `BILLING_ENABLED` (off). Launch sequence, one step at a time, in this order: (1) Chris runs
+  `fitnesscaptain-backend/billing.sql` + his comp row; (2) push backend, then app; (3) Chris
+  creates the FitnessCaptain product + two prices in MilSpo Life's Stripe **test** mode, a
+  webhook to `/api/stripe/webhook` (events: checkout.session.completed,
+  customer.subscription.updated, customer.subscription.deleted), keys into Railway only;
+  (4) `BILLING_ENABLED=1`, end-to-end test purchase with a Stripe test card; (5) swap to live
+  keys. `/health` → `billing` shows enabled / ready / test-or-live at each step.
 - **Log a first bodyweight** — 30 seconds, and it unlocks three built-but-dormant things: the
   check-in body row, both Progress body lenses, and the deficit-aware coaching in the Program
   Builder, which asks age and *derives* the deficit from weigh-ins.
