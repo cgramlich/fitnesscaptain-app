@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** App `v0.138.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-28.** App `v0.139.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.138.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.139.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -133,8 +133,12 @@ day's sets", so a three-week-old curl arrived planned at three-week-old weights 
 numbers in grey on the Last time line beneath it. The `+` means "this exercise, today", not "redo
 that date". `latestEntryFor()` picks the most recent FINISHED entry with a logged set, sorted by
 `startedAt` - the same key as the Last time line, so the two can never disagree. The tapped entry
-is only the fallback. Machine setup comes from that latest session too, so a setup noted only on
-an older one does not carry. Chosen over labelling the old plan with its date (option B), which
+is only the fallback. The machine setup is looked up SEPARATELY by `latestSetupFor()` - the most
+recent finished session that has one, because a setup is written once and rarely repeated, so the
+latest session usually lacks it (shipped first without this; Chris: "most recent with a setup").
+Scoped to today's gym: a workout at a known DIFFERENT gym is skipped, since seat 3 on one maker's
+machine is not seat 3 on another's; a workout with no gym recorded still counts, or every setup
+written before gyms existed would be lost. Chosen over labelling the old plan with its date (option B), which
 Chris declined. Reviving a whole day exactly as it was is still "Do this workout again".
 
 **Exercise cards swipe left to delete (2026-09-28).** Every other list row in the app already did

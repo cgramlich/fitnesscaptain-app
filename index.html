@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.138.0";
+const APP_VERSION = "0.139.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-28.4";
+const BUILD = "2026-09-28.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -892,6 +892,26 @@ function latestEntryFor(workouts, exerciseId){
     if(e) return e;
   }
   return null;
+}
+
+/* The most recent machine setup written for an exercise, at this gym.
+   Separate from latestEntryFor because a setup is noted once and rarely
+   repeated - the latest session is usually the one WITHOUT it.
+
+   A workout with no gym recorded counts as a match: most history predates
+   gyms, and refusing it would lose every setup written before then. A known
+   DIFFERENT gym does not, because the numbers belong to that room's machine.
+   With no gym for today, any gym will do - there is nothing to mismatch. */
+function latestSetupFor(workouts, exerciseId, gymId){
+  if(!exerciseId) return "";
+  const ws = (workouts||[])
+    .filter(w => w.endedAt && (!gymId || !w.gymId || w.gymId === gymId)).slice()
+    .sort((a,b) => String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
+  for(const w of ws){
+    const e = (w.entries||[]).find(x => x.exerciseId === exerciseId && String(x.settings||"").trim());
+    if(e) return String(e.settings).trim();
+  }
+  return "";
 }
 
 function planOf(x){
@@ -10471,8 +10491,19 @@ function App(){
      set of anywhere else. Reviving a whole day exactly as it was is still
      "Do this workout again", which deliberately keeps its own dates. */
   const addExerciseToToday = (entry) => {
-    const item = copyEntryForToday(latestEntryFor(store.data.workouts, entry.exerciseId) || entry);
     const existing = (store.data.workouts||[]).find(x => !x.endedAt);
+    // Where today's workout is (or will be) - the setup lookup below needs it.
+    const lastGym = (store.gyms||[]).find(g => g.id === store.cfg.lastGymId) || null;
+    const gymId = existing ? existing.gymId : (lastGym ? lastGym.id : null);
+    const item = copyEntryForToday(latestEntryFor(store.data.workouts, entry.exerciseId) || entry);
+    /* THE SETUP IS SEARCHED FOR SEPARATELY. Chris, choosing: "most recent with
+       a setup." A seat-and-pin note gets written once, when you work it out,
+       and rarely again - so the latest session usually has none, and taking
+       the setup from there silently dropped the one you did write. Scoped to
+       this gym, because seat 3 on one maker's leg curl is not seat 3 on
+       another's. */
+    const setup = latestSetupFor(store.data.workouts, entry.exerciseId, gymId);
+    if(setup) item.settings = setup; else delete item.settings;
     if(existing){
       const count = (existing.entries||[]).length + 1;
       store.saveCollection("workouts", (store.data.workouts||[]).map(w =>
@@ -10484,7 +10515,7 @@ function App(){
       return;
     }
     // No workout running: start one where you already are.
-    const gym = (store.gyms||[]).find(g => g.id === store.cfg.lastGymId) || null;
+    const gym = lastGym;
     const nw = { id: uid(), name: dayPartName(), date: todayStr(),
                  startedAt: nowISO(), endedAt: null, durationMin: 0, notes: "",
                  entries: [item], gymId: gym ? gym.id : null,
