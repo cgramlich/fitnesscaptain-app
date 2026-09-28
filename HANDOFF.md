@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-27.** App `v0.134.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-28.** App `v0.135.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.134.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.135.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -126,6 +126,14 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Add to today's workout does NOT navigate (2026-09-28).** It jumped to today's workout on the
+first tap, so borrowing three exercises off last Tuesday's session was three round trips through
+history. Chris: "I want to stay on that page and pick multiple exercises, and then I can go where
+I need to." Shopping and checkout are different acts. The toast now carries the feedback the jump
+used to give - it names the exercise AND says how many are in today's workout - because you are
+adding to something you cannot see, and "added" alone cannot tell you whether the second tap
+registered. Same for the branch that starts a workout from scratch: it starts it and stays put.
 
 **Move down exists because bubble-up alone is not discoverable (2026-09-27).** Up-only is
 sufficient to reach any order, which is why it shipped alone, but only if you work out that

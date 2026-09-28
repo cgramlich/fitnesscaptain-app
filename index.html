@@ -403,10 +403,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.134.0";
+const APP_VERSION = "0.135.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-27.2";
+const BUILD = "2026-09-28.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -10366,19 +10366,31 @@ function App(){
 
      So this goes the other direction, and covers both of his cases: append
      to the live workout if there is one, otherwise start one holding just
-     this. Either way it opens the workout, because the point is to go and
-     do it. */
+     this.
+
+     IT DOES NOT NAVIGATE. Chris: "when I'm borrowing exercises from an already
+     finished workout I want to stay on that page... it automatically, if I add
+     one exercise, takes me to today's workout, and I want to pick multiple and
+     then go where I need to." Right - it jumped on the FIRST tap, which makes
+     picking three exercises off Tuesday's session a three-times round trip
+     through history. Shopping and checkout are different acts.
+
+     The toast has to carry the feedback the jump used to give, so it says how
+     many are in today's workout now: you are adding to something you cannot
+     see, and "added" alone cannot tell you whether the second tap registered.
+     Getting there is the bottom nav, or the in-progress card at the top of the
+     workouts list - both one tap, and both chosen by you. */
   const addExerciseToToday = (entry) => {
     const item = copyEntryForToday(entry);
     const existing = (store.data.workouts||[]).find(x => !x.endedAt);
     if(existing){
+      const count = (existing.entries||[]).length + 1;
       store.saveCollection("workouts", (store.data.workouts||[]).map(w =>
         w.id === existing.id
           ? { ...w, entries: [...(w.entries||[]), item], updatedAt: nowISO() }
           : w));
-      setTab("workouts"); setWorkoutId(existing.id);
-      showToast(item.name + " added to your workout");
-      log("ADD-TODAY", item.name + " -> running workout");
+      showToast(item.name + " added - " + count + " in today's workout");
+      log("ADD-TODAY", item.name + " -> running workout ("+count+")");
       return;
     }
     // No workout running: start one where you already are.
@@ -10388,8 +10400,7 @@ function App(){
                  entries: [item], gymId: gym ? gym.id : null,
                  gymName: gym ? gym.name : null };
     store.saveCollection("workouts", [nw, ...(store.data.workouts||[])]);
-    setTab("workouts"); setWorkoutId(nw.id);
-    showToast("Started a workout with " + item.name);
+    showToast("Started today's workout with " + item.name);
     log("ADD-TODAY", item.name + " -> new workout");
   };
   const repeatWorkout = (w) => {
