@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** App `v0.135.0`, backend `v0.29.0`, both live.
+**State as of 2026-09-28.** App `v0.137.0`, backend `v0.29.0`, both live.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.135.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.137.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -126,6 +126,24 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Exercise cards swipe left to delete (2026-09-28).** Every other list row in the app already did
+- workouts, gyms, routines, and the sets inside the card - so the exercise card was the one place
+you had to hunt a small x. It is also the only delete a COLLAPSED card can offer, and collapsed is
+now the resting state of anything unstarted. Undo was already there: `removeEntry` keeps the whole
+previous array and the toast puts it back. The x stays on the open card. **Nested swipe rows**: a
+card swipes and so does each set inside it, so `SwipeRow` now ignores a pointerdown whose nearest
+`.swipe-body` is not its own - otherwise dragging a set slid the card too and you could not tell
+which delete you were about to hit.
+
+**Search results lead with what you already train (2026-09-28).** This REVERSES an earlier call
+that typing a name means you have said what you want, so re-ranking the matches would only move
+it. That holds for a full name and fails for the three letters people actually type - "cur"
+matches a dozen curls, two of which are yours. Order: what this gym has, then what you have done,
+then how well the name matches (a name that starts with the query beats one that merely contains
+it - the old worry was real, it just belongs one level down), then sessions and recency. The row
+shows its session count while searching even at 1x, because an order you cannot see is a
+mysterious one. The separate "Usual" block stays a browsing-only thing.
 
 **Add to today's workout does NOT navigate (2026-09-28).** It jumped to today's workout on the
 first tap, so borrowing three exercises off last Tuesday's session was three round trips through

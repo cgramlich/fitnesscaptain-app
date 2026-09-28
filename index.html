@@ -130,6 +130,11 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .swipe-body>.item{width:100%;}
 /* set rows sit on the entry card, not the page background */
 .swipe-set{border-radius:8px;}
+/* An exercise card carries its own margin-top; on a swipe wrap that makes the
+   wrap taller than the card and the red delete panel shows above it. Spacing
+   moves to the wrap, per the note in SwipeRow. */
+.swipe-entry{margin-top:12px;}
+.swipe-entry>.swipe-body>.entry{margin-top:0;}
 .swipe-set .swipe-body{background:var(--bg-2);}
 .chip{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--bg-4);color:var(--ink-2);
   display:inline-flex;align-items:center;gap:4px;font-weight:500;letter-spacing:.01em;}
@@ -403,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.135.0";
+const APP_VERSION = "0.137.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-28.1";
+const BUILD = "2026-09-28.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1936,7 +1941,15 @@ function SwipeRow({ onDelete, className, style, children }){
   // Pointer capture is deferred until horizontal drag intent: capturing on
   // pointerdown retargets the follow-up click to the swipe body, which eats
   // desktop mouse clicks on the wrapped row's buttons (rows look dead).
-  function down(e){ st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false; }
+  function down(e){
+    /* NESTED ROWS: an exercise card swipes to delete, and so does every set
+       inside it. Without this both rows see the same pointer stream, so
+       dragging a set slides the whole card too and you cannot tell which
+       delete you are about to hit. The INNERMOST swipe body under the finger
+       owns the gesture. */
+    if(e.target && e.target.closest && e.target.closest(".swipe-body") !== e.currentTarget) return;
+    st.current = { x:e.clientX, y:e.clientY, base:dx }; moved.current = false;
+  }
   function move(e){
     if(!st.current) return;
     const ddx = e.clientX - st.current.x, ddy = e.clientY - st.current.y;
@@ -6659,14 +6672,42 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
     (usage[b.id].n - usage[a.id].n) ||
     String(usage[b.id].last).localeCompare(String(usage[a.id].last)) ||
     (a.name||"").localeCompare(b.name||"");
+  /* SEARCH RESULTS LEAD WITH WHAT YOU ALREADY TRAIN. Chris: "when I add
+     exercises manually and I start typing, it should show me ones first that
+     I already have used."
+
+     This overturns the earlier reading - that typing a name means you have
+     already said what you want, so re-ranking the matches would only move it.
+     That holds for a full name and fails for the three letters people actually
+     type: "cur" matches a dozen curls, two of which are yours.
+
+     Match QUALITY still sorts inside each half, so a name that STARTS with
+     what you typed stays above one that merely contains it. The old worry was
+     real; it just belongs one level down. Order: what this gym has, then what
+     you have done, then how well the name matches, then how often and how
+     recently you did it. */
+  const matchPos = (x) => {
+    if(!needle) return 0;
+    const nm = (x.name||"").toLowerCase();
+    return nm === needle ? 0 : (nm.indexOf(needle) === 0 ? 1 : 2);
+  };
+  const searchRank = (a,b) =>
+    (notHere(a)?1:0) - (notHere(b)?1:0) ||
+    (usage[a.id]?0:1) - (usage[b.id]?0:1) ||
+    matchPos(a) - matchPos(b) ||
+    ((usage[b.id]||{n:0}).n - (usage[a.id]||{n:0}).n) ||
+    String((usage[b.id]||{}).last||"").localeCompare(String((usage[a.id]||{}).last||"")) ||
+    (a.name||"").localeCompare(b.name||"");
   const list = (store.data.exercises||[])
     .filter(x => groupF==="all" || x.muscleGroup===groupF)
     .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
-    .slice().sort((a,b)=> (notHere(a)?1:0)-(notHere(b)?1:0) || (a.name||"").localeCompare(b.name||""));
+    .slice().sort(needle
+      ? searchRank
+      : (a,b)=> (notHere(a)?1:0)-(notHere(b)?1:0) || (a.name||"").localeCompare(b.name||""));
 
-  /* Only while BROWSING. Once you have typed a name you have said what you
-     want, and re-ranking the matches by how often you train them would just
-     move the thing you searched for. */
+  /* The separate "Usual" block stays a BROWSING thing: while searching, the
+     ranking above already does that job, and repeating those rows in a block
+     above the results would just read as duplicates. */
   const browsing = !needle;
   const usual = browsing
     ? list.filter(x => usage[x.id]).sort(usualRank).slice(0, USUAL_MAX)
@@ -6700,7 +6741,10 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
           {notHere(x) && <span className="chip red">not at this gym</span>}
           {/* How often, stated plainly - it is the reason this row is up
               here, and a ranking you cannot see is just a mysterious order. */}
-          {usage[x.id] && usage[x.id].n > 1 &&
+          {/* While SEARCHING, shown even for a single session: it is the whole
+              reason that row is above the others, and an order you cannot see
+              is a mysterious one. */}
+          {usage[x.id] && (needle || usage[x.id].n > 1) &&
             <span className="chip">{usage[x.id].n}x</span>}
         </div>
       </button>
@@ -7022,7 +7066,20 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             </button>
           </div>}
 
-        {(workout.entries||[]).map((e, i) => (
+        {/* SWIPE AN EXERCISE AWAY. Chris: "exercises in a workout need to be
+            able to slide left for delete with a brief undo." Every other list
+            row in the app already swipes - workouts, gyms, routines, and the
+            SETS inside this very card - so the exercise card was the one thing
+            you had to hunt a small x for. It is also the only delete a
+            COLLAPSED card can offer, and collapsed is now the resting state of
+            anything you have not started.
+
+            The x stays on the open card: it was there before, and taking it
+            away would be a second change nobody asked for. Undo already exists
+            - removeEntry keeps the whole previous array and the toast puts it
+            back. */}
+        {(workout.entries||[]).map((e, i) => {
+          const card = (
           <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit} live={!workout.endedAt}
             hasDemo={!!((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).demoVideoId}
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
@@ -7056,8 +7113,11 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
               if(!x || !workout.gymId || !canName(x)) return null;
               return <MachinePhoto store={store} exercise={x} gymId={workout.gymId}
                        label={machineAt(x, workout.gymId)} />;
-            })()} />
-        ))}
+            })()} />);
+          return canEdit
+            ? <SwipeRow key={e.id} className="swipe-entry" onDelete={()=>removeEntry(e.id)}>{card}</SwipeRow>
+            : <React.Fragment key={e.id}>{card}</React.Fragment>;
+        })}
 
         {canEdit &&
           <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
