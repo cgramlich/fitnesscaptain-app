@@ -222,6 +222,12 @@ svg{fill:none;stroke:currentColor;stroke-width:2;}
 .entry-head{display:flex;align-items:flex-start;gap:8px;}
 .entry-name{flex:1;min-width:0;font-weight:600;font-size:16px;}
 .entry-last{font-size:11.5px;color:var(--ink-3);margin-top:2px;font-weight:500;}
+/* Detail lines under an open exercise card's header. Some are tappable
+   (machine name, Plan - drop it, Last time - repeat it) and were buttons with
+   the browser's own padding, so they sat a few px in from the plain lines -
+   the ragged left margin. One edge for all of them. */
+.entry-detail{margin-top:4px;}
+.entry-detail .entry-last{display:block;width:100%;text-align:left;padding:0;background:none;border:0;line-height:1.45;}
 .entry-x{flex:0 0 auto;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--ink-3);}
 .entry-x svg{width:15px;height:15px;}
 .set-row{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);font-size:14.5px;width:100%;text-align:left;}
@@ -408,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.148.0";
+const APP_VERSION = "0.149.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.8";
+const BUILD = "2026-10-03.9";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6599,8 +6605,8 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
 
   return (
     <div className="entry">
-      <div className="entry-head">
-        <div style={{flex:1,minWidth:0}}>
+      <div className="entry-head" style={{flexWrap:"wrap",rowGap:4}}>
+        <div style={{flex:"1 1 55%",minWidth:0}}>
           {/* Tapping the name opens the panel - but an underline is a weak
               signal next to the (i) used everywhere else, and Chris went
               looking for an explanation without finding one. Both work now. */}
@@ -6608,106 +6614,11 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
             style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
             {entry.name}
           </div>
-          {/* Say WHY this differs from the routine. Without it a swapped
-              exercise looks like the app lost your plan. */}
-          {entry.substitutedFor &&
-            <div className="entry-last">standing in for {entry.substitutedFor}</div>}
-          {/* Which unit this is, at this gym. Sits with the substitution
-              note because both answer the same question: why is this not
-              quite the thing you were expecting. */}
-          {/* Editable in place when the caller says this exercise can carry
-              one, which it does for any apparatus at a known gym - see
-              canName. Absent otherwise, so a push-up gains no chrome. */}
-          {namingMachine && onMachineLabel
-            ? <ClearInput style={{marginTop:4,fontSize:14}} autoFocus
-                defaultValue={machineLabel || ""} maxLength={24}
-                placeholder="e.g. IM2000"
-                onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
-                onBlur={e=>{ const v=e.target.value.trim();
-                  if(v !== (machineLabel||"")) onMachineLabel(v);
-                  setNamingMachine(false); }} />
-            : machineLabel
-              ? <button className="entry-last" style={{color:"var(--ink-2)",textAlign:"left",
-                  textDecorationLine: onMachineLabel ? "underline" : "none",
-                  textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}
-                  onClick={()=>{ if(onMachineLabel) setNamingMachine(true); }}>
-                  on the {machineLabel}
-                </button>
-              : onMachineLabel && active
-                ? <button className="entry-last" style={{color:"var(--ink-3)",textAlign:"left"}}
-                    onClick={()=>setNamingMachine(true)}>
-                    + name this {machineNoun || "machine"}
-                  </button>
-                : null}
-          {/* Mobility carries targets too, so this can't be gated on strength.
-              Clearable while the workout is live, because "repeat last time"
-              below is one tap and a prescription you cannot take back is a
-              trap - the card would go on telling you five sets were owed. */}
-          {plan
-            ? (active && onUpdate
-                /* SAYS it is a button. It was styled exactly like the two lines
-                   under it - "Up next" and "Last time" - one of which is inert
-                   and one of which announces itself with an underline and a
-                   "- repeat it". So this sat between them as an invisible
-                   control, and Chris found it by hitting the confirm dialog
-                   without meaning to and having to ask what it was. Same
-                   affordance as its neighbour now, and the label says what
-                   tapping does rather than leaving it to the dialog. */
-                ? <button className="entry-last" style={{color:"var(--amber-2)",textAlign:"left",
-                      textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
-                      textUnderlineOffset:3}}
-                    onClick={()=>{ if(confirm("Drop the plan for "+entry.name+"? Logged sets stay."))
-                      onUpdate(e => ({ ...e, plan: undefined })); }}>
-                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ", a different machine - check the weight)" : ""} - drop it
-                  </button>
-                : <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
-                  </div>)
-            : entry.targetSets>0 &&
-              <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                Target: {entry.targetSets} x {entry.targetReps}
-              </div>}
-          {plan && planned &&
-            <div className="entry-last">
-              Up next: set {sets.length+1} of {plan.length} - {planned.reps} x {fmtW(planned.weight)} {units}
-            </div>}
-          {/* REPEAT IT. Chris: "can I copy an exercise card from a past workout
-              to today's?" The information he wanted to copy was already on this
-              line - it just was not something you could act on, so the only way
-              to work through last Tuesday's scheme again was to read it off and
-              retype every set.
-
-              Copying it HERE rather than from the old workout means no
-              navigating to history and back, and it works the same whether the
-              exercise arrived from a routine, a program or the picker. It
-              writes a plan, not sets: what you did stays something you have to
-              go and do again, and the Plan line above drops it. */}
-          {prev && !isCardio && !plan && active && onUpdate &&
-            <button className="entry-last" style={{textAlign:"left",
-                textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
-                textUnderlineOffset:3}}
-              onClick={()=>onUpdate(e => ({ ...e,
-                plan: planFromSets(prev.sets),
-                // Same reasoning as a copied entry: only fill it if this
-                // card has none, so a setup you already typed is not lost.
-                settings: e.settings || (prev.settings || undefined) }))}>
-              Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)} - repeat it
-            </button>}
-          {prev && !isCardio && (plan || !active) &&
-            <div className="entry-last">
-              Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)}
-            </div>}
-          {restSecs !== undefined && restSecs !== null && !isCardio &&
-            <div className="entry-last">
-              Rest {restSecs===0 ? "off" : (restSecs>=60 ? (restSecs/60)+" min" : restSecs+"s")}
-            </div>}
-          {/* Machine setup from the last time you did this - the numbers you
-              otherwise rediscover by trial and error every visit. */}
-          {(entry.settings || (prev && prev.settings)) && !isCardio &&
-            <div className="entry-last" style={{color:"var(--amber-2)"}}>
-              {entry.settings || prev.settings}
-            </div>}
         </div>
+        {/* The controls travel as ONE group: beside the name when they fit,
+            on their own line when they do not - never split, and never
+            squeezing a name like Wide-Grip Lat Pulldown onto three lines. */}
+        <span style={{display:"inline-flex",alignItems:"center",gap:8,marginLeft:"auto",flex:"0 0 auto"}}>
         {/* Visible while scrolling, so you can see what is left without
             opening each card. */}
         {targetCount > 0 && sets.length >= targetCount &&
@@ -6754,6 +6665,116 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
           <button className="entry-x" onClick={onRemove} aria-label={"Remove "+entry.name}>
             <Icon d={ICONS.x} size={15}/>
           </button>}
+        </span>
+      </div>
+      {/* THE DETAIL LINES, AT FULL WIDTH. Chris: "how do we clean up how this is
+          displayed? It looks sloppy on the left margin." They lived in the name
+          column of the header row, which shares its width with up to seven
+          controls - so "Wide-Grip Lat Pulldown" broke over three lines and the
+          plan over five. The header row now holds only the name and the controls;
+          everything that describes the exercise sits here, across the card, on
+          one left edge (.entry-detail zeroes the padding that tappable lines
+          carried as buttons, which is what made the margin ragged). */}
+      <div className="entry-detail">
+            {/* Say WHY this differs from the routine. Without it a swapped
+                exercise looks like the app lost your plan. */}
+            {entry.substitutedFor &&
+              <div className="entry-last">standing in for {entry.substitutedFor}</div>}
+            {/* Which unit this is, at this gym. Sits with the substitution
+                note because both answer the same question: why is this not
+                quite the thing you were expecting. */}
+            {/* Editable in place when the caller says this exercise can carry
+                one, which it does for any apparatus at a known gym - see
+                canName. Absent otherwise, so a push-up gains no chrome. */}
+            {namingMachine && onMachineLabel
+              ? <ClearInput style={{marginTop:4,fontSize:14}} autoFocus
+                  defaultValue={machineLabel || ""} maxLength={24}
+                  placeholder="e.g. IM2000"
+                  onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
+                  onBlur={e=>{ const v=e.target.value.trim();
+                    if(v !== (machineLabel||"")) onMachineLabel(v);
+                    setNamingMachine(false); }} />
+              : machineLabel
+                ? <button className="entry-last" style={{color:"var(--ink-2)",textAlign:"left",
+                    textDecorationLine: onMachineLabel ? "underline" : "none",
+                    textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}
+                    onClick={()=>{ if(onMachineLabel) setNamingMachine(true); }}>
+                    on the {machineLabel}
+                  </button>
+                : onMachineLabel && active
+                  ? <button className="entry-last" style={{color:"var(--ink-3)",textAlign:"left"}}
+                      onClick={()=>setNamingMachine(true)}>
+                      + name this {machineNoun || "machine"}
+                    </button>
+                  : null}
+            {/* Mobility carries targets too, so this can't be gated on strength.
+                Clearable while the workout is live, because "repeat last time"
+                below is one tap and a prescription you cannot take back is a
+                trap - the card would go on telling you five sets were owed. */}
+            {plan
+              ? (active && onUpdate
+                  /* SAYS it is a button. It was styled exactly like the two lines
+                     under it - "Up next" and "Last time" - one of which is inert
+                     and one of which announces itself with an underline and a
+                     "- repeat it". So this sat between them as an invisible
+                     control, and Chris found it by hitting the confirm dialog
+                     without meaning to and having to ask what it was. Same
+                     affordance as its neighbour now, and the label says what
+                     tapping does rather than leaving it to the dialog. */
+                  ? <button className="entry-last" style={{color:"var(--amber-2)",textAlign:"left",
+                        textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
+                        textUnderlineOffset:3}}
+                      onClick={()=>{ if(confirm("Drop the plan for "+entry.name+"? Logged sets stay."))
+                        onUpdate(e => ({ ...e, plan: undefined })); }}>
+                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ", a different machine - check the weight)" : ""} - drop it
+                    </button>
+                  : <div className="entry-last" style={{color:"var(--amber-2)"}}>
+                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
+                    </div>)
+              : entry.targetSets>0 &&
+                <div className="entry-last" style={{color:"var(--amber-2)"}}>
+                  Target: {entry.targetSets} x {entry.targetReps}
+                </div>}
+            {plan && planned &&
+              <div className="entry-last">
+                Up next: set {sets.length+1} of {plan.length} - {planned.reps} x {fmtW(planned.weight)} {units}
+              </div>}
+            {/* REPEAT IT. Chris: "can I copy an exercise card from a past workout
+                to today's?" The information he wanted to copy was already on this
+                line - it just was not something you could act on, so the only way
+                to work through last Tuesday's scheme again was to read it off and
+                retype every set.
+  
+                Copying it HERE rather than from the old workout means no
+                navigating to history and back, and it works the same whether the
+                exercise arrived from a routine, a program or the picker. It
+                writes a plan, not sets: what you did stays something you have to
+                go and do again, and the Plan line above drops it. */}
+            {prev && !isCardio && !plan && active && onUpdate &&
+              <button className="entry-last" style={{textAlign:"left",
+                  textDecorationLine:"underline",textDecorationColor:"var(--line-2)",
+                  textUnderlineOffset:3}}
+                onClick={()=>onUpdate(e => ({ ...e,
+                  plan: planFromSets(prev.sets),
+                  // Same reasoning as a copied entry: only fill it if this
+                  // card has none, so a setup you already typed is not lost.
+                  settings: e.settings || (prev.settings || undefined) }))}>
+                Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)} - repeat it
+              </button>}
+            {prev && !isCardio && (plan || !active) &&
+              <div className="entry-last">
+                Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)}
+              </div>}
+            {restSecs !== undefined && restSecs !== null && !isCardio &&
+              <div className="entry-last">
+                Rest {restSecs===0 ? "off" : (restSecs>=60 ? (restSecs/60)+" min" : restSecs+"s")}
+              </div>}
+            {/* Machine setup from the last time you did this - the numbers you
+                otherwise rediscover by trial and error every visit. */}
+            {(entry.settings || (prev && prev.settings)) && !isCardio &&
+              <div className="entry-last" style={{color:"var(--amber-2)"}}>
+                {entry.settings || prev.settings}
+              </div>}
       </div>
 
       {!isCardio && sets.map((s,i)=>{
