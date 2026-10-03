@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.147.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.148.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -129,7 +129,7 @@ cannot see. Reviewing a **past** workout still expands everything - `collapsed` 
 
 **The coach adds mid-workout from a sparkle beside Add exercise (2026-10-03, v0.147.0).** Chris: "have the AI universal symbol there so I can ask it to add an exercise." It opens the same session builder with `addTo` = the live workout: it is told what is already in the session (so it neither repeats nor piles on), uses the workout's gym, gets NO time budget (a "45 minutes" line beside "add one exercise" invites a whole new session), hides the minutes picker, and offers add-shaped starters. The picker's "Ask for ideas" opens the same mode when a workout is live.
 
-**Standing rule (Chris, 2026-10-03): every AI answer can be replied to.** Only the coach could; the rest are being given a shared reply box - advice features first, then the data ones (imports, scan, organize, sort), where a reply means "fix it" and redoes the preview before anything saves.
+**Standing rule (Chris, 2026-10-03): every AI answer can be replied to.** One shared `AIReply` box. The thread is REBUILT from what is on screen (original question + the answer as it stands + this visit's turns), so it works on an answer saved weeks ago. Three shapes: (1) conversation only (check-in reading - a reply never replaces the week's reading); (2) conversation + "Use this" for saved answers (how-to in the help panel and the exercise editor, gym setup) - the first version overwrote on every reply, which turned "why this cue?" into a replacement how-to; (3) `onResult` for DATA answers (swap suggestion, program builder / paste-a-program preview), where the caller re-parses and redraws. Batch 1 shipped v0.148.0; batch 2 (import history, gym scan, organize, sort) next. New AI features must ship with a reply box.
 
 **"Your latest" is THIS gym's latest, for machines (2026-10-03, v0.146.0).** Chris: "on my lat
 pull-downs it grabbed the lat pull-downs from my Dallas gym, not the River Crossing gym." It took

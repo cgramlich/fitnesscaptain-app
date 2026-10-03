@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.147.0";
+const APP_VERSION = "0.148.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.7";
+const BUILD = "2026-10-03.8";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -3178,16 +3178,16 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
   // "How do I do this?" - the explain_exercise relay task writes form cues
   // into the notes; the user reviews and Saves (nothing persists until then),
   // and the result is cached on the exercise from then on.
+  const explainSystem = "You write concise exercise instructions as plain text (no markdown, no headers). " +
+    "Structure: one setup line; 2-4 numbered execution steps; then 'Cues:' with 2-3 short cues; " +
+    "then 'Avoid:' with 1-2 common mistakes. Under 130 words total. No introduction or closing. " +
+    "If they reply with a question, answer it briefly. If they ask for a change, give the whole rewritten version.";
+  const explainBase = [{ role:"user", content: "Exercise: "+name.trim()+". Type: "+type+". Muscle group: "+group+". Equipment: "+equip+"." }];
   const explain = async () => {
     if(!name.trim()){ setExplainErr("Name the exercise first."); return; }
     setExplaining(true); setExplainErr("");
     try{
-      const system = "You write concise exercise instructions as plain text (no markdown, no headers). " +
-        "Structure: one setup line; 2-4 numbered execution steps; then 'Cues:' with 2-3 short cues; " +
-        "then 'Avoid:' with 1-2 common mistakes. Under 130 words total. No introduction or closing.";
-      const out = await aiRelay("explain_exercise",
-        [{ role:"user", content: "Exercise: "+name.trim()+". Type: "+type+". Muscle group: "+group+". Equipment: "+equip+"." }],
-        { system, maxTokens: 1000 });
+      const out = await aiRelay("explain_exercise", explainBase, { system: explainSystem, maxTokens: 1000 });
       if(out && out.trim()) setNotes(out.trim());
       else throw new Error("No instructions came back - try again.");
     }catch(e){ setExplainErr(e.message||"Couldn't fetch instructions."); }
@@ -3320,6 +3320,10 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
           <ClearTextarea className="textarea" style={notes.length>200 ? {minHeight:170} : null}
             value={notes} onChange={e=>setNotes(e.target.value)}
             placeholder="Form cues, seat settings, anything worth remembering." />
+          {notes.trim() && name.trim() &&
+            <AIReply task="explain_exercise" system={explainSystem} maxTokens={1000}
+              base={explainBase} answer={notes} onUse={(t)=>setNotes(t)} useLabel="Put this in the notes"
+              placeholder="Reply - simpler, I use a cable, why this cue?" />}
           {explainErr && <div className="auth-msg err" style={{marginTop:8,marginBottom:0}}>{explainErr}</div>}
           <div className="row" style={{marginTop:8}}>
             <button className="btn btn-ghost btn-sm" disabled={explaining} onClick={explain}>
@@ -5960,6 +5964,83 @@ function ClearTextarea(props){
 }
 
 /* ============================================================
+   REPLY TO ANY AI ANSWER. Chris (2026-10-03): "anytime we have AI
+   functionality, there should always be a chance to have a discussion -
+   a chance to reply to an answer." Only the coach could; every other AI
+   feature gave one answer and a "do it again" button that rolled the dice
+   with no way to say WHAT was wrong.
+
+   One box, used everywhere. The thread is REBUILT from what is on screen
+   rather than stored: the original question (base), the answer as it
+   stands (which may be one saved weeks ago, or hand-edited since), then
+   this visit's back-and-forth. So it works on an old cached answer exactly
+   as on a fresh one.
+
+   REPLIES ARE A CONVERSATION, NOT AN OVERWRITE. The first version swapped
+   the saved answer for whatever came back - which is right for "make it
+   simpler" and wrong for "why this cue?", where it would have replaced the
+   how-to with an explanation of it. So replies show under the original as
+   You / Coach, and where the original is something SAVED (the how-to, a
+   gym setup), each reply carries a "Use this" link (onUse) that saves it in
+   its place. Nothing is overwritten unless you tap that.
+
+   onResult is the third shape, for answers that are DATA rather than prose
+   (a swap suggestion, an import preview): the caller parses and redraws its
+   own card from the reply, and only "You: ..." shows here - raw JSON in a
+   chat bubble would be noise.
+   ============================================================ */
+function AIReply({ task, system, maxTokens, base, answer, onUse, useLabel, onResult, placeholder }){
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr]   = useState("");
+  const [turns, setTurns] = useState([]);   // this visit's [{you, ai}]
+  const send = async () => {
+    const t = text.trim();
+    if(!t || busy) return;
+    setBusy(true); setErr("");
+    try{
+      const thread = [{ role:"assistant", content: String(answer||"") }];
+      turns.forEach(tn => { thread.push({ role:"user", content: tn.you });
+                            thread.push({ role:"assistant", content: tn.ai }); });
+      thread.push({ role:"user", content: t });
+      const out = await aiRelay(task, base.concat(thread), { system, maxTokens: maxTokens || 1000 });
+      if(!out || !out.trim()) throw new Error("Nothing came back - try again.");
+      if(onResult) onResult(out.trim());
+      setTurns(ts => ts.concat([{ you: t, ai: out.trim() }]));
+      setText("");
+    }catch(e){ setErr(e.message || "Couldn't send that."); }
+    finally{ setBusy(false); }
+  };
+  return (
+    <div style={{marginTop:10}}>
+      {onResult && turns.length > 0 &&
+        <div className="hint" style={{margin:"0 0 6px"}}>You: {turns[turns.length-1].you}</div>}
+      {!onResult && turns.map((tn, k) => (
+        <div key={k} style={{marginTop:8}}>
+          <div className="hint" style={{margin:0}}>You: {tn.you}</div>
+          <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5,marginTop:4}}>{tn.ai}</div>
+          {onUse &&
+            <button className="entry-last" style={{textDecorationLine:"underline",
+                textDecorationColor:"var(--line-2)",textUnderlineOffset:3,color:"var(--amber-2)"}}
+              onClick={()=>{ onUse(tn.ai); setTurns([]); }}>
+              {useLabel || "Use this"}
+            </button>}
+        </div>
+      ))}
+      <div className="row" style={{gap:8,alignItems:"center",marginTop: turns.length ? 10 : 0}}>
+        <ClearInput value={text} onChange={e=>setText(e.target.value)} style={{flex:1}}
+          placeholder={placeholder || "Reply - ask why, or ask for a change"}
+          onKeyDown={e=>{ if(e.key === "Enter"){ e.preventDefault(); send(); } }} />
+        <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}} disabled={busy || !text.trim()} onClick={send}>
+          {busy ? <span className="spin"></span> : "Reply"}
+        </button>
+      </div>
+      {err && <div className="auth-msg err" style={{marginTop:8,marginBottom:0}}>{err}</div>}
+    </div>
+  );
+}
+
+/* ============================================================
    WORKOUT LOGGING - the product. Big tap targets, pre-filled from last
    time, +/- steppers, rest timer. One JSONB doc per workout.
    ============================================================ */
@@ -6967,23 +7048,27 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
     return () => { alive = false; };
   }, [shownName]);
 
+  // The question, held outside writeCues so a reply can rebuild it.
+  const cuesSystem = "You write concise exercise instructions as plain text (no markdown, no headers). " +
+    "Structure: one setup line; 2-4 numbered execution steps; then 'Cues:' with 2-3 short cues; " +
+    "then 'Avoid:' with 1-2 common mistakes. Under 130 words total. No introduction or closing. " +
+    "If they reply with a question, answer it briefly. If they ask for a change, give the whole rewritten version.";
+  const cuesBase = [{ role:"user", content: "Exercise: "+name+"." +
+    (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." +
+          " Equipment: "+(ex.equipment||"none")+"." : "") }];
+  const saveCues = (text) => {
+    if(ex){
+      store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+        x.id===ex.id ? { ...x, notes: text, updatedAt: nowISO() } : x));
+    }else{ setErr("Saved nowhere - this movement isn't in your library yet."); }
+  };
   const writeCues = async () => {
     setBusy(true); setErr("");
     try{
-      const system = "You write concise exercise instructions as plain text (no markdown, no headers). " +
-        "Structure: one setup line; 2-4 numbered execution steps; then 'Cues:' with 2-3 short cues; " +
-        "then 'Avoid:' with 1-2 common mistakes. Under 130 words total. No introduction or closing.";
-      const out = await aiRelay("explain_exercise",
-        [{ role:"user", content: "Exercise: "+name+"." +
-            (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." +
-                  " Equipment: "+(ex.equipment||"none")+"." : "") }],
-        { system, maxTokens: 1000 });
+      const out = await aiRelay("explain_exercise", cuesBase, { system: cuesSystem, maxTokens: 1000 });
       const text = (out||"").trim();
       if(!text) throw new Error("Nothing came back - try again.");
-      if(ex){
-        store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
-          x.id===ex.id ? { ...x, notes: text, updatedAt: nowISO() } : x));
-      }else{ setErr("Saved nowhere - this movement isn't in your library yet."); }
+      saveCues(text);
     }catch(e){ setErr(e.message||"Couldn't write it."); log("ERROR","explain_exercise: "+e.message); }
     finally{ setBusy(false); }
   };
@@ -7004,27 +7089,31 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
   };
   const setupText = chosenGym ? setups[chosenGym.id] : null;
 
+  const setupSystem = "You adapt one exercise to the equipment a gym actually has. " +
+    "You are given an inventory list. Use ONLY items on that list - never assume anything else is there. " +
+    "Give 2-3 options as plain text (no markdown), each on its own line as " +
+    "'Option N - <equipment>: <one sentence setup>'. Order them best-first, closest to the real movement first. " +
+    "If the inventory genuinely cannot support this movement or anything close, say so in one sentence and " +
+    "name the single nearest substitute instead. Under 120 words. No introduction or closing. " +
+    "If they reply (the bench is taken, that hurts my shoulder, why that one?), answer it briefly and, " +
+    "when it changes the options, give the revised options in the same format.";
+  const setupBase = chosenGym ? [{ role:"user", content: "Exercise: "+name+"." +
+    (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." : "") +
+    " Gym: "+chosenGym.name+". Inventory: "+(chosenGym.equipment||[]).join(", ")+"." }] : [];
+  const saveSetup = (text) => {
+    if(ex && chosenGym){
+      store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
+        x.id===ex.id ? { ...x, setups: {...(x.setups||{}), [chosenGym.id]: text}, updatedAt: nowISO() } : x));
+    }else{ setSetupErr("This movement isn't in your library yet, so the answer can't be saved."); }
+  };
   const findSetup = async () => {
     if(!chosenGym) return;
     setSetupBusy(true); setSetupErr("");
     try{
-      const system = "You adapt one exercise to the equipment a gym actually has. " +
-        "You are given an inventory list. Use ONLY items on that list - never assume anything else is there. " +
-        "Give 2-3 options as plain text (no markdown), each on its own line as " +
-        "'Option N - <equipment>: <one sentence setup>'. Order them best-first, closest to the real movement first. " +
-        "If the inventory genuinely cannot support this movement or anything close, say so in one sentence and " +
-        "name the single nearest substitute instead. Under 120 words. No introduction or closing.";
-      const out = await aiRelay("adapt_exercise",
-        [{ role:"user", content: "Exercise: "+name+"." +
-            (ex ? " Type: "+(ex.type||"strength")+". Muscle group: "+(ex.muscleGroup||"")+"." : "") +
-            " Gym: "+chosenGym.name+". Inventory: "+(chosenGym.equipment||[]).join(", ")+"." }],
-        { system, maxTokens: 900 });
+      const out = await aiRelay("adapt_exercise", setupBase, { system: setupSystem, maxTokens: 900 });
       const text = (out||"").trim();
       if(!text) throw new Error("Nothing came back - try again.");
-      if(ex){
-        store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
-          x.id===ex.id ? { ...x, setups: {...(x.setups||{}), [chosenGym.id]: text}, updatedAt: nowISO() } : x));
-      }else{ setSetupErr("This movement isn't in your library yet, so the answer can't be saved."); }
+      saveSetup(text);
       log("SETUP", name+" @ "+chosenGym.name);
     }catch(e){ setSetupErr(e.message||"Couldn't work it out."); log("ERROR","adapt_exercise: "+e.message); }
     finally{ setSetupBusy(false); }
@@ -7099,6 +7188,10 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
           {notes
             ? <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5}}>{notes}</div>
             : <p className="hint" style={{marginTop:0}}>Nothing written down yet.</p>}
+          {notes && ex &&
+            <AIReply task="explain_exercise" system={cuesSystem} maxTokens={1000}
+              base={cuesBase} answer={notes} onUse={saveCues} useLabel="Use this as the how-to"
+              placeholder="Reply - simpler, I use a cable, why this cue?" />}
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
           <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
             disabled={busy} onClick={writeCues}>
@@ -7159,6 +7252,10 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
                       Nothing on file for {chosenGym.name} yet. Scan it or add kit by hand
                       and I can work out how to do this there.
                     </p>}
+            {setupText && chosenGym && ex &&
+              <AIReply key={chosenGym.id} task="adapt_exercise" system={setupSystem} maxTokens={900}
+                base={setupBase} answer={setupText} onUse={saveSetup} useLabel="Use this for this gym"
+                placeholder="Reply - the bench is taken, that hurts my shoulder..." />}
             {setupErr && <div className="auth-msg err" style={{marginTop:10}}>{setupErr}</div>}
             {chosenGym && hasKit &&
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
@@ -8457,6 +8554,9 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
   const build = mode === "build";
   const units = store.cfg.units || "lb";
   const [phase, setPhase] = useState(build ? "intake" : "paste");   // intake | paste | busy | review
+  // The question behind the preview, so a reply ("make day 2 shorter", "that
+  // was a superset, not two exercises") can redo it rather than starting over.
+  const [conv, setConv] = useState(null);   // {task, system, base, answer, gym}
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const [parsed, setParsed] = useState([]);
@@ -8545,10 +8645,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         "Supersets become separate consecutive items. " +
         (gymNames.length ? 'gym: one of "'+gymNames.join('", "')+'" when the text names it, else null. ' : "gym: always null. ") +
         "Never invent routines or exercises not in the text.";
-      const out = await aiRelay("import_routines",
-        [{ role:"user", content: t.slice(0, 20000) }],
-        { system, maxTokens: 8000 });
+      const base = [{ role:"user", content: t.slice(0, 20000) }];
+      const out = await aiRelay("import_routines", base, { system, maxTokens: 8000 });
       await toReview(out, undefined);
+      setConv({ task:"import_routines", system, base, answer: out, gym: undefined });
       log("IMPORT","parsed routines from paste");
     }catch(e){
       setErr(e.message||"Import failed."); setPhase("paste");
@@ -8623,10 +8723,10 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
         (ctx.length ? "Athlete: " + ctx.join(" ") + "\n" : "") +
         "Time: " + bMins + " minutes per day, " + bDays + " days per week." +
         (gym ? "\nTraining at: " + gym.name + "." : "\nNo fixed gym - traveling.");
-      const out = await aiRelay("routine_suggest",
-        [{ role:"user", content: user }],
-        { system: system + coaching, maxTokens: 8000 });
+      const base = [{ role:"user", content: user }];
+      const out = await aiRelay("routine_suggest", base, { system: system + coaching, maxTokens: 8000 });
       await toReview(out, gym);
+      setConv({ task:"routine_suggest", system: system + coaching, base, answer: out, gym });
       if(age && age !== store.cfg.age) store.saveCfg({ ...store.cfg, age });
       log("BUILD","program built ("+bDays+"d x "+bMins+"min"+(age?", age "+age:"")+")");
     }catch(e){
@@ -8761,6 +8861,17 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
           <p className="hint" style={{marginTop:4}}>
             Review before saving. Exercises marked "new" will be added to your library.
           </p>
+          {/* Reply to change the preview before anything is saved. The answer
+              must come back in the same JSON, so the system prompt already
+              asking for that shape is reused, with one line telling it a
+              reply means "redo it with this change". */}
+          {conv &&
+            <AIReply task={conv.task} maxTokens={8000} base={conv.base} answer={conv.answer}
+              system={conv.system + " If they reply with a correction or change, return the WHOLE " +
+                      "result again in the same JSON shape with the change made."}
+              onResult={async (out)=>{ setErr(""); try{ await toReview(out, conv.gym); }
+                                       catch(e){ setErr(e.message || "Couldn't read that - try saying it another way."); } }}
+              placeholder={build ? "Reply - make day 2 shorter, swap the squats..." : "Reply - that was a superset, day 3 is legs..."} />}
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
           {parsed.map((r,i) => (
             <div key={i} className="entry" style={{opacity: r.include?1:.45}}>
@@ -9493,10 +9604,10 @@ function CheckInCard({ store }){
   const best = d.lifts.length ? d.lifts[0] : null;
   const worst = d.lifts.length > 1 ? d.lifts[d.lifts.length-1] : null;
 
-  const read = async () => {
-    setBusy(true); setErr("");
-    try{
-      const system =
+  /* Held outside read() so a reply can rebuild the question. A reply is a
+     CONVERSATION here ("why chest?", "I was sick that week") - it never
+     replaces the week's reading, which stays the thing you came to see. */
+  const readSystem =
         "You are reading one person's training numbers and telling them what to change. " +
         "Plain text, no markdown, no headers, no greeting, no sign-off. Under 150 words. " +
         "Structure: what moved, what stalled, then ONE change to make next week. " +
@@ -9510,10 +9621,12 @@ function CheckInCard({ store }){
         "NEVER give calorie, protein, macro or medication advice, and never suggest a rate of weight loss - " +
         "if bodyweight is falling faster than their guard, say that plainly, note that this is where muscle " +
         "loss comes from, and tell them to raise it with their prescriber. Nothing more.";
-      const out = await aiRelay("progress_summary",
-        [{ role:"user", content: "My training numbers as JSON. Weights in " + d.units + ".\n" +
-            JSON.stringify(d) }],
-        { system, maxTokens: 900 });
+  const readBase = [{ role:"user", content: "My training numbers as JSON. Weights in " + d.units + ".\n" +
+                      JSON.stringify(d) }];
+  const read = async () => {
+    setBusy(true); setErr("");
+    try{
+      const out = await aiRelay("progress_summary", readBase, { system: readSystem, maxTokens: 900 });
       const text = (out||"").trim();
       if(!text) throw new Error("Nothing came back - try again.");
       store.saveCfg({ ...store.cfg, checkin: { week: d.generatedFor, text, at: nowISO() } });
@@ -9591,6 +9704,11 @@ function CheckInCard({ store }){
 
         {fresh &&
           <div style={{whiteSpace:"pre-wrap",fontSize:14.5,lineHeight:1.5,marginTop:12}}>{fresh.text}</div>}
+        {fresh &&
+          <AIReply key={fresh.at} task="progress_summary" maxTokens={700} base={readBase} answer={fresh.text}
+            system={readSystem + " If they reply, answer that question in plain text, briefly, citing " +
+                    "the numbers; do not repeat the whole reading."}
+            placeholder="Reply - why chest? I was sick that week..." />}
         {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
 
         {/* Below four sessions a "trend" is noise. Saying so is more useful
@@ -9704,31 +9822,34 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
      advice and left you to go create the exercise yourself. Now the
      suggestion is acceptable in one tap and joins the library as a custom
      exercise, so its history starts accumulating like any other. */
+  const swapSystem = "You name ONE replacement exercise. Reply with STRICT JSON only, no markdown, " +
+    'no prose: {"name": "...", "equipment": "...", "why": "..."}. ' +
+    "equipment must be exactly one of: " + JSON.stringify(EQUIPMENT) + ", and must be something the " +
+    "gym's inventory actually supports - bodyweight is always allowed. " +
+    "why is one short clause, under 15 words, on what makes it a fair stand-in. " +
+    'If nothing can train the same thing here, reply {"name": null, "why": "<one sentence saying so>"}. ' +
+    "Never invent equipment that is not on the inventory. If they reply (not that one, no bench free, " +
+    "why?), answer in the SAME JSON shape - a different option, or the same one with the why answering them.";
+  const swapBase = (ex) => [{ role:"user", content: "Replace: "+ex.name+" (trains "+(ex.muscleGroup||"?")+", needs "+
+    (ex.equipment||"none")+"). Gym: "+gym.name+". Inventory: "+(gym.equipment||[]).join(", ")+"." }];
+  const applyIdea = (it, out) => {
+    let obj = null;
+    try{
+      const m = String(out||"").match(/\{[\s\S]*\}/);
+      obj = m ? JSON.parse(m[0]) : null;
+    }catch(e){ obj = null; }
+    if(!obj) throw new Error("Couldn't read the answer - try again.");
+    setIdeas(prev => ({...prev, [it.id]: {
+      name: obj.name || null,
+      equipment: EQUIPMENT.indexOf(obj.equipment) !== -1 ? obj.equipment : "bodyweight",
+      why: String(obj.why||"").trim(),
+    }}));
+  };
   const askAI = async (it, ex) => {
     setAsking(it.id); setAskErr("");
     try{
-      const system = "You name ONE replacement exercise. Reply with STRICT JSON only, no markdown, " +
-        'no prose: {"name": "...", "equipment": "...", "why": "..."}. ' +
-        "equipment must be exactly one of: " + JSON.stringify(EQUIPMENT) + ", and must be something the " +
-        "gym's inventory actually supports - bodyweight is always allowed. " +
-        "why is one short clause, under 15 words, on what makes it a fair stand-in. " +
-        'If nothing can train the same thing here, reply {"name": null, "why": "<one sentence saying so>"}. ' +
-        "Never invent equipment that is not on the inventory.";
-      const out = await aiRelay("adapt_exercise",
-        [{ role:"user", content: "Replace: "+ex.name+" (trains "+(ex.muscleGroup||"?")+", needs "+
-            (ex.equipment||"none")+"). Gym: "+gym.name+". Inventory: "+(gym.equipment||[]).join(", ")+"." }],
-        { system, maxTokens: 300 });
-      let obj = null;
-      try{
-        const m = String(out||"").match(/\{[\s\S]*\}/);
-        obj = m ? JSON.parse(m[0]) : null;
-      }catch(e){ obj = null; }
-      if(!obj) throw new Error("Couldn't read the answer - try again.");
-      setIdeas(prev => ({...prev, [it.id]: {
-        name: obj.name || null,
-        equipment: EQUIPMENT.indexOf(obj.equipment) !== -1 ? obj.equipment : "bodyweight",
-        why: String(obj.why||"").trim(),
-      }}));
+      const out = await aiRelay("adapt_exercise", swapBase(ex), { system: swapSystem, maxTokens: 300 });
+      applyIdea(it, out);
     }catch(e){ setAskErr(e.message||"Couldn't get an option."); log("ERROR","substitute: "+e.message); }
     finally{ setAsking(null); }
   };
@@ -9844,6 +9965,11 @@ function StartCheck({ store, routine, gym, onEditGym, onStart, onCancel }){
                 : <p className="hint" style={{marginTop:8,marginBottom:0}}>{ideas[it.id].why}</p>)}
               {ideas[it.id] && ideas[it.id].name && ideas[it.id].why &&
                 <p className="hint" style={{marginTop:4,marginBottom:0}}>{ideas[it.id].why}</p>}
+              {ideas[it.id] &&
+                <AIReply task="adapt_exercise" system={swapSystem} maxTokens={300}
+                  base={swapBase(ex)} answer={JSON.stringify(ideas[it.id])}
+                  onResult={(out)=>{ try{ applyIdea(it, out); }catch(e){ setAskErr(e.message); } }}
+                  placeholder="Reply - not that one, no bench free, why?" />}
 
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}}
                 disabled={asking===it.id} onClick={()=>askAI(it, ex)}>
