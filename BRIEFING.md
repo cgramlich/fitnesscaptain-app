@@ -1,7 +1,7 @@
 # FitnessCaptain — BRIEFING
 
 **Deck-ready. Written to leave the machine.** Derived from `HANDOFF.md`, which is authoritative
-if a figure here disagrees. Current as of **2026-08-28**, app v0.122.0 / backend v0.29.0.
+if a figure here disagrees. Current as of **2026-10-03**, app v0.151.0 / backend v0.30.0.
 
 > **Every training example in this file is fabricated** to match the real shape of the data.
 > No actual workout history, bodyweight, or health metric appears here, by design.
@@ -39,13 +39,13 @@ by one person working with an AI pair, at roughly one release per working day ac
 | Figure | Value | As of |
 |---|---|---|
 | Reference exercise library | **873 movements**, with equipment, muscle group and written how-to | shipped |
-| Application size | **~10,460 lines in a single HTML file**, no build step, no bundler | 2026-08-28 |
+| Application size | **~12,000 lines in a single HTML file**, no build step, no bundler | 2026-10-03 |
 | Gym scan input | **24 images per scan** = 60 seconds of walkthrough at one frame per 2.5s | 2026-08-13 |
 | Gym scan cost | **~$0.08 per scan** (~26,000 input tokens, Sonnet-class vision) | 2026-08-13 |
 | AI spend ceiling | **$25/month** hard breaker, plus a per-user call cap, enforced before spend | live |
 | Metering defect found and fixed | a duplicate price key metered one model at **1/3 of its true rate** | 2026-08-01 |
 | Offline boot dependencies | **4 of 4** third-party scripts pre-cached with integrity hashes | 2026-08-15 |
-| Release cadence | app v0.13 → v0.122 over ~6 weeks | Jul–Aug 2026 |
+| Release cadence | app v0.13 → v0.151 over ~11 weeks | Jul–Oct 2026 |
 
 ---
 
@@ -72,6 +72,16 @@ by one person working with an AI pair, at roughly one release per working day ac
 > "Open it with no signal and it still works. Your history is on the device."
 
 ---
+
+> "Tell it where you are and how long you've got. It reads what you've trained, says what's
+> overdue, and builds the session from your own last numbers - not a generic three sets of ten."
+
+> "Every AI answer in the app can be argued with. Reply 'that's a ski erg, not a rower' and it
+> fixes its own list - without re-sending the photos, so the correction costs a fraction of the scan."
+
+> "The launch bug was found in the server's request log, not guessed: every request that arrived
+> succeeded, so the fault was on the phone. It was then reproduced against the previous build
+> before the fix shipped."
 
 ## What deserves a picture
 
