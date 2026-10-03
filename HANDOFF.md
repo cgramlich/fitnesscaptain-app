@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.151.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.151.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
