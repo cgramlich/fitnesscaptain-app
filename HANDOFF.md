@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.145.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.146.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -126,6 +126,22 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**"Your latest" is THIS gym's latest, for machines (2026-10-03, v0.146.0).** Chris: "on my lat
+pull-downs it grabbed the lat pull-downs from my Dallas gym, not the River Crossing gym." It took
+the newest session anywhere. Now `latestFor()` prefers the latest session at the workout's gym
+for machine work (`isMachineWork`: MACHINE_LOADED equipment or a machine/Smith name - the same
+rule as the cross-gym warning on Progress); free weights skip the rule. Never done there: it falls
+back to the latest anywhere and SAYS so - the entry carries `planFrom` and the Plan line reads
+"(from 6821 (Dallas), a different machine - check the weight)"; the card's Last time line
+(`lastPerf`) follows the same rule and reads "Last time at 6821 (Dallas)". Used by the coach,
+Add exercise mid-workout, and Add to today. Rejected: refusing to plan at all on a gym miss -
+another room's numbers labelled as such beat a blank card.
+
+**Every text box has a clear X (2026-10-03, v0.146.0).** `ClearInput` ported from MenuCaptain
+verbatim plus a `ClearTextarea` twin; 28 boxes converted by a script that printed each change.
+Not on: the password box (reveal eye), date pickers, and search boxes that already had an X
+(one of those also clears its results, so a second X would have done less than the first).
 
 **Logged-set row: reps arrows left of the next chip, weight arrows right (2026-10-03, v0.145.0).**
 Chris picked this over a second line per set. The four arrows and the chip are ONE nowrap group:

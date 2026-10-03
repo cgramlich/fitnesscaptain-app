@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.145.0";
+const APP_VERSION = "0.146.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.5";
+const BUILD = "2026-10-03.6";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -881,17 +881,43 @@ function copyEntryForToday(e){
    it. Finished only: the live workout is where the copy is going, and a
    half-done entry there is not "last time". Sorted by startedAt, the same key
    the card's Last time line uses, so the plan a copy arrives with and the
-   Last time line under it can never disagree. */
-function latestEntryFor(workouts, exerciseId){
-  if(!exerciseId) return null;
+   Last time line under it can never disagree.
+
+   THIS GYM FIRST, FOR MACHINES. Chris: "on my lat pull-downs it grabbed the
+   lat pull-downs from my Dallas gym, not the River Crossing gym." It took the
+   newest session anywhere - but 100 on Dallas's stack is not 100 on River
+   Crossing's, which is the whole reason sessions carry their gym. So for
+   machine-loaded work (cable, machine, Smith - the same rule as the
+   cross-gym warning on Progress) the latest session AT THIS GYM wins. Free
+   weights skip the rule: a 45 lb plate weighs 45 lb everywhere.
+
+   Never done it here? It falls back to the latest anywhere rather than
+   giving you nothing, and says so: `otherGym` names where the numbers came
+   from, so the card can warn that they are another room's machine. */
+function isMachineWork(ex){
+  if(!ex) return false;
+  return MACHINE_LOADED.indexOf(ex.equipment) !== -1 || NAMED_MACHINE.test(String(ex.name||""));
+}
+function latestFor(workouts, exerciseId, gymId, exercise){
+  if(!exerciseId) return { entry: null, otherGym: null };
   const ws = (workouts||[]).filter(w => w.endedAt).slice()
     .sort((a,b) => String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
-  for(const w of ws){
-    const e = (w.entries||[]).find(x => x.exerciseId === exerciseId &&
-      (x.sets||[]).some(s => (Number(s.reps)||0) > 0));
-    if(e) return e;
+  const hit = (w) => (w.entries||[]).find(x => x.exerciseId === exerciseId &&
+    (x.sets||[]).some(s => (Number(s.reps)||0) > 0));
+  if(gymId && isMachineWork(exercise)){
+    for(const w of ws){ if(w.gymId === gymId){ const e = hit(w); if(e) return { entry: e, otherGym: null }; } }
   }
-  return null;
+  for(const w of ws){
+    const e = hit(w);
+    if(e){
+      const elsewhere = gymId && isMachineWork(exercise) && w.gymId && w.gymId !== gymId;
+      return { entry: e, otherGym: elsewhere ? (w.gymName || "another gym") : null };
+    }
+  }
+  return { entry: null, otherGym: null };
+}
+function latestEntryFor(workouts, exerciseId, gymId, exercise){
+  return latestFor(workouts, exerciseId, gymId, exercise).entry;
 }
 
 /* The most recent machine setup written for an exercise, at this gym.
@@ -1965,7 +1991,7 @@ function AuthScreen({ store }){
       {ok && <div className="auth-msg ok">{ok}</div>}
       <div className="field">
         <label className="label">Email</label>
-        <input className="input" type="email" autoComplete="email" autoCapitalize="off" autoCorrect="off"
+        <ClearInput type="email" autoComplete="email" autoCapitalize="off" autoCorrect="off"
           value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"
           onKeyDown={e=>{ if(e.key==="Enter") submit(); }} />
       </div>
@@ -2243,7 +2269,7 @@ function DailyCard({ store }){
             {unused.map(x => <button key={x} className="pill" onClick={()=>addHabit(x)}>+ {x}</button>)}
           </div>}
         <div className="row" style={{marginTop:10}}>
-          <input className="input" style={{flex:1}} value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+          <ClearInput style={{flex:1}} value={newLabel} onChange={e=>setNewLabel(e.target.value)}
             placeholder="Add your own" onKeyDown={e=>{ if(e.key==="Enter") addHabit(newLabel); }} />
           <button className="btn btn-ghost btn-sm" style={{flex:"0 0 auto"}} onClick={()=>addHabit(newLabel)}>Add</button>
         </div>
@@ -2394,7 +2420,7 @@ function CoachCard({ onAsk }){
         Where you're training, how long you've got, what you need. It reads your
         recent workouts and builds the session.
       </p>
-      <textarea className="input" rows={3} style={{width:"100%",resize:"none"}}
+      <ClearTextarea className="input" rows={3} style={{width:"100%",resize:"none"}}
         value={text} onChange={e=>setText(e.target.value)}
         placeholder="I'm at River Crossing today. What am I due for? Build me 40 minutes of weights."
         onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); go(); } }} />
@@ -3085,7 +3111,7 @@ function MergeExerciseSheet({ store, exercise, onDone, onClose }){
         {!(store.data.exercises||[]).length || others.length===0
           ? <p className="hint">Nothing else in the library to merge into yet.</p>
           : <>
-              <input className="input" value={q} onChange={e=>setQ(e.target.value)}
+              <ClearInput value={q} onChange={e=>setQ(e.target.value)}
                 placeholder="Search your library" />
               <div style={{maxHeight:260,overflowY:"auto",marginTop:8}}>
                 {others.slice(0,60).map(x => (
@@ -3235,7 +3261,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
             {(store.gyms||[]).map(g => (
               <div key={g.id} className="row" style={{gap:8,alignItems:"center",marginBottom:8}}>
                 <span className="subtle" style={{flex:"0 0 38%",minWidth:0,fontSize:13}}>{g.name}</span>
-                <input className="input" style={{flex:1}} maxLength={24}
+                <ClearInput style={{flex:1}} maxLength={24}
                   value={machines[g.id] || ""}
                   placeholder="e.g. IM2000"
                   onChange={e=>{ const v=e.target.value;
@@ -3291,7 +3317,7 @@ function ExerciseSheet({ store, exercise, onSave, onDelete, onClose, undoable, z
 
         <div className="field">
           <label className="label">Notes / how to do it</label>
-          <textarea className="textarea" style={notes.length>200 ? {minHeight:170} : null}
+          <ClearTextarea className="textarea" style={notes.length>200 ? {minHeight:170} : null}
             value={notes} onChange={e=>setNotes(e.target.value)}
             placeholder="Form cues, seat settings, anything worth remembering." />
           {explainErr && <div className="auth-msg err" style={{marginTop:8,marginBottom:0}}>{explainErr}</div>}
@@ -3690,7 +3716,7 @@ function GymSheet({ gym, onSave, onDelete, onClose }){
             Browsable here, and the AI reads it when designing workouts for
             this location. Paste freely; more detail = smarter suggestions.
           </div>
-          <textarea className="textarea" style={{minHeight:140}} value={inventory}
+          <ClearTextarea className="textarea" style={{minHeight:140}} value={inventory}
             onChange={e=>setInventory(e.target.value)}
             placeholder={"e.g.\nDumbbells 5-75 lb\nSquat rack + 610 lb plates\nAssault bike, battle rope\nNo treadmill"} />
         </div>
@@ -3839,7 +3865,7 @@ function ShareGymSheet({ store, gym, onClose, notify }){
             everyone can see how current it is.
           </p>
           <div className="subtle" style={{marginTop:12,marginBottom:6}}>Town or city</div>
-          <input className="input" value={city} maxLength={80} autoFocus
+          <ClearInput value={city} maxLength={80} autoFocus
             onChange={e=>setCity(e.target.value)} placeholder="Austin, TX" />
           <p className="hint" style={{marginTop:6}}>
             How people find it. "{gym.name}" on its own is a lot of hotels.
@@ -3991,7 +4017,7 @@ function FindGymLayer({ store, onClose, onAdded }){
           then pull the equipment list straight into your gyms.
         </p>
         <div className="row" style={{gap:8,marginTop:12}}>
-          <input className="input" style={{flex:1}} value={q} autoFocus
+          <ClearInput style={{flex:1}} value={q} autoFocus
             onChange={e=>setQ(e.target.value)}
             onKeyDown={e=>{ if(e.key==="Enter") search(); }}
             placeholder="Hyatt Regency, or Austin" />
@@ -4551,7 +4577,7 @@ function InventoryEditSheet({ store, gym, line, onClose }){
             Brand, model, weight range, attachments. This is what the AI reads
             when it plans a session here.
           </div>
-          <input className="input" value={detail} onChange={e=>setDetail(e.target.value)}
+          <ClearInput value={detail} onChange={e=>setDetail(e.target.value)}
             placeholder="Life Fitness, dual pulley, 5-90 lb stack" />
         </div>
 
@@ -5131,10 +5157,12 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
       const hit = lib[normName(it.name)];
       const type = ["strength","cardio","mobility"].includes(it.type) ? it.type : "strength";
       const note = it.note ? String(it.note).slice(0,60) : undefined;
-      const last = hit ? latestEntryFor(store.data.workouts, hit.id) : null;
+      const found = hit ? latestFor(store.data.workouts, hit.id, planGym ? planGym.id : null, hit) : { entry: null };
+      const last = found.entry;
       if(last){
         const item = copyEntryForToday(last);
         item.name = hit.name;
+        if(found.otherGym) item.planFrom = found.otherGym;
         const setup = latestSetupFor(store.data.workouts, hit.id, planGym ? planGym.id : null);
         if(setup) item.settings = setup; else delete item.settings;
         if(note) item.note = note;
@@ -5263,7 +5291,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
                           then logging yours would be the card lying. */}
                       {(() => {
                         const hit = libByName(store, it.name);
-                        const last = hit ? latestEntryFor(store.data.workouts, hit.id) : null;
+                        const last = hit ? latestEntryFor(store.data.workouts, hit.id, gym ? gym.id : null, hit) : null;
                         return last
                           ? <div className="hint" style={{margin:0,color:"var(--amber-2)"}}>
                               Your last: {planLine(planFromSets((last.sets||[]).filter(s => (Number(s.reps)||0) > 0)), units)}
@@ -5273,7 +5301,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
                     </div>
                     <div className="row" style={{gap:8,alignItems:"center",flex:"0 0 auto"}}>
                       <div className="hint" style={{margin:0,whiteSpace:"nowrap"}}>
-                        {libByName(store, it.name) && latestEntryFor(store.data.workouts, libByName(store, it.name).id)
+                        {libByName(store, it.name) && latestEntryFor(store.data.workouts, libByName(store, it.name).id, gym ? gym.id : null, libByName(store, it.name))
                           ? ""
                           : Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
                           : (it.type==="cardio" ? "cardio" : "mobility")}
@@ -5328,7 +5356,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
         <div ref={endRef} />
 
         <div className="row" style={{gap:8,marginTop:16,alignItems:"flex-end"}}>
-          <textarea className="input" rows={2} style={{flex:1,resize:"none"}}
+          <ClearTextarea className="input" rows={2} style={{flex:1,resize:"none"}}
             placeholder={msgs.length ? "Make it shorter, swap the cables..." : "What are you in the mood for?"}
             value={draft} onChange={e=>setDraft(e.target.value)}
             onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } }} />
@@ -5820,6 +5848,89 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         </>}
       </div>
     </div>
+  );
+}
+
+/* ============================================================
+   A TEXT BOX WITH A CLEAR X. Chris: "anytime there's a text box, we need a
+   little X in the corner to delete it or clear it out, like a lot of apps
+   do." Ported from MenuCaptain's ClearInput (the signed-off version) close
+   to verbatim, plus a textarea twin.
+
+   - The X shows only when there is text, and one tap empties the box and
+     keeps the keyboard up - no holding delete.
+   - Clearing goes through the native value setter plus an input event, so
+     React's onChange fires exactly as if you had typed. That makes it work
+     for controlled AND uncontrolled boxes, and an onBlur save still fires
+     when you leave the field.
+   - onMouseDown preventDefault: tapping the X must not blur the box first,
+     or a save-on-blur field would save the old text before it is cleared.
+   - Layout keys (flex, width, margins) move to the wrapper, so a box swaps
+     in without changing its row.
+
+   Deliberately NOT on: passwords (they have the show/hide eye), date pickers
+   (not typed into), and search boxes that already had their own X.
+   ============================================================ */
+function clearBoxProps(props, pad){
+  const st = props.style || {};
+  const wrapSt = { position:"relative", display:"block" };
+  const inSt = {};
+  for(const k in st){
+    if(k === "flex" || k === "width" || k === "minWidth" || k === "maxWidth" || k.indexOf("margin") === 0) wrapSt[k] = st[k];
+    else inSt[k] = st[k];
+  }
+  inSt.width = "100%";
+  inSt.paddingRight = pad;
+  const rest = {};
+  for(const k in props){ if(k !== "style" && k !== "inputRef") rest[k] = props[k]; }
+  return { wrapSt, inSt, rest };
+}
+function ClearX({ onClear, top }){
+  return (
+    <button type="button" aria-label="Clear" tabIndex={-1}
+      onMouseDown={e=>e.preventDefault()} onClick={onClear}
+      style={{position:"absolute", right:9, top: top || "50%", transform: top ? "none" : "translateY(-50%)",
+              width:22, height:22, borderRadius:"50%", border:"none", cursor:"pointer",
+              background:"var(--line-2)", color:"var(--ink-2)", fontSize:12,
+              padding:0, display:"flex", alignItems:"center", justifyContent:"center"}}>
+      &#10005;
+    </button>
+  );
+}
+function useClearable(props, proto){
+  const ref = useRef(null);
+  const [hasUnc, setHasUnc] = useState(!!props.defaultValue);
+  const controlled = props.value !== undefined;
+  const show = controlled ? String(props.value == null ? "" : props.value).length > 0 : hasUnc;
+  const clear = () => {
+    const el = ref.current;
+    if(!el) return;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles:true }));
+    setHasUnc(false);
+    el.focus();
+  };
+  const onInput = (e) => { if(!controlled) setHasUnc(!!e.target.value); if(props.onInput) props.onInput(e); };
+  return { ref, show, clear, onInput };
+}
+function ClearInput(props){
+  const { wrapSt, inSt, rest } = clearBoxProps(props, 38);
+  const c = useClearable(props, window.HTMLInputElement.prototype);
+  return (
+    <span style={wrapSt}>
+      <input className="input" {...rest} ref={c.ref} style={inSt} onInput={c.onInput} />
+      {c.show && <ClearX onClear={c.clear} />}
+    </span>
+  );
+}
+function ClearTextarea(props){
+  const { wrapSt, inSt, rest } = clearBoxProps(props, 36);
+  const c = useClearable(props, window.HTMLTextAreaElement.prototype);
+  return (
+    <span style={wrapSt}>
+      <textarea className={props.className || "textarea"} {...rest} ref={c.ref} style={inSt} onInput={c.onInput} />
+      {c.show && <ClearX onClear={c.clear} top={8} />}
+    </span>
   );
 }
 
@@ -6366,7 +6477,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                 </div>
               : plan
                 ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                    Plan: {planLine(plan, units)}
+                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
                   </div>
                 : entry.targetSets>0
                   ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -6402,7 +6513,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               one, which it does for any apparatus at a known gym - see
               canName. Absent otherwise, so a push-up gains no chrome. */}
           {namingMachine && onMachineLabel
-            ? <input className="input" style={{marginTop:4,fontSize:14}} autoFocus
+            ? <ClearInput style={{marginTop:4,fontSize:14}} autoFocus
                 defaultValue={machineLabel || ""} maxLength={24}
                 placeholder="e.g. IM2000"
                 onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
@@ -6441,10 +6552,10 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                       textUnderlineOffset:3}}
                     onClick={()=>{ if(confirm("Drop the plan for "+entry.name+"? Logged sets stay."))
                       onUpdate(e => ({ ...e, plan: undefined })); }}>
-                    Plan: {planLine(plan, units)} - drop it
+                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ", a different machine - check the weight)" : ""} - drop it
                   </button>
                 : <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                    Plan: {planLine(plan, units)}
+                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
                   </div>)
             : entry.targetSets>0 &&
               <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -6474,11 +6585,11 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                 // Same reasoning as a copied entry: only fill it if this
                 // card has none, so a setup you already typed is not lost.
                 settings: e.settings || (prev.settings || undefined) }))}>
-              Last time: {setsLine(prev.sets, units)} - repeat it
+              Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)} - repeat it
             </button>}
           {prev && !isCardio && (plan || !active) &&
             <div className="entry-last">
-              Last time: {setsLine(prev.sets, units)}
+              Last time{prev.otherGym ? " at " + prev.otherGym : ""}: {setsLine(prev.sets, units)}
             </div>}
           {restSecs !== undefined && restSecs !== null && !isCardio &&
             <div className="entry-last">
@@ -6710,7 +6821,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
           {/* Seat heights and arm positions are the thing you rediscover by
               trial and error on every club-gym visit. Save on blur. */}
           {noteOpen
-            ? <input className="input" style={{marginTop:10}} value={note} maxLength={80} autoFocus
+            ? <ClearInput style={{marginTop:10}} value={note} maxLength={80} autoFocus
                 onChange={e=>setNote(e.target.value)}
                 placeholder="Note for this set - e.g. wanted 10" />
             : <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
@@ -6723,7 +6834,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
              does change, when a repeat fills the setup in. Without the key the
              box stays stubbornly empty while the line above shows the setup,
              which is the worst of both. The key remounts it. */
-          <input className="input" style={{marginTop:10}}
+          <ClearInput style={{marginTop:10}}
             key={"setup:" + entry.id + ":" + (entry.settings||"")}
             defaultValue={entry.settings||""}
             placeholder="Machine setup - optional"
@@ -6992,7 +7103,7 @@ function ExerciseHelp({ store, name, exerciseId, gym, onClose, undoable }){
             {chosenGym && ex &&
               <div className="field" style={{marginTop:0,marginBottom:10}}>
                 <label className="label">Which machine, here</label>
-                <input className="input" defaultValue={machineHere || ""} maxLength={24}
+                <ClearInput defaultValue={machineHere || ""} maxLength={24}
                   key={chosenGym.id + ":" + (machineHere||"")}
                   placeholder="e.g. IM2000"
                   onBlur={e=>{ const v=e.target.value.trim();
@@ -7393,11 +7504,13 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
        finished session of it, the same way the coach and Add to today plan
        it: sets, next-time targets, and your setup at THIS gym. The Plan line
        still offers "drop it" for a day you want to do something different. */
-    const last = latestEntryFor(store.data.workouts, x.id);
+    const found = latestFor(store.data.workouts, x.id, workout.gymId || null, x);
+    const last = found.entry;
     let item;
     if(last){
       item = copyEntryForToday(last);
       item.name = x.name;
+      if(found.otherGym) item.planFrom = found.otherGym;
       const setup = latestSetupFor(store.data.workouts, x.id, workout.gymId || null);
       if(setup) item.settings = setup; else delete item.settings;
     }else{
@@ -7426,16 +7539,28 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
   };
 
   // "Same as last time": most recent OTHER workout containing this exercise.
+  // For machine work, the most recent one AT THIS GYM first - the same rule
+  // as latestFor, so the Last time line and the plan it sits under agree.
+  // A fall-back to another gym carries its name for the line to show.
   const lastPerf = (exerciseId) => {
     const ws = (store.data.workouts||[]).slice()
       .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
-    for(const w of ws){
-      if(w.id===workout.id) continue;
-      const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
-      if(e){
-        return { sets: e.sets, best: topSet(e.sets), settings: e.settings || "" };
+    const ex = (store.data.exercises||[]).find(x => x.id === exerciseId);
+    const machine = !!workout.gymId && isMachineWork(ex);
+    const pick = (sameGymOnly) => {
+      for(const w of ws){
+        if(w.id===workout.id) continue;
+        if(sameGymOnly && w.gymId !== workout.gymId) continue;
+        const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
+        if(e) return { sets: e.sets, best: topSet(e.sets), settings: e.settings || "",
+                       otherGym: machine && w.gymId && w.gymId !== workout.gymId ? (w.gymName || "another gym") : null };
       }
-    }
+      return null;
+    };
+    const here = machine ? pick(true) : null;
+    if(here) return here;
+    const any = pick(false);
+    if(any) return any;
     return null;
   };
 
@@ -7497,7 +7622,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
               onChange={e=>{ if(e.target.value) patch({ date: e.target.value,
                 startedAt: e.target.value+"T12:00:00.000Z", endedAt: e.target.value+"T12:00:00.000Z" }); }} />
             <label className="label" style={{marginTop:12}}>Duration (minutes)</label>
-            <input className="input" inputMode="numeric" defaultValue={workout.durationMin||0}
+            <ClearInput inputMode="numeric" defaultValue={workout.durationMin||0}
               onBlur={e=>{ const v = Math.max(0, Math.min(600, Math.round(Number(e.target.value)||0)));
                 if(v !== (workout.durationMin||0)) patch({ durationMin: v }); }} />
           </div>}
@@ -7523,7 +7648,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         {canEdit &&
           <div className="field" style={{marginTop:12}}>
             <label className="label">What else happened</label>
-            <textarea className="textarea" style={{minHeight:64}}
+            <ClearTextarea className="textarea" style={{minHeight:64}}
               key={workout.id}
               defaultValue={workout.notes||""}
               placeholder="Sauna, stretching, how it felt - anything that is not a set."
@@ -7909,7 +8034,7 @@ function ImportLayer({ store, onClose, onImported }){
             everything before it saves. For long histories, paste a few weeks at a time.
           </p>
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
-          <textarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
+          <ClearTextarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
             onChange={e=>setText(e.target.value)}
             placeholder={"e.g.\nMon 7/14 - push day\nbench 3x8 @ 185\nohp 135 x8x8x6\n20 min bike"} />
           <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={organize}>
@@ -8186,7 +8311,7 @@ function ProgramCard({ store, undoable, onOpen }){
   return (
     <div className="card" style={{marginBottom:12}}>
       <div style={{fontWeight:600,marginBottom:8}}>Set up a program</div>
-      <input className="input" value={name} onChange={e=>setName(e.target.value)}
+      <ClearInput value={name} onChange={e=>setName(e.target.value)}
         placeholder="Name it (e.g. Golf Power 30)" />
       <p className="hint" style={{marginTop:10}}>Tap routines in the order you train them.</p>
       {routines.map(r => {
@@ -8545,7 +8670,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
             Optional, asked once. Past fifty the same goals want joint-friendlier
             variants and more room between hard sessions.
           </div>
-          <input className="input" inputMode="numeric" value={bAge} maxLength={3}
+          <ClearInput inputMode="numeric" value={bAge} maxLength={3}
             onChange={e=>setBAge(e.target.value.replace(/[^0-9]/g,""))} placeholder="optional" />
 
           <label className="label" style={{marginTop:14}}>Minutes per day</label>
@@ -8568,7 +8693,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
             <button className={"pill "+(!bGymId?"on":"")} onClick={()=>setBGymId(null)}>No gym / travel</button>
           </div>
           <label className="label" style={{marginTop:14}}>What are you training for?</label>
-          <textarea className="textarea" style={{minHeight:110}} value={goals}
+          <ClearTextarea className="textarea" style={{minHeight:110}} value={goals}
             onChange={e=>setGoals(e.target.value)}
             placeholder="e.g. mobility, power for my golf swing, strong bones, keep muscle as I age - plus arms, chest and abs" />
           <button className="btn btn-primary btn-block" style={{marginTop:14}} onClick={buildProgram}>
@@ -8582,7 +8707,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
             turns each day into a routine; you review before anything saves.
           </p>
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
-          <textarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
+          <ClearTextarea className="textarea" style={{minHeight:220,marginTop:12}} value={text}
             onChange={e=>setText(e.target.value)}
             placeholder={"e.g.\nDay 1 - Lower\nTrap Bar Deadlift 4x6\nGoblet Squat 3x10\n\nDay 2 - Push\nBench Press 4x8 ..."} />
           <button className="btn btn-primary btn-block" style={{marginTop:12}} onClick={organize}>
@@ -8650,7 +8775,7 @@ function ImportRoutinesLayer({ store, mode, onClose, onImported }){
                 <button className={"pill "+(!asProgram?"on":"")} onClick={()=>setAsProgram(false)}>No</button>
               </div>
               {asProgram && <>
-                <input className="input" style={{marginTop:10}} value={progLabel}
+                <ClearInput style={{marginTop:10}} value={progLabel}
                   onChange={e=>setProgLabel(e.target.value)} placeholder="Name it (e.g. Golf Power 30)" />
                 <p className="hint" style={{marginTop:8,marginBottom:0}}>
                   Keeps them in this order and shows what's next on your home screen.
@@ -9000,12 +9125,12 @@ function MetricSheet({ store, onClose }){
         <label className="label">Date</label>
         <input className="input" type="date" value={date} onChange={e=>{ setDate(e.target.value); setErr(""); }} />
         <label className="label" style={{marginTop:12}}>Weight ({units})</label>
-        <input className="input" inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)}
+        <ClearInput inputMode="decimal" value={weight} onChange={e=>setWeight(e.target.value)}
           placeholder="required" />
         <label className="label" style={{marginTop:12}}>Waist ({units==="kg"?"cm":"in"})</label>
-        <input className="input" inputMode="decimal" value={waist} onChange={e=>setWaist(e.target.value)} placeholder="optional" />
+        <ClearInput inputMode="decimal" value={waist} onChange={e=>setWaist(e.target.value)} placeholder="optional" />
         <label className="label" style={{marginTop:12}}>Body fat %</label>
-        <input className="input" inputMode="decimal" value={fat} onChange={e=>setFat(e.target.value)} placeholder="optional" />
+        <ClearInput inputMode="decimal" value={fat} onChange={e=>setFat(e.target.value)} placeholder="optional" />
         <button className="btn btn-primary btn-block" style={{marginTop:16}} onClick={save}>Save</button>
         {existing &&
           <button className="btn btn-danger btn-block" style={{marginTop:8}} onClick={del}>Delete this entry</button>}
@@ -10461,7 +10586,7 @@ function SettingsScreen({ store, onCheckUpdate, updMsg, update, onApplyUpdate })
             <div className="subtle" style={{marginBottom:8}}>
               Type <strong>DELETE</strong> to confirm. This cannot be undone.
             </div>
-            <input className="input" value={delWord} autoFocus
+            <ClearInput value={delWord} autoFocus
               onChange={e=>setDelWord(e.target.value)} placeholder="DELETE" />
             <div className="row" style={{gap:8,marginTop:10}}>
               <button className="btn btn-ghost btn-sm" style={{flex:1}}
@@ -11124,7 +11249,10 @@ function App(){
     // Where today's workout is (or will be) - the setup lookup below needs it.
     const lastGym = (store.gyms||[]).find(g => g.id === store.cfg.lastGymId) || null;
     const gymId = existing ? existing.gymId : (lastGym ? lastGym.id : null);
-    const item = copyEntryForToday(latestEntryFor(store.data.workouts, entry.exerciseId) || entry);
+    const exRec = (store.data.exercises||[]).find(x => x.id === entry.exerciseId) || null;
+    const found = latestFor(store.data.workouts, entry.exerciseId, gymId, exRec);
+    const item = copyEntryForToday(found.entry || entry);
+    if(found.entry && found.otherGym) item.planFrom = found.otherGym;
     /* THE SETUP IS SEARCHED FOR SEPARATELY. Chris, choosing: "most recent with
        a setup." A seat-and-pin note gets written once, when you work it out,
        and rarely again - so the latest session usually has none, and taking
