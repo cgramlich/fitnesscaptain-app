@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.140.0";
+const APP_VERSION = "0.141.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-09-28.6";
+const BUILD = "2026-10-03.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2343,7 +2343,45 @@ function NextUpCard({ store, onStartRoutine, onOpenWorkout }){
   );
 }
 
-function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard, onStartRoutine }){
+/* THE COACH, ON THE FRONT SCREEN. Chris (2026-10-03): "I want a standout AI
+   feature that is on the front screen. I want to be able to say something
+   like: I will be working out at the River Crossing gym today, look at my
+   most recent workouts, identify body parts I need to hit and build me a 40
+   minute resistance workout."
+
+   The coach behind it already existed - "Today's session" - but it lived
+   behind the centre + and a link in the exercise picker, so it was the
+   app's best feature and its least visited. This card is only a door: the
+   sentence is handed to the session builder, which reads the gym and the
+   time out of it and sends it straight away.
+
+   No mic button of our own: the phone keyboard's dictation already works in
+   any text box, and a second microphone is one more permission prompt for
+   something you already have. */
+function CoachCard({ onAsk }){
+  const [text, setText] = useState("");
+  const go = () => { const t = text.trim(); if(t){ onAsk(t); setText(""); } };
+  return (
+    <div className="card" style={{marginTop:14,borderColor:"var(--amber-line)"}}>
+      <div style={{fontWeight:700,display:"flex",alignItems:"center",gap:8,color:"var(--amber-2)"}}>
+        <Icon d={ICONS.sparkle} size={16}/> Ask your coach
+      </div>
+      <p className="hint" style={{margin:"4px 0 8px"}}>
+        Where you're training, how long you've got, what you need. It reads your
+        recent workouts and builds the session.
+      </p>
+      <textarea className="input" rows={3} style={{width:"100%",resize:"none"}}
+        value={text} onChange={e=>setText(e.target.value)}
+        placeholder="I'm at River Crossing today. What am I due for? Build me 40 minutes of weights."
+        onKeyDown={e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); go(); } }} />
+      <button className="btn btn-primary btn-block" style={{marginTop:8}} disabled={!text.trim()} onClick={go}>
+        Build my workout
+      </button>
+    </div>
+  );
+}
+
+function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard, onStartRoutine, onAsk }){
   const units = store.cfg.units || "lb";
   const workouts = (store.data.workouts||[]).slice()
     .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
@@ -2391,6 +2429,7 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
             Import past workouts
           </button>
         </div>
+        {onAsk && <CoachCard onAsk={onAsk}/>}
         <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
         <DailyCard store={store} />
       </div>
@@ -2434,6 +2473,7 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
         </button>
         </SwipeRow>}
 
+      {onAsk && <CoachCard onAsk={onAsk}/>}
       <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
       <DailyCard store={store} />
 
@@ -4769,16 +4809,37 @@ function parsePlan(text){
   try{
     const j = JSON.parse(m[1].trim());
     const items = Array.isArray(j.items) ? j.items.filter(it => it && it.name) : [];
-    if(items.length) plan = { name: String(j.name||"Today's session").slice(0,60), items };
+    if(items.length) plan = { name: String(j.name||"Today's session").slice(0,60), items,
+                              gym: j.gym ? String(j.gym).slice(0,80) : null };
   }catch(e){ /* a malformed block is not worth failing the message over */ }
   return { body: String(text||"").replace(m[0], "").trim(), plan };
 }
 
-function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
+/* "40 minute", "45 mins", "an hour", "half an hour", "hour and a half".
+   Read on the device rather than left to the model, because the time budget
+   is stated to the model as a FACT in the context, and a picker saying 45
+   beside a sentence saying 40 would have it planning to the wrong number. */
+function parseAskMinutes(text){
+  const t = String(text||"").toLowerCase();
+  if(/hour and a half|1\.5 ?h(ou)?rs?|90 ?min/.test(t)) return 90;
+  if(/half an? hour/.test(t)) return 30;
+  const m = t.match(/(\d{2,3})\s*-?\s*(?:min|mins|minute|minutes)\b/);
+  if(m){ const n = Number(m[1]); if(n >= 10 && n <= 180) return n; }
+  if(/\b(an|one|1) ?h(ou)?r\b/.test(t)) return 60;
+  return null;
+}
+
+function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk }){
   const gyms = store.gyms || [];
+  const units = store.cfg.units || "lb";
   const [gymId, setGymId] = useState(
     (gyms.find(g => g.id === store.cfg.lastGymId) || gyms[0] || {}).id || null);
   const [mins, setMins]   = useState(45);
+  /* Which planned items are UNticked, keyed by message index. Everything
+     starts ticked (Chris's call, 2026-10-03): you asked for this plan, so you
+     will keep most of it, and unticking one or two is fewer taps than
+     ticking six. */
+  const [skips, setSkips] = useState({});   // {msgIdx: {itemIdx: true}}
   const [msgs, setMsgs]   = useState([]);      // [{role:"user"|"ai", body, plan, raw}]
   const [draft, setDraft] = useState("");
   const [busy, setBusy]   = useState(false);
@@ -4794,15 +4855,38 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
   /* Everything the coach needs that the user should not have to type. Recent
      history matters most: proposing back on the day after a heavy back
      session is the single most obvious way for this to look stupid. */
-  const context = () => {
+  const context = (gym, mins) => {
     const lines = [];
     lines.push("Time available: " + mins + " minutes, including warm-up.");
+    /* EVERY GYM, not just the picked one, so "I'll be at River Crossing" can
+       be honoured without a dropdown. Gym names are whatever the person typed
+       ("RCC Gym") while they SAY the real name ("River Crossing"), which is
+       why the Google place name rides along: matching a spoken name to a
+       nickname is exactly the kind of judgement the model is good at and a
+       string match is not. Kit is trimmed per gym to keep the first turn
+       cheap; the picked gym gets its full inventory below. */
+    if(gyms.length > 1){
+      lines.push("Their gyms (if the request names one, plan for THAT gym and set \"gym\" " +
+                 "in the plan block to its exact name below): " +
+        gyms.map(x => {
+          const aka = x.placeName && x.placeName !== x.name ? " / Google: " + x.placeName : "";
+          const kit = (x.equipment||[]).join(", ") +
+                      (x.inventory ? ". " + String(x.inventory).replace(/\s+/g," ").slice(0,500) : "");
+          return "[" + x.name + aka + "] kit: " + (kit || "not recorded");
+        }).join(" | ") + ".");
+    }
     if(gym){
-      lines.push("Training at: " + gym.name + " (" + (gym.kind||"gym") + ").");
+      /* With several gyms this is only the DEFAULT - the picker's guess from
+         last time. Stated as a fact ("Training at: Home, prescribe ONLY this")
+         it would outrank "I'll be at River Crossing" in the request itself. */
+      const several = gyms.length > 1;
+      lines.push((several ? "Default gym if the request names none: " : "Training at: ") +
+                 gym.name + " (" + (gym.kind||"gym") + ").");
       const equip = (gym.equipment||[]).join(", ");
       const inv = gym.inventory ? String(gym.inventory).replace(/\s+/g," ").slice(0,1500) : "";
       if(equip || inv){
-        lines.push("Equipment actually present - prescribe ONLY what this supports: " +
+        lines.push((several ? "Its full equipment" : "Equipment actually present") +
+                   " - prescribe ONLY what the gym you plan for supports: " +
                    equip + (inv ? ". " + inv : "") + ".");
       }else{
         lines.push("No inventory recorded for this gym, so keep to equipment any gym has, " +
@@ -4832,6 +4916,18 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
     }else{
       lines.push("No sessions logged in the last 7 days.");
     }
+    /* WHAT IS DUE, as numbers. Chris asks "look at my recent workouts and
+       identify the body parts I need to hit"; the 7-day list above says what
+       was done, this says how long each group has waited - the same figures
+       as the days-since rows on the Progress check-in, so the coach and the
+       card can never disagree. Null = not in the 4-week window. */
+    const ds = (buildDigest(store) || {}).daysSince || {};
+    const due = muscleGapRows(ds).map(r => r.group + " " +
+      (ds[r.group] === null ? "not in 4 weeks" : ds[r.group] + "d"));
+    if(due.length){
+      lines.push("Days since each muscle group was last trained, most overdue first: " +
+                 due.join(", ") + ".");
+    }
     const names = (store.data.exercises||[]).map(x=>x.name);
     if(names.length){
       lines.push("Their exercise library - when a movement matches one of these, use that " +
@@ -4856,6 +4952,10 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
     "Ask a clarifying question ONLY if you genuinely cannot proceed. Time, gym, " +
     "equipment and recent history are given to you - never ask for those. If the " +
     "request is vague, make a sensible call, propose it, and say what you assumed.\n\n" +
+    "If they ask what they are due for, or leave the choice of body parts to you, open " +
+    "with ONE sentence naming the most overdue groups by their day counts (e.g. 'Legs " +
+    "were 6 days ago and chest 5; back was yesterday so it sits out') and build around " +
+    "those. If they name a gym, say which of their gyms you took it to be.\n\n" +
     "Cover any kind of training asked for: lifting, cardio, intervals, Pilates, " +
     "mobility, rehab-ish easy work. Not everything is barbells.\n\n" +
     "BUDGET THE TIME HONESTLY. Roughly 3 minutes per strength set including rest, " +
@@ -4863,11 +4963,13 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
     "nobody completes. Say the realistic total.\n\n" +
     "When you are proposing a session, END the reply with a fenced block exactly like:\n" +
     "```plan\n" +
-    "{\"name\":\"Arms and back + easy cardio\",\"items\":[" +
+    "{\"name\":\"Arms and back + easy cardio\",\"gym\":\"<exact gym name>\",\"items\":[" +
     "{\"name\":\"Chest Supported Row\",\"type\":\"strength\",\"targetSets\":3,\"targetReps\":10," +
     "\"note\":\"leave 2 in the tank\"}," +
     "{\"name\":\"Treadmill Incline Walk - 10 min\",\"type\":\"cardio\",\"targetSets\":0,\"targetReps\":0}]}\n" +
     "```\n" +
+    "gym is the exact name, from their gym list, of the gym you planned for; omit it " +
+    "if they have no gyms listed.\n" +
     "type is strength, cardio or mobility. Strength items get real targetSets and " +
     "targetReps; cardio and mobility use 0 and 0 and carry their duration in the name " +
     "(e.g. 'Rower Intervals - 12 min'). note is optional and at most 8 words. " +
@@ -4882,16 +4984,27 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
     const mine = { role:"user", body:text, raw:text, plan:null };
     const history = msgs.concat([mine]);
     setMsgs(history); setBusy(true);
+    // A time said in the FIRST message beats the picker; it is the budget
+    // the whole plan is built to. Later turns re-plan inside the thread.
+    let minsNow = mins;
+    if(history.length === 1){
+      const said = parseAskMinutes(text);
+      if(said){ minsNow = said; setMins(said); }
+    }
     try{
       /* The FIRST user turn carries the context. Later turns do not repeat it -
          it is already up the thread, and re-sending a 400-name library on every
          "make it shorter" would triple the cost of the cheapest turns. */
       const wire = history.map((m,i) => ({
         role: m.role === "user" ? "user" : "assistant",
-        content: (i === 0 && m.role === "user") ? (context() + "\n\nRequest: " + m.raw) : m.raw,
+        content: (i === 0 && m.role === "user") ? (context(gym, minsNow) + "\n\nRequest: " + m.raw) : m.raw,
       }));
       const out = await aiRelay("session_design", wire, { system, maxTokens: 2000 });
       const { body, plan } = parsePlan(out);
+      // The coach chose a gym from what was said: show it in the picker, so
+      // the screen agrees with the plan and Start logs it at the right place.
+      const chosen = plan && plan.gym ? gyms.find(g => g.name === plan.gym) : null;
+      if(chosen) setGymId(chosen.id);
       setMsgs(h => h.concat([{ role:"ai", body: body || "Here's a plan.", raw: out, plan }]));
       log("AI", "session_design turn " + history.length + (plan ? " (plan)" : ""));
     }catch(e){
@@ -4906,18 +5019,46 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
      the logger cannot tell where the session came from. Names are resolved
      against the library so a planned "Chest Supported Row" logs against the
      same record as every previous one and keeps its history. */
-  const startPlan = (plan) => {
+  // Asked from the coach card on the Workouts screen: the question is already
+  // written, so send it on arrival instead of making them type it twice.
+  const askedRef = useRef(false);
+  useEffect(() => {
+    if(initialAsk && !askedRef.current){ askedRef.current = true; send(initialAsk); }
+    // eslint-disable-next-line
+  }, []);
+
+  /* YOUR NUMBERS, NOT THE COACH'S. Chris: "I assume it will look at the last
+     session if it exists and put in today's reps and weight based on that?"
+     It should: the coach's "3 x 10" is a guess about a stranger, while your
+     last session of that movement is a fact about you. So anything you have
+     done before arrives planned exactly as "Add to today's workout" would
+     plan it - your latest sets, your next-time targets, your machine setup
+     at this gym. The coach's sets and reps only stand for movements with no
+     history. The cost: a plan built to 40 minutes can run long if your own
+     scheme has more sets than the coach assumed. */
+  const startPlan = (plan, skip) => {
+    const planGym = (plan.gym && gyms.find(g => g.name === plan.gym)) || gym;
     const lib = {};
     (store.data.exercises||[]).forEach(x => { lib[normName(x.name)] = x; });
-    const entries = plan.items.map(it => {
+    const entries = plan.items.filter((_, j) => !(skip && skip[j])).map(it => {
       const hit = lib[normName(it.name)];
       const type = ["strength","cardio","mobility"].includes(it.type) ? it.type : "strength";
+      const note = it.note ? String(it.note).slice(0,60) : undefined;
+      const last = hit ? latestEntryFor(store.data.workouts, hit.id) : null;
+      if(last){
+        const item = copyEntryForToday(last);
+        item.name = hit.name;
+        const setup = latestSetupFor(store.data.workouts, hit.id, planGym ? planGym.id : null);
+        if(setup) item.settings = setup; else delete item.settings;
+        if(note) item.note = note;
+        return item;
+      }
       return { id: uid(), exerciseId: hit ? hit.id : null, name: hit ? hit.name : String(it.name).slice(0,80),
                type: hit ? (hit.type||type) : type, sets: [], cardio: null,
-               targetSets: Number(it.targetSets)||0, targetReps: Number(it.targetReps)||0,
-               note: it.note ? String(it.note).slice(0,60) : undefined };
+               targetSets: Number(it.targetSets)||0, targetReps: Number(it.targetReps)||0, note };
     });
-    onStart({ name: plan.name, gym, entries });
+    if(!entries.length) return;
+    onStart({ name: plan.name, gym: planGym, entries });
   };
 
   // Index of the newest message CARRYING A PLAN. Declared here, below the
@@ -4952,7 +5093,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
             </select>}
           <select className="input" style={{flex:"0 1 120px"}} value={mins}
                   onChange={e=>setMins(Number(e.target.value))} disabled={msgs.length>0}>
-            {SESSION_MINS.map(m => <option key={m} value={m}>{m} min</option>)}
+            {(SESSION_MINS.includes(mins) ? SESSION_MINS : SESSION_MINS.concat([mins]).sort((a,b)=>a-b)).map(m => <option key={m} value={m}>{m} min</option>)}
           </select>
         </div>
         {msgs.length>0 &&
@@ -4980,16 +5121,42 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
             {m.plan &&
               <div className="card" style={{marginTop:10}}>
                 <div className="item-title" style={{marginBottom:8}}>{m.plan.name}</div>
-                {m.plan.items.map((it,j) => (
+                {m.plan.items.map((it,j) => {
+                  // Ticks only on the plan you can still start; an old version
+                  // further up is history, and a box there would do nothing.
+                  const live = i === lastPlanIdx;
+                  const off = !!(skips[i] && skips[i][j]);
+                  return (
                   <div key={j} className="row" style={{justifyContent:"space-between",gap:10,
-                       padding:"7px 0",borderTop: j? "1px solid var(--line-1)":"none"}}>
-                    <div style={{minWidth:0}}>
+                       padding:"7px 0",borderTop: j? "1px solid var(--line-1)":"none",
+                       opacity: live && off ? .45 : 1}}>
+                    {live &&
+                      <input type="checkbox" checked={!off}
+                        aria-label={(off ? "Include " : "Leave out ") + it.name}
+                        style={{width:20,height:20,flex:"0 0 auto",accentColor:"var(--amber)"}}
+                        onChange={()=>setSkips(s => ({ ...s, [i]: { ...(s[i]||{}), [j]: !off } }))} />}
+                    <div style={{minWidth:0,flex:1}}>
                       <div style={{fontSize:14}}>{it.name}</div>
                       {it.note && <div className="hint" style={{margin:0}}>{it.note}</div>}
+                      {/* Says what Add will ACTUALLY put in: for a movement
+                          you have done, your last sets, not the coach's 3 x 10
+                          (see startPlan). Showing the coach's number here and
+                          then logging yours would be the card lying. */}
+                      {(() => {
+                        const hit = libByName(store, it.name);
+                        const last = hit ? latestEntryFor(store.data.workouts, hit.id) : null;
+                        return last
+                          ? <div className="hint" style={{margin:0,color:"var(--amber-2)"}}>
+                              Your last: {planLine(planFromSets((last.sets||[]).filter(s => (Number(s.reps)||0) > 0)), units)}
+                            </div>
+                          : null;
+                      })()}
                     </div>
                     <div className="row" style={{gap:8,alignItems:"center",flex:"0 0 auto"}}>
                       <div className="hint" style={{margin:0,whiteSpace:"nowrap"}}>
-                        {Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
+                        {libByName(store, it.name) && latestEntryFor(store.data.workouts, libByName(store, it.name).id)
+                          ? ""
+                          : Number(it.targetSets)>0 ? it.targetSets+" x "+it.targetReps
                           : (it.type==="cardio" ? "cardio" : "mobility")}
                       </div>
                       {/* A planned session is the LIKELIEST place to meet a
@@ -5004,7 +5171,8 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
                           exerciseId: (libByName(store, it.name)||{}).id || null })} />
                     </div>
                   </div>
-                ))}
+                  );
+                })}
                 {/* Startable = the NEWEST plan, which is not the same as the
                     newest message. Keying off msgs.length-1 meant a clarifying
                     question after a plan ("which shoulder?") removed the Start
@@ -5012,14 +5180,24 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout }){
                     session you had just agreed to became unreachable and you
                     had to ask for it again. Caught in the harness. */}
                 {i === lastPlanIdx
-                  ? <button className="btn btn-primary btn-block" style={{marginTop:12}}
-                            onClick={()=>startPlan(m.plan)} disabled={busy}>
-                      {/* The label has to match what the button DOES. Mid-workout
-                          it appends rather than starting, and saying "Start"
-                          there was a straight lie. */}
-                      <Icon d={ICONS.plus} size={16}/>
-                      {liveWorkout ? " Add these to your workout" : " Start this workout"}
-                    </button>
+                  ? (() => {
+                      // The COUNT is in the label so unticking visibly changes
+                      // what the button will do before you press it.
+                      const n = m.plan.items.filter((_, j) => !(skips[i] && skips[i][j])).length;
+                      const what = n + " exercise" + (n===1 ? "" : "s");
+                      return (
+                        <button className="btn btn-primary btn-block" style={{marginTop:12}}
+                                onClick={()=>startPlan(m.plan, skips[i])} disabled={busy || n === 0}>
+                          {/* The label has to match what the button DOES. Mid-workout
+                              it appends rather than starting, and saying "Start"
+                              there was a straight lie. */}
+                          <Icon d={ICONS.plus} size={16}/>
+                          {n === 0 ? " Tick at least one"
+                            : liveWorkout ? " Add " + what + " to your workout"
+                            : " Add " + what + " to today's workout"}
+                        </button>
+                      );
+                    })()
                   : <p className="hint center" style={{marginTop:10,marginBottom:0}}>Replaced by the version below</p>}
               </div>}
           </div>
@@ -10972,7 +11150,8 @@ function App(){
           : <>
               {tab==="workouts"  && <WorkoutsScreen store={store} onStart={startWorkout} onOpen={(w)=>setWorkoutId(w.id)} onImport={()=>setImporter(true)} onStartRoutine={startRoutine}
                 onDelete={(w)=>deleteWorkout(w.id)}
-                onDiscard={(w)=>deleteWorkout(w.id)} />}
+                onDiscard={(w)=>deleteWorkout(w.id)}
+                onAsk={(ask)=>setSessionBuilder({ ask })} />}
               {tab==="gyms"      && <GymsScreen store={store} onOpen={(g)=>setGymView(g.id)} onAdd={()=>setGymSheet({gym:null})}
                 onDelete={(g)=>deleteGym(g.id)} onFind={()=>setFindGym(true)} />}
               {tab==="exercises" && <ExercisesScreen store={store} undoable={showUndo} onAdd={()=>setExSheet({exercise:null})} onEdit={(x)=>setExSheet({exercise:x})}
@@ -11065,7 +11244,8 @@ function App(){
 
       {sessionBuilder &&
         <SessionBuilderLayer store={store}
-          liveWorkout={!!(store.data.workouts||[]).find(w=>!w.endedAt)} onClose={()=>setSessionBuilder(false)} onStart={startPlanned} />}
+          liveWorkout={!!(store.data.workouts||[]).find(w=>!w.endedAt)} onClose={()=>setSessionBuilder(false)} onStart={startPlanned}
+          initialAsk={sessionBuilder && sessionBuilder.ask ? sessionBuilder.ask : null} />}
 
       {!inSettings &&
         <nav className="nav">

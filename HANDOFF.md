@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-09-28.** App `v0.140.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-09-28.** App `v0.141.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -126,6 +126,32 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**The coach is on the front screen, and plans with YOUR numbers (2026-10-03).** Chris wanted a
+standout AI feature on the first screen: "I'll be at River Crossing today, look at my recent
+workouts, identify body parts I need to hit, build me a 40 minute resistance workout", then tick
+the exercises he wants into today's workout. The coach already existed ("Today's session",
+`session_design`) but sat behind the centre + and a picker link. Now:
+
+- **Coach card** at the top of Workouts (under an in-progress workout). It is only a door: the
+  sentence opens the session builder and is sent on arrival. No mic button of our own - keyboard
+  dictation already works in any text box, and a second mic is another permission prompt.
+- **Gym from the sentence, by the model.** Every gym is listed in the first turn with its Google
+  place name, because people type a nickname ("RCC Gym") and say the real name ("River
+  Crossing"); a string match cannot bridge that, the model can. The plan block names the gym and
+  the picker follows it. The last-used gym is stated as a DEFAULT, never as "Training at" - as a
+  fact it would outrank the gym named in the request.
+- **Time from the sentence, on the device** (`parseAskMinutes`): the budget is given to the model
+  as a fact, so a picker saying 45 beside a sentence saying 40 would plan to the wrong number.
+- **Days since each muscle group**, the same `buildDigest().daysSince` the Progress check-in
+  shows, so the coach and the card cannot disagree. It opens with the overdue groups by number.
+- **Tickable plan**, everything ticked by default (Chris's call: you keep most of a plan you asked
+  for). The button carries the count: "Add 3 exercises to today's workout".
+- **Your numbers, not the coach's.** Any exercise with history arrives planned from your latest
+  session - sets, next-time targets, setup at that gym - via the same `latestEntryFor` /
+  `latestSetupFor` as Add to today. The card says "Your last: ..." for those rows so it never
+  shows 3 x 10 and logs something else. Cost: a plan built to 40 minutes can run long if your own
+  scheme has more sets than the coach assumed.
 
 **Pro billing: separate lifetime counts, shared Stripe, off until tested (2026-09-28).** Price is
 MenuCaptain's: $2.99/month, $19.99/year. Free is a LIFETIME allowance per feature - 40 AI
