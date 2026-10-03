@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.151.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.152.0`, backend `v0.31.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -214,7 +214,10 @@ the exercises he wants into today's workout. The coach already existed ("Today's
   one question, once.
 
 **Pro billing: separate lifetime counts, shared Stripe, off until tested (2026-09-28).** Price is
-MenuCaptain's: $2.99/month, $19.99/year. Free is a LIFETIME allowance per feature - 40 AI
+**$3.99/month, $29.99/year** (Chris, 2026-10-03 - matching MenuCaptain's parked increase from launch, so no
+FitnessCaptain subscriber ever has to be moved; was $2.99/$19.99). The plan card shows the prices STRIPE
+returns (`stripe_prices()` in the backend, cached 1h, last-good on a Stripe failure); `PRICE_FALLBACK` in
+the app is shown only until Stripe is wired, so screen and charge cannot drift. Free is a LIFETIME allowance per feature - 40 AI
 requests, 3 gym scans, 10 gym searches - each with its own counter, because a scan costs about
 ten chat calls and must not be able to eat the chat budget. Chris chose this over one pooled
 credit ("why did that cost 8?") and over MenuCaptain's single 75-call counter. Pro removes all
