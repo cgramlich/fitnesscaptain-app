@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.150.0";
+const APP_VERSION = "0.151.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.10";
+const BUILD = "2026-10-03.11";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -2659,20 +2659,19 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
    returns what changed so the caller can offer an undo: which muscle a
    bench press trains is not a judgement call, so making the user approve a
    list was pure friction. Anything odd is still editable per exercise. */
-async function classifyExercises(store){
-  const list = (store.data.exercises||[])
-    .filter(x => (x.muscleGroup||"Full body")==="Full body").slice(0,120);
-  if(!list.length) throw new Error("Nothing to sort.");
-  const system = 'You assign each exercise its PRIMARY muscle group. Return ONLY strict JSON, ' +
-    'no prose and no markdown fences: {"items":[{"name":"exact name given","group":"..."}]}. ' +
-    'group must be exactly one of: ' + MUSCLE_GROUPS.join(", ") + '. ' +
-    'Use "Full body" ONLY for genuine whole-body movements (swings, carries, sled work, ' +
-    'burpees, general conditioning). Mobility drills get the area they target ' +
-    '(a thoracic rotation drill is Back, a hip stretch is Legs). Return every name exactly ' +
-    'as given, once.';
-  const out = await aiRelay("classify_exercises",
-    [{ role:"user", content: list.map(x=>x.name+" ("+(x.type||"strength")+")").join("\n") }],
-    { system, maxTokens: 4000 });
+const CLASSIFY_SYSTEM = () => 'You assign each exercise its PRIMARY muscle group. Return ONLY strict JSON, ' +
+  'no prose and no markdown fences: {"items":[{"name":"exact name given","group":"..."}]}. ' +
+  'group must be exactly one of: ' + MUSCLE_GROUPS.join(", ") + '. ' +
+  'Use "Full body" ONLY for genuine whole-body movements (swings, carries, sled work, ' +
+  'burpees, general conditioning). Mobility drills get the area they target ' +
+  '(a thoracic rotation drill is Back, a hip stretch is Legs). Return every name exactly ' +
+  'as given, once.';
+
+/* Applies a sort answer to the exercises in `list` ({id, name, from}). The
+   change is measured against each one's ORIGINAL group (from), so after a
+   reply re-sorts them, Undo still restores what was there before any
+   sorting - not the first attempt's guess. */
+function applyClassify(store, list, out){
   let obj;
   try{ obj = JSON.parse(stripFences(out)); }
   catch(e){ throw new Error("Couldn't read the result - try again."); }
@@ -2680,16 +2679,34 @@ async function classifyExercises(store){
   const changes = (Array.isArray(obj && obj.items)?obj.items:[]).map(it => {
     const ex = byName[normName(it.name)];
     if(!ex || !MUSCLE_GROUPS.includes(it.group)) return null;
-    const from = ex.muscleGroup || "Full body";
-    if(it.group === from) return null;
-    return { id: ex.id, name: ex.name, from, to: it.group };
+    if(it.group === ex.from) return null;
+    return { id: ex.id, name: ex.name, from: ex.from, to: it.group };
   }).filter(Boolean);
-  if(!changes.length) throw new Error("Those all look right already - nothing to change.");
-  const map = {}; changes.forEach(c => { map[c.id] = c.to; });
+  // Every listed exercise is set to its answer OR back to its original, so a
+  // reply that moves one back ("that IS full body") actually moves it back.
+  const map = {}; list.forEach(x => { map[x.id] = x.from; });
+  changes.forEach(c => { map[c.id] = c.to; });
   store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
-    map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
+    map[x.id] !== undefined && map[x.id] !== x.muscleGroup ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
   log("CLASSIFY","sorted "+changes.length+" exercises");
   return changes;
+}
+
+/* Assign a primary muscle group to library exercises that never got one
+   (imports used to stamp everything "Full body"). Applies straight away and
+   returns what changed so the caller can offer an undo - plus the question
+   it asked, so a reply can correct it. */
+async function classifyExercises(store){
+  const list = (store.data.exercises||[])
+    .filter(x => (x.muscleGroup||"Full body")==="Full body").slice(0,120)
+    .map(x => ({ id: x.id, name: x.name, type: x.type, from: x.muscleGroup || "Full body" }));
+  if(!list.length) throw new Error("Nothing to sort.");
+  const system = CLASSIFY_SYSTEM();
+  const base = [{ role:"user", content: list.map(x=>x.name+" ("+(x.type||"strength")+")").join("\n") }];
+  const out = await aiRelay("classify_exercises", base, { system, maxTokens: 4000 });
+  const changes = applyClassify(store, list, out);
+  if(!changes.length) throw new Error("Those all look right already - nothing to change.");
+  return { changes, conv: { system, base, answer: out, list } };
 }
 
 /* Rename the library to the reference database's canonical titles and fill
@@ -2854,9 +2871,10 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete, undoable }){
     setNormed(null);
   };
 
+  const [sortConv, setSortConv] = useState(null);   // the question behind `sorted`, for a reply
   const runSort = async () => {
     setSorting(true); setSortErr("");
-    try{ setSorted(await classifyExercises(store)); }
+    try{ const r = await classifyExercises(store); setSorted(r.changes); setSortConv(r.conv); }
     catch(e){ setSortErr(e.message||"Couldn't sort them."); log("ERROR","classify: "+e.message); }
     finally{ setSorting(false); }
   };
@@ -2865,7 +2883,7 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete, undoable }){
     store.saveCollection("exercises", (store.data.exercises||[]).map(x =>
       map[x.id] ? { ...x, muscleGroup: map[x.id], updatedAt: nowISO() } : x));
     log("CLASSIFY","undo "+(sorted||[]).length+" changes");
-    setSorted(null);
+    setSorted(null); setSortConv(null);
   };
 
   if(!exercises.length){
@@ -2969,9 +2987,16 @@ function ExercisesScreen({ store, onAdd, onEdit, onDelete, undoable }){
               </div>
             ))}
             {sorted.length>12 && <div className="hint">and {sorted.length-12} more</div>}
+            {sortConv &&
+              <AIReply task="classify_exercises" maxTokens={4000} base={sortConv.base} answer={sortConv.answer}
+                system={sortConv.system + " If they reply with a correction, return the WHOLE list again " +
+                        "in the same JSON shape with the correction made."}
+                onResult={(out)=>{ setSortErr(""); try{ setSorted(applyClassify(store, sortConv.list, out)); }
+                                   catch(e){ setSortErr(e.message || "Couldn't read that - try saying it another way."); } }}
+                placeholder="Reply - cable row is back, not arms..." />}
             <div className="row" style={{marginTop:10}}>
               <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={undoSort}>Undo</button>
-              <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setSorted(null)}>Done</button>
+              <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>{ setSorted(null); setSortConv(null); }}>Done</button>
             </div>
           </div>
         : (unclassified.length >= 3 &&
@@ -4696,31 +4721,37 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
     return { g, total: inGroup.length, have: inGroup.filter(x=>availableAt(x, gym)).length };
   }).filter(x=>x.total>0) : [];
 
+  // Held outside organize() so a reply can rebuild the question.
+  const orgSystem = 'You organize a gym equipment inventory into strict JSON. Return ONLY a JSON object, ' +
+    'no prose and no markdown fences: {"catalog":[{"category":"...","items":[{"name":"...","detail":"..."}]}]}. ' +
+    'category must be exactly one of: ' + CATALOG_CATEGORIES.map(c=>'"'+c+'"').join(", ") + '. ' +
+    'name = a short item name (e.g. "Dumbbells", "Squat rack"); detail = that item\'s specifics from the ' +
+    'text (ranges, counts, attachments), or "" if none. Include every item from the text exactly once, ' +
+    'split multi-item lines, never invent equipment, omit empty categories.';
+  const orgBase = [{ role:"user", content: (gym.inventory||"").slice(0, 8000) }];
+  /* JSON -> the saved catalog. Its own function so a reply ("the bands are
+     cardio, not accessories", "split the dumbbells") can redo it. */
+  const applyCatalog = (out) => {
+    let obj;
+    try{ obj = JSON.parse(stripFences(out)); }
+    catch(e){ throw new Error("Couldn't organize that - try simplifying the inventory text."); }
+    const catalog = (Array.isArray(obj && obj.catalog) ? obj.catalog : [])
+      .filter(s => CATALOG_CATEGORIES.includes(s.category) && Array.isArray(s.items) && s.items.length)
+      .map(s => ({ category: s.category,
+                   items: s.items.map(it => ({ name: String(it.name||"").slice(0,60),
+                                               detail: String(it.detail||"").slice(0,200) }))
+                                 .filter(it=>it.name) }))
+      .sort((a,b)=>CATALOG_CATEGORIES.indexOf(a.category)-CATALOG_CATEGORIES.indexOf(b.category));
+    if(!catalog.length) throw new Error("Nothing recognizable in the inventory text.");
+    store.saveGyms((store.gyms||[]).map(g => g.id===gym.id ? { ...g, catalog, updatedAt: nowISO() } : g));
+    return catalog;
+  };
   const organize = async () => {
     if(!gym.inventory){ return; }
     setOrganizing(true); setOrgErr("");
     try{
-      const system = 'You organize a gym equipment inventory into strict JSON. Return ONLY a JSON object, ' +
-        'no prose and no markdown fences: {"catalog":[{"category":"...","items":[{"name":"...","detail":"..."}]}]}. ' +
-        'category must be exactly one of: ' + CATALOG_CATEGORIES.map(c=>'"'+c+'"').join(", ") + '. ' +
-        'name = a short item name (e.g. "Dumbbells", "Squat rack"); detail = that item\'s specifics from the ' +
-        'text (ranges, counts, attachments), or "" if none. Include every item from the text exactly once, ' +
-        'split multi-item lines, never invent equipment, omit empty categories.';
-      const out = await aiRelay("organize_inventory",
-        [{ role:"user", content: gym.inventory.slice(0, 8000) }],
-        { system, maxTokens: 4000 });
-      let obj;
-      try{ obj = JSON.parse(stripFences(out)); }
-      catch(e){ throw new Error("Couldn't organize that - try simplifying the inventory text."); }
-      const catalog = (Array.isArray(obj && obj.catalog) ? obj.catalog : [])
-        .filter(s => CATALOG_CATEGORIES.includes(s.category) && Array.isArray(s.items) && s.items.length)
-        .map(s => ({ category: s.category,
-                     items: s.items.map(it => ({ name: String(it.name||"").slice(0,60),
-                                                 detail: String(it.detail||"").slice(0,200) }))
-                                   .filter(it=>it.name) }))
-        .sort((a,b)=>CATALOG_CATEGORIES.indexOf(a.category)-CATALOG_CATEGORIES.indexOf(b.category));
-      if(!catalog.length) throw new Error("Nothing recognizable in the inventory text.");
-      store.saveGyms((store.gyms||[]).map(g => g.id===gym.id ? { ...g, catalog, updatedAt: nowISO() } : g));
+      const out = await aiRelay("organize_inventory", orgBase, { system: orgSystem, maxTokens: 4000 });
+      const catalog = applyCatalog(out);
       log("GYM","catalog organized: "+catalog.length+" categories");
     }catch(e){ setOrgErr(e.message||"Organize failed."); log("ERROR","organize_inventory: "+e.message); }
     finally{ setOrganizing(false); }
@@ -4861,6 +4892,16 @@ function GymDetail({ store, gymId, onEdit, onStartHere, onClose, notify }){
               <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} disabled={organizing} onClick={organize}>
                 {organizing ? <span className="spin"></span> : "Re-organize from the inventory text"}
               </button>
+              {/* A reply re-sorts the SAVED catalog in place - it is the gym's
+                  own list, so there is no preview step to correct first. */}
+              {gym.inventory &&
+                <AIReply key={gym.id} task="organize_inventory" maxTokens={4000} base={orgBase}
+                  answer={JSON.stringify({ catalog })}
+                  system={orgSystem + " If they reply with a correction, return the WHOLE catalog again " +
+                          "in the same JSON shape with the correction made."}
+                  onResult={(out)=>{ setOrgErr(""); try{ applyCatalog(out); }
+                                     catch(e){ setOrgErr(e.message || "Couldn't read that - try saying it another way."); } }}
+                  placeholder="Reply - bands go under accessories, split the dumbbells..." />}
             </>
           : invLines.length
             ? <>
@@ -5751,6 +5792,44 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
       : null;
   };
 
+  /* For a reply. The PHOTOS are not sent again: a follow-up carrying 24 frames
+     would cost a whole new scan and, on the free plan, use up one of the three
+     free scans for a one-word correction. The model fixes its own list from
+     the list plus what you tell it ("that's a ski erg, not a rower"), so the
+     reply goes as text and counts as an ordinary AI request. */
+  const [scanConv, setScanConv] = useState(null);   // {system, answer}
+  const scanReplyBase = [{ role:"user", content: "Inventory this gym's equipment from my photos. " +
+    "(The photos went with the first request; this follow-up carries only your answer and my correction.)" }];
+
+  /* JSON -> the review rows. Its own function so a reply can run it again. */
+  const applyScan = (out) => {
+    let obj;
+    try{ obj = JSON.parse(stripFences(out)); }
+    catch(e){ throw new Error("Couldn't read the result - try again."); }
+    // Keyed on the NAME of each existing line, so a re-scan that rewords
+    // the detail still recognises the item. Substring matching on the raw
+    // blob missed plurals and matched by accident.
+    const existingKeys = new Set((gym.inventory||"").split("\n")
+      .map(l=>invKey(l)).filter(Boolean));
+    const rows = (Array.isArray(obj && obj.items) ? obj.items : []).map(it => {
+      const name = String(it.name||"").slice(0,60);
+      const dup = !!name && existingKeys.has(invKey(name));
+      return {
+        include: !dup,                        // already-listed items default to Skip
+        name,
+        detail: String(it.detail||"").slice(0,200),
+        count: Math.max(1, Math.min(99, Math.round(Number(it.count)||1))),
+        low: it.confidence === "low",
+        dup,
+      };
+    }).filter(it=>it.name);
+    if(!rows.length) throw new Error("No equipment recognized - try clearer photos.");
+    setItems(rows);
+    setTags((Array.isArray(obj.tags)?obj.tags:[]).filter(t=>GATING_EQUIP.includes(t)));
+    setPhase("review");
+    return rows;
+  };
+
   const analyze = async () => {
     if(!imgs.length){ setErr("Add at least one photo."); return; }
     setErr(""); setPhase("busy");
@@ -5770,30 +5849,8 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
       const content = imgs.map(im => ({ type:"image", source:{ type:"base64", media_type:"image/jpeg", data: im.b64 } }));
       content.push({ type:"text", text:"Inventory this gym's equipment from the photos." });
       const out = await aiRelay("inventory_gym", [{ role:"user", content }], { system, maxTokens: 4000 });
-      let obj;
-      try{ obj = JSON.parse(stripFences(out)); }
-      catch(e){ throw new Error("Couldn't read the result - try again."); }
-      // Keyed on the NAME of each existing line, so a re-scan that rewords
-      // the detail still recognises the item. Substring matching on the raw
-      // blob missed plurals and matched by accident.
-      const existingKeys = new Set((gym.inventory||"").split("\n")
-        .map(l=>invKey(l)).filter(Boolean));
-      const rows = (Array.isArray(obj && obj.items) ? obj.items : []).map(it => {
-        const name = String(it.name||"").slice(0,60);
-        const dup = !!name && existingKeys.has(invKey(name));
-        return {
-          include: !dup,                        // already-listed items default to Skip
-          name,
-          detail: String(it.detail||"").slice(0,200),
-          count: Math.max(1, Math.min(99, Math.round(Number(it.count)||1))),
-          low: it.confidence === "low",
-          dup,
-        };
-      }).filter(it=>it.name);
-      if(!rows.length) throw new Error("No equipment recognized - try clearer photos.");
-      setItems(rows);
-      setTags((Array.isArray(obj.tags)?obj.tags:[]).filter(t=>GATING_EQUIP.includes(t)));
-      setPhase("review");
+      const rows = applyScan(out);
+      setScanConv({ system, answer: out });
       log("SCAN","recognized "+rows.length+" items");
     }catch(e){
       setErr(e.message||"Scan failed."); setPhase("pick");
@@ -5918,6 +5975,13 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
             Check the list - fix counts, skip anything it imagined. Nothing
             saves until you confirm.
           </p>
+          {scanConv &&
+            <AIReply task="inventory_gym" maxTokens={4000} base={scanReplyBase} answer={scanConv.answer}
+              system={scanConv.system + " This is a follow-up WITHOUT the photos: correct your own list " +
+                      "from what they tell you, and return the WHOLE list again in the same JSON shape."}
+              onResult={(out)=>{ setErr(""); try{ applyScan(out); }
+                                 catch(e){ setErr(e.message || "Couldn't read that - try saying it another way."); } }}
+              placeholder="Reply - that's a ski erg, there are two benches..." />}
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
           {items.map((it,i)=>(
             <div key={i} className="entry" style={{opacity:it.include?1:.45}}>
@@ -8141,6 +8205,57 @@ function ImportLayer({ store, onClose, onImported }){
   const [parsed, setParsed] = useState([]);
   const [skipped, setSkipped] = useState([]);
   const units = store.cfg.units || "lb";
+  // The question behind the preview, so a reply ("Tuesday was legs, not
+  // back", "the 135s were kg") can redo it without re-pasting.
+  const [conv, setConv] = useState(null);   // {system, base, answer}
+
+  /* Turns the model's JSON into the review list. Its own function so the
+     reply box can run it again on a corrected answer. Throws on anything it
+     cannot use, with a sentence a person can act on. */
+  const applyParse = async (out) => {
+    let obj;
+    try{ obj = JSON.parse(stripFences(out)); }
+    catch(e){ throw new Error("Couldn't read the result. Try pasting a smaller chunk."); }
+    const ws = Array.isArray(obj && obj.workouts) ? obj.workouts : [];
+    if(!ws.length) throw new Error("No workouts found in that text. Try a different chunk.");
+    const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
+    const mediaIdx = await loadMediaIndex();
+    const review = ws.map(w => {
+      const gym = matchGym(store.gyms||[], w.gym);
+      return {
+      include: true,
+      date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
+      name: (w.name||"Imported workout").slice(0,60),
+      notes: (w.notes||"").slice(0,500),
+      gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
+      entries: (Array.isArray(w.entries)?w.entries:[]).map(e => {
+        const type = EXERCISE_TYPES.includes(e.type) ? e.type : "strength";
+        const sets = (type==="strength" && Array.isArray(e.sets))
+          ? e.sets.map(s=>{
+              const rec = { reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
+                            weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) };
+              const mark = effortKey(s.effort);   // also folds legacy easy/hard
+              if(mark) rec.effort = mark;
+              return rec;
+            }).filter(s=>s.reps>0)
+          : [];
+        const cardio = (type!=="strength" && e.cardio && Number(e.cardio.minutes)>0)
+          ? { minutes: Math.round(Number(e.cardio.minutes)), distance: Math.max(0, Number(e.cardio.distance)||0), unit: units==="kg"?"km":"mi" }
+          : null;
+        const name = String(e.exercise||"Exercise").slice(0,60);
+        const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
+        const settings = String(e.settings||"").slice(0,80);
+        const equip = EQUIPMENT.includes(e.equipment) ? e.equipment : "none";
+        return { name, type, group, equip, sets, cardio, settings, ...nameSuggestion(mediaIdx, lib, name) };
+      }).filter(e => e.sets.length || e.cardio),
+      };
+    }).filter(w => w.entries.length);
+    if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
+    setParsed(review);
+    setSkipped(Array.isArray(obj.skipped) ? obj.skipped.slice(0,20) : []);
+    setPhase("review");
+    return review;
+  };
 
   const organize = async () => {
     const t = text.trim();
@@ -8149,50 +8264,11 @@ function ImportLayer({ store, onClose, onImported }){
     try{
       const names = (store.data.exercises||[]).map(x=>x.name);
       const gymNames = (store.gyms||[]).map(g=>g.name);
-      const out = await aiRelay("import_history",
-        [{ role:"user", content: t.slice(0, 20000) }],
-        { system: importSystemPrompt(units, names, gymNames), maxTokens: 16000 });
-      let obj;
-      try{ obj = JSON.parse(stripFences(out)); }
-      catch(e){ throw new Error("Couldn't read the result. Try pasting a smaller chunk."); }
-      const ws = Array.isArray(obj && obj.workouts) ? obj.workouts : [];
-      if(!ws.length) throw new Error("No workouts found in that text. Try a different chunk.");
-      const lib = {}; (store.data.exercises||[]).forEach(x=>{ lib[normName(x.name)] = x; });
-      const mediaIdx = await loadMediaIndex();
-      const review = ws.map(w => {
-        const gym = matchGym(store.gyms||[], w.gym);
-        return {
-        include: true,
-        date: (typeof w.date==="string" && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) ? w.date : todayStr(),
-        name: (w.name||"Imported workout").slice(0,60),
-        notes: (w.notes||"").slice(0,500),
-        gymId: gym ? gym.id : null, gymName: gym ? gym.name : null,
-        entries: (Array.isArray(w.entries)?w.entries:[]).map(e => {
-          const type = EXERCISE_TYPES.includes(e.type) ? e.type : "strength";
-          const sets = (type==="strength" && Array.isArray(e.sets))
-            ? e.sets.map(s=>{
-                const rec = { reps: Math.max(0, Math.min(999, Math.round(Number(s.reps)||0))),
-                              weight: Math.max(0, Math.min(2000, Math.round((Number(s.weight)||0)*100)/100)) };
-                const mark = effortKey(s.effort);   // also folds legacy easy/hard
-                if(mark) rec.effort = mark;
-                return rec;
-              }).filter(s=>s.reps>0)
-            : [];
-          const cardio = (type!=="strength" && e.cardio && Number(e.cardio.minutes)>0)
-            ? { minutes: Math.round(Number(e.cardio.minutes)), distance: Math.max(0, Number(e.cardio.distance)||0), unit: units==="kg"?"km":"mi" }
-            : null;
-          const name = String(e.exercise||"Exercise").slice(0,60);
-          const group = MUSCLE_GROUPS.includes(e.group) ? e.group : "Full body";
-          const settings = String(e.settings||"").slice(0,80);
-          const equip = EQUIPMENT.includes(e.equipment) ? e.equipment : "none";
-          return { name, type, group, equip, sets, cardio, settings, ...nameSuggestion(mediaIdx, lib, name) };
-        }).filter(e => e.sets.length || e.cardio),
-        };
-      }).filter(w => w.entries.length);
-      if(!review.length) throw new Error("Nothing usable was parsed. Try a different chunk.");
-      setParsed(review);
-      setSkipped(Array.isArray(obj.skipped) ? obj.skipped.slice(0,20) : []);
-      setPhase("review");
+      const base = [{ role:"user", content: t.slice(0, 20000) }];
+      const system = importSystemPrompt(units, names, gymNames);
+      const out = await aiRelay("import_history", base, { system, maxTokens: 16000 });
+      const review = await applyParse(out);
+      setConv({ system, base, answer: out });
       log("IMPORT","parsed "+review.length+" workouts");
     }catch(e){
       setErr(e.message||"Import failed."); setPhase("paste");
@@ -8273,6 +8349,13 @@ function ImportLayer({ store, onClose, onImported }){
             Review before saving. Tap a workout to include or skip it; fix any dates.
             Exercises marked "new" will be added to your library.
           </p>
+          {conv &&
+            <AIReply task="import_history" maxTokens={16000} base={conv.base} answer={conv.answer}
+              system={conv.system + " If they reply with a correction, return the WHOLE result again " +
+                      "in the same JSON shape with the correction made."}
+              onResult={async (out)=>{ setErr(""); try{ await applyParse(out); }
+                                       catch(e){ setErr(e.message || "Couldn't read that - try saying it another way."); } }}
+              placeholder="Reply - Tuesday was legs, those were kg..." />}
           {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
           {parsed.map((w,i) => (
             <div key={i} className="entry" style={{opacity: w.include?1:.45}}>
