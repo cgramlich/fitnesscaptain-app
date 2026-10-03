@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.143.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.144.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -132,7 +132,9 @@ Chris: "after a set that I feel is easy, I wanna go up for that same set the nex
 looks like the code is just having me change it for the next set." It was: the Next time control
 lived in the panel, and the panel belongs to the set you are ABOUT to lift, while "that was easy"
 is only knowable after. The control is now on each logged row - a green up arrow (one weight step
-per tap) and the next chip, which opens reps/weight +/- with "same as today". The panel line is
+per tap) beside a red down arrow (Chris: "so I will never have to open the number"), and the next
+chip, which opens one line each for reps and weight as red-down / typeable number / green-up
+(`NextNum`, Stepper's typing rules), plus "same as today". The panel line is
 GONE (Chris chose one place over two). Rows became `div role=button`: a button inside a button is
 invalid and its clicks fall through to the row. `setNextFor` stores numbers, never a direction, and
 equal-to-today clears the target. Editing a set in the panel still writes its existing target back.
