@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.141.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.142.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -152,6 +152,16 @@ the exercises he wants into today's workout. The coach already existed ("Today's
   `latestSetupFor` as Add to today. The card says "Your last: ..." for those rows so it never
   shows 3 x 10 and logs something else. Cost: a plan built to 40 minutes can run long if your own
   scheme has more sets than the coach assumed.
+- **First live use found three gaps (2026-10-03, v0.142.0).** Chris: "I am at River Crossing
+  today. What am I due for?" The coach asked which gym he meant (his RCC gym has no Google
+  link, so nothing tied it to River Crossing) and he could not answer, because the gym and time
+  pickers were DISABLED once the chat began. Fixed: (1) the pickers never lock; changing either
+  mid-conversation sends a re-plan turn, shown as "Changed to 30 min". (2) Questions come with
+  tappable answers - an ```ask block parsed like ```plan - and the coach must ask when the time
+  was not stated (said in the sentence or set on the picker by hand) or the gym is genuinely
+  unclear. (3) **Gym aliases are learnt**: the plan block's `heard_as` is saved on the gym
+  (`gym.aliases`, last 5) and listed as "also called" in every later session, so a name costs
+  one question, once.
 
 **Pro billing: separate lifetime counts, shared Stripe, off until tested (2026-09-28).** Price is
 MenuCaptain's: $2.99/month, $19.99/year. Free is a LIFETIME allowance per feature - 40 AI

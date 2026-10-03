@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.141.0";
+const APP_VERSION = "0.142.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.1";
+const BUILD = "2026-10-03.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4802,17 +4802,39 @@ function libByName(store, name){
   return (store.data.exercises||[]).find(x => normName(x.name) === n) || null;
 }
 
+/* Two optional fenced blocks per reply: ```plan (the session) and ```ask (a
+   question with tappable answers). Both are stripped from the shown text.
+
+   The ask block exists because Chris, when his sentence left something out:
+   "there should be follow-ups and questions back to clarify what I want."
+   A question you answer by tapping "45 min" or a gym name is one tap; the
+   same question in prose made him type the answer, and on the gym question
+   he could not answer at all. */
 function parsePlan(text){
-  const m = String(text||"").match(/```plan\s*([\s\S]*?)```/);
-  if(!m) return { body: String(text||"").trim(), plan: null };
-  let plan = null;
-  try{
-    const j = JSON.parse(m[1].trim());
-    const items = Array.isArray(j.items) ? j.items.filter(it => it && it.name) : [];
-    if(items.length) plan = { name: String(j.name||"Today's session").slice(0,60), items,
-                              gym: j.gym ? String(j.gym).slice(0,80) : null };
-  }catch(e){ /* a malformed block is not worth failing the message over */ }
-  return { body: String(text||"").replace(m[0], "").trim(), plan };
+  let body = String(text||"");
+  let plan = null, ask = null;
+  const m = body.match(/```plan\s*([\s\S]*?)```/);
+  if(m){
+    try{
+      const j = JSON.parse(m[1].trim());
+      const items = Array.isArray(j.items) ? j.items.filter(it => it && it.name) : [];
+      if(items.length) plan = { name: String(j.name||"Today's session").slice(0,60), items,
+                                gym: j.gym ? String(j.gym).slice(0,80) : null,
+                                heardAs: j.heard_as ? String(j.heard_as).slice(0,40) : null };
+    }catch(e){ /* a malformed block is not worth failing the message over */ }
+    body = body.replace(m[0], "");
+  }
+  const a = body.match(/```ask\s*([\s\S]*?)```/);
+  if(a){
+    try{
+      const j = JSON.parse(a[1].trim());
+      const options = (Array.isArray(j.options) ? j.options : [])
+        .map(o => String(o).slice(0,40)).filter(Boolean).slice(0,6);
+      if(options.length) ask = { options };
+    }catch(e){}
+    body = body.replace(a[0], "");
+  }
+  return { body: body.trim(), plan, ask };
 }
 
 /* "40 minute", "45 mins", "an hour", "half an hour", "hour and a half".
@@ -4840,6 +4862,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
      will keep most of it, and unticking one or two is fewer taps than
      ticking six. */
   const [skips, setSkips] = useState({});   // {msgIdx: {itemIdx: true}}
+  const [minsTouched, setMinsTouched] = useState(false);   // picker set by hand before sending
   const [msgs, setMsgs]   = useState([]);      // [{role:"user"|"ai", body, plan, raw}]
   const [draft, setDraft] = useState("");
   const [busy, setBusy]   = useState(false);
@@ -4855,9 +4878,16 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
   /* Everything the coach needs that the user should not have to type. Recent
      history matters most: proposing back on the day after a heavy back
      session is the single most obvious way for this to look stupid. */
-  const context = (gym, mins) => {
+  const context = (gym, mins, timeStated) => {
     const lines = [];
-    lines.push("Time available: " + mins + " minutes, including warm-up.");
+    /* A time nobody said is a guess, and planning to a guess is how a 45-minute
+       session lands on someone who has 30. Unstated -> the coach asks first,
+       with the answers as buttons. "Stated" means said in the sentence or set
+       on the picker by hand before sending. */
+    lines.push(timeStated
+      ? "Time available: " + mins + " minutes, including warm-up."
+      : "Time available: NOT stated. Before planning, ask how long they have, with an " +
+        "ask block offering \"30 min\", \"45 min\", \"60 min\", \"75 min\".");
     /* EVERY GYM, not just the picked one, so "I'll be at River Crossing" can
        be honoured without a dropdown. Gym names are whatever the person typed
        ("RCC Gym") while they SAY the real name ("River Crossing"), which is
@@ -4869,7 +4899,10 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
       lines.push("Their gyms (if the request names one, plan for THAT gym and set \"gym\" " +
                  "in the plan block to its exact name below): " +
         gyms.map(x => {
-          const aka = x.placeName && x.placeName !== x.name ? " / Google: " + x.placeName : "";
+          // Aliases are names the person has already confirmed for this gym
+          // ("River Crossing" for "RCC Gym") - learnt from heard_as below.
+          const aka = (x.placeName && x.placeName !== x.name ? " / Google: " + x.placeName : "") +
+                      ((x.aliases||[]).length ? " / also called: " + x.aliases.join(", ") : "");
           const kit = (x.equipment||[]).join(", ") +
                       (x.inventory ? ". " + String(x.inventory).replace(/\s+/g," ").slice(0,500) : "");
           return "[" + x.name + aka + "] kit: " + (kit || "not recorded");
@@ -4949,13 +4982,23 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
     "conversation. Keep replies SHORT - two or three sentences of reasoning at most, " +
     "no headings, no bullet lists of the plan in prose. The plan itself goes in the " +
     "block described below, so do not repeat it in the text.\n\n" +
-    "Ask a clarifying question ONLY if you genuinely cannot proceed. Time, gym, " +
-    "equipment and recent history are given to you - never ask for those. If the " +
-    "request is vague, make a sensible call, propose it, and say what you assumed.\n\n" +
+    "QUESTIONS. Ask, rather than guess, when the context says the time was not stated, " +
+    "or when they name a gym that is not clearly one of theirs (match nicknames, " +
+    "abbreviations, Google names and 'also called' names generously - 'River Crossing' " +
+    "is RCC; only ask when it is genuinely unclear). Ask ONE question per reply, in one " +
+    "short sentence, and END the reply with a fenced block of tappable answers:\n" +
+    "```ask\n{\"options\":[\"30 min\",\"45 min\",\"60 min\"]}\n```\n" +
+    "For a gym question the options are their gym names exactly as listed, plus " +
+    "\"Somewhere else\". No plan block in a reply that asks. Recent history and muscle " +
+    "groups are given - never ask about those. Anything else vague: make a sensible " +
+    "call, plan it, and say what you assumed.\n\n" +
     "If they ask what they are due for, or leave the choice of body parts to you, open " +
     "with ONE sentence naming the most overdue groups by their day counts (e.g. 'Legs " +
     "were 6 days ago and chest 5; back was yesterday so it sits out') and build around " +
     "those. If they name a gym, say which of their gyms you took it to be.\n\n" +
+    "When they called the gym something other than its listed name, add " +
+    "\"heard_as\":\"<what they called it>\" to the plan block, so the app can remember " +
+    "it.\n\n" +
     "Cover any kind of training asked for: lifting, cardio, intervals, Pilates, " +
     "mobility, rehab-ish easy work. Not everything is barbells.\n\n" +
     "BUDGET THE TIME HONESTLY. Roughly 3 minutes per strength set including rest, " +
@@ -4977,19 +5020,27 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
     "are asking a question.\n\n" +
     "Do NOT give calorie, protein, macro or medication advice.";
 
-  const send = async (textIn) => {
+  // shownAs: what the thread SHOWS for a turn the app wrote on your behalf
+  // (a picker change), while the coach gets the full instruction.
+  const send = async (textIn, shownAs) => {
     const text = String(textIn == null ? draft : textIn).trim();
     if(!text || busy) return;
-    setErr(""); setDraft("");
-    const mine = { role:"user", body:text, raw:text, plan:null };
+    setErr(""); if(!shownAs) setDraft("");
+    const mine = { role:"user", body: shownAs || text, raw:text, plan:null };
     const history = msgs.concat([mine]);
     setMsgs(history); setBusy(true);
     // A time said in the FIRST message beats the picker; it is the budget
     // the whole plan is built to. Later turns re-plan inside the thread.
-    let minsNow = mins;
+    let minsNow = mins, timeStated = minsTouched;
     if(history.length === 1){
       const said = parseAskMinutes(text);
-      if(said){ minsNow = said; setMins(said); }
+      if(said){ minsNow = said; setMins(said); timeStated = true; }
+    }
+    // An answer to "how long have you got?" - tapped or typed - moves the
+    // picker too, so the screen shows the budget the plan was built to.
+    if(history.length > 1){
+      const said = parseAskMinutes(text);
+      if(said) setMins(said);
     }
     try{
       /* The FIRST user turn carries the context. Later turns do not repeat it -
@@ -4997,15 +5048,27 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
          "make it shorter" would triple the cost of the cheapest turns. */
       const wire = history.map((m,i) => ({
         role: m.role === "user" ? "user" : "assistant",
-        content: (i === 0 && m.role === "user") ? (context(gym, minsNow) + "\n\nRequest: " + m.raw) : m.raw,
+        content: (i === 0 && m.role === "user") ? (context(gym, minsNow, timeStated) + "\n\nRequest: " + m.raw) : m.raw,
       }));
       const out = await aiRelay("session_design", wire, { system, maxTokens: 2000 });
-      const { body, plan } = parsePlan(out);
+      const { body, plan, ask } = parsePlan(out);
       // The coach chose a gym from what was said: show it in the picker, so
       // the screen agrees with the plan and Start logs it at the right place.
       const chosen = plan && plan.gym ? gyms.find(g => g.name === plan.gym) : null;
-      if(chosen) setGymId(chosen.id);
-      setMsgs(h => h.concat([{ role:"ai", body: body || "Here's a plan.", raw: out, plan }]));
+      if(chosen){
+        setGymId(chosen.id);
+        /* REMEMBER WHAT THEY CALLED IT. "River Crossing" for "RCC Gym" cost a
+           question the first time; it should never cost one again. Saved on
+           the gym, so every later coach session sees it in the gym list. */
+        const heard = (plan.heardAs || "").trim();
+        const known = [chosen.name].concat(chosen.aliases||[]).map(s => s.toLowerCase());
+        if(heard && known.indexOf(heard.toLowerCase()) === -1){
+          store.saveGyms((store.gyms||[]).map(g => g.id === chosen.id
+            ? { ...g, aliases: (g.aliases||[]).concat([heard]).slice(-5) } : g));
+          log("AI", "gym alias learnt: '" + heard + "' -> " + chosen.name);
+        }
+      }
+      setMsgs(h => h.concat([{ role:"ai", body: body || (ask ? "" : "Here's a plan."), raw: out, plan, ask }]));
       log("AI", "session_design turn " + history.length + (plan ? " (plan)" : ""));
     }catch(e){
       setErr(e.message || "Couldn't reach the coach.");
@@ -5084,15 +5147,34 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
 
         {/* The two facts that change every session sit at the top as controls,
             not questions. Everything else it reads from your data. */}
+        {/* NEVER LOCKED. They were disabled once the chat began, on the theory
+            that the context had already gone; Chris then got "did you mean
+            RCC Gym?" with no way to pick RCC. A change mid-conversation is
+            now just another turn - "I'm at RCC instead", "I've only got 30" -
+            and the coach re-plans, which is what he asked for. */}
         <div className="row" style={{gap:8,marginTop:10,flexWrap:"wrap"}}>
           {gyms.length > 0 &&
             <select className="input" style={{flex:"1 1 150px",minWidth:0}} value={gymId||""}
-                    onChange={e=>setGymId(e.target.value||null)} disabled={msgs.length>0}>
+                    disabled={busy}
+                    onChange={e=>{ const id = e.target.value||null; setGymId(id);
+                      if(msgs.length){
+                        const g = gyms.find(x => x.id === id);
+                        const kit = g ? ((g.equipment||[]).join(", ") +
+                          (g.inventory ? ". " + String(g.inventory).replace(/\s+/g," ").slice(0,1500) : "")) : "";
+                        send(g ? "I'm at " + g.name + " instead. Its equipment: " + (kit || "not recorded") +
+                                 ". Re-plan for this gym and set \"gym\" to \"" + g.name + "\"."
+                               : "No fixed gym - plan for bodyweight, dumbbells and a bench.",
+                             g ? "Switched to " + g.name : "Switched to no fixed gym");
+                      } }}>
               {gyms.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               <option value="">No fixed gym</option>
             </select>}
           <select className="input" style={{flex:"0 1 120px"}} value={mins}
-                  onChange={e=>setMins(Number(e.target.value))} disabled={msgs.length>0}>
+                  disabled={busy}
+                  onChange={e=>{ const n = Number(e.target.value); setMins(n);
+                    if(msgs.length) send("I have " + n + " minutes now. Re-plan to fit, including warm-up.",
+                                         "Changed to " + n + " min");
+                    else setMinsTouched(true); }}>
             {(SESSION_MINS.includes(mins) ? SESSION_MINS : SESSION_MINS.concat([mins]).sort((a,b)=>a-b)).map(m => <option key={m} value={m}>{m} min</option>)}
           </select>
         </div>
@@ -5118,6 +5200,19 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
           <div key={i} style={{marginTop:14}}>
             <div className="set-group" style={{marginBottom:6}}>{m.role==="user" ? "You" : "Coach"}</div>
             {m.body && <p style={{margin:0,whiteSpace:"pre-wrap",color: m.role==="user" ? "var(--ink-2)" : "var(--ink-1)"}}>{m.body}</p>}
+            {/* Tappable answers, only on the question still waiting. A gym
+                answer moves the picker as well, so the screen and the
+                conversation never disagree about where you are. */}
+            {m.ask && i === msgs.length-1 && !busy &&
+              <div className="row" style={{gap:8,flexWrap:"wrap",marginTop:10}}>
+                {m.ask.options.map(o => (
+                  <button key={o} className="pill" onClick={()=>{
+                    const g = gyms.find(x => x.name === o);
+                    if(g) setGymId(g.id);
+                    send(o);
+                  }}>{o}</button>
+                ))}
+              </div>}
             {m.plan &&
               <div className="card" style={{marginTop:10}}>
                 <div className="item-title" style={{marginBottom:8}}>{m.plan.name}</div>
