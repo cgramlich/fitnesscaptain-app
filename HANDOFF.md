@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.142.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.143.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -126,6 +126,16 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Next time is set on the set you just did, not in the logging panel (2026-10-03, v0.143.0).**
+Chris: "after a set that I feel is easy, I wanna go up for that same set the next time, but it
+looks like the code is just having me change it for the next set." It was: the Next time control
+lived in the panel, and the panel belongs to the set you are ABOUT to lift, while "that was easy"
+is only knowable after. The control is now on each logged row - a green up arrow (one weight step
+per tap) and the next chip, which opens reps/weight +/- with "same as today". The panel line is
+GONE (Chris chose one place over two). Rows became `div role=button`: a button inside a button is
+invalid and its clicks fall through to the row. `setNextFor` stores numbers, never a direction, and
+equal-to-today clears the target. Editing a set in the panel still writes its existing target back.
 
 **The coach is on the front screen, and plans with YOUR numbers (2026-10-03).** Chris wanted a
 standout AI feature on the first screen: "I'll be at River Crossing today, look at my recent
