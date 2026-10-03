@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.149.0";
+const APP_VERSION = "0.150.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.9";
+const BUILD = "2026-10-03.10";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1076,9 +1076,49 @@ const supa = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY || "unconfigu
   auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage, storageKey: "fitnesscaptain-auth" }
 });
 
+/* ONE TOKEN LOOKUP AT A TIME, SHARED. Chris: "every time I load it, without
+   fail, I get this error [Load failed - tap to retry] and then it later loads
+   and corrects itself."
+
+   The backend's request log showed why: on every launch the collection GETs
+   arrived in PAIRS (two startup syncs racing - see pullAll), and each run
+   stopped partway, at a different collection each time, with the missing
+   requests never reaching the server at all. Something on the phone was
+   failing before the fetch. Every request starts by asking supabase-js for
+   the session, and at launch that is several callers at once (both syncs,
+   the billing card); supabase-js serialises those through a browser lock,
+   and a caller that cannot get it can be failed rather than queued - which
+   this function turned into "no token", which the sync reported as a failed
+   load. Seconds later, uncontended, the same call works.
+
+   So: the token is held in memory until a minute before it expires (the
+   session carries expires_at), concurrent callers share ONE in-flight
+   lookup, and a lookup that throws is tried once more. The cache is reset
+   on every auth state change, so sign-out and refresh are never stale. */
+let _tokenCache = { token: null, exp: 0 };
+let _tokenInflight = null;
+function noteSession(session){
+  _tokenCache = session ? { token: session.access_token, exp: Number(session.expires_at) || 0 }
+                        : { token: null, exp: 0 };
+}
 async function authToken(){
-  try{ const { data } = await supa.auth.getSession(); return data.session ? data.session.access_token : null; }
-  catch(e){ log("ERROR","authToken: "+e.message); return null; }
+  if(_tokenCache.token && _tokenCache.exp - 60 > Date.now()/1000) return _tokenCache.token;
+  if(!_tokenInflight){
+    _tokenInflight = (async () => {
+      for(let attempt = 1; attempt <= 2; attempt++){
+        try{
+          const { data } = await supa.auth.getSession();
+          noteSession(data.session);
+          return data.session ? data.session.access_token : null;
+        }catch(e){
+          log("ERROR", "authToken attempt " + attempt + ": " + e.message);
+          if(attempt === 1) await new Promise(r => setTimeout(r, 400));
+        }
+      }
+      return null;
+    })().finally(() => { _tokenInflight = null; });
+  }
+  return _tokenInflight;
 }
 
 /* ============================================================
@@ -1096,7 +1136,9 @@ async function collGet(file){
   if(!r.ok){ const t=await r.text(); log("ERROR","GET "+file+" "+r.status+" "+t.slice(0,140));
     if(r.status===401) throw new Error("Session expired - sign in again.");
     throw new Error("Load failed ("+r.status+")"); }
-  const j = await r.json();
+  // A 200 whose body is cut off mid-read throws the BROWSER's words ("Load
+  // failed"). Say what happened instead; pullAll retries it once first.
+  let j; try{ j = await r.json(); }catch(e){ throw new Error("The download was cut off"); }
   const arr = Array.isArray(j) ? j : [];
   log("API","GET "+file+" ok ("+arr.length+" rows)");
   return arr;
@@ -1125,7 +1167,7 @@ async function metaGet(){
   try{ r = await fetch(API_BASE + "/api/collection/meta", { headers:{ "Authorization":"Bearer "+token } }); }
   catch(e){ throw transportError(e); }
   if(!r.ok){ if(r.status===401) throw new Error("Session expired - sign in again."); throw new Error("Load failed ("+r.status+")"); }
-  const j = await r.json();
+  let j; try{ j = await r.json(); }catch(e){ throw new Error("The download was cut off"); }
   return (j && typeof j==="object" && !Array.isArray(j)) ? j : {};
 }
 async function metaPut(obj){
@@ -1587,9 +1629,23 @@ function useStore(){
 
   // Pull everything from the backend into the local cache. Dirty collections
   // are NOT overwritten (their local edits win; the flush below pushes them).
-  const pullAll = useCallback(async () => {
-    if(!authedRef.current) return;
+  /* ONE SYNC AT A TIME, AND ONE QUIET RETRY. Launch called this twice at
+     once - from getSession and again from the auth listener - and the backend
+     log showed every GET arriving in pairs. Two runs doubled the requests,
+     doubled the contention for the session (see authToken), and let a run
+     that failed paint "Load failed" over one that had just succeeded. A second
+     caller now joins the run already going. And a launch-time failure is
+     usually gone a second later, so it is retried - twice, 1.5s then 3s, because
+     a launch can stack two (a token lookup AND a download cut off by a
+     service-worker swap) - before the chip says anything. The chip is for
+     failures that are still true. */
+  const pullRef = useRef(null);
+  const pullAll = useCallback(() => {
+    if(!authedRef.current) return Promise.resolve();
+    if(pullRef.current) return pullRef.current;
+    pullRef.current = (async () => {
     setSync("busy");
+    for(let attempt = 1; attempt <= 3; attempt++){
     try{
       const next = {...dataRef.current};
       for(const f of FILES){
@@ -1639,7 +1695,15 @@ function useStore(){
       // Push anything still dirty (offline edits or the fresh seed).
       for(const f of Object.keys(dirtyRef.current)){ await pushFile(f); }
       await pushCfg();
-    }catch(e){ setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message); }
+      return;
+    }catch(e){
+      if(attempt < 3){ log("SYNC", "pull failed (" + e.message + ") - retry " + attempt);
+                       await new Promise(r => setTimeout(r, 1500 * attempt)); continue; }
+      setSync("error"); setSyncMsg(e.message||"Load failed"); log("ERROR","pullAll: "+e.message);
+    }
+    }
+    })().finally(() => { pullRef.current = null; });
+    return pullRef.current;
   }, [pushFile, pushCfg, setDirtyFlag]);
 
   // Flush any dirty collections + config (called on online + after sign-in).
@@ -1754,11 +1818,13 @@ function useStore(){
     supa.auth.getSession().then(({ data }) => {
       if(!mounted) return;
       const s = data.session;
+      noteSession(s);
       authedRef.current = !!s;
       setAuthed(!!s); setAuthEmail(s ? (s.user.email||"") : ""); setAuthReady(true);
       if(s){ pullAll(); }
     }).catch(e => { log("ERROR","getSession: "+e.message); setAuthReady(true); });
     const { data: sub } = supa.auth.onAuthStateChange((evt, session) => {
+      noteSession(session);   // refreshes, sign-outs and sign-ins keep authToken's cache honest
       if(evt === "PASSWORD_RECOVERY"){ log("AUTH","password recovery link"); setRecovery(true); }
       const was = authedRef.current;
       authedRef.current = !!session;

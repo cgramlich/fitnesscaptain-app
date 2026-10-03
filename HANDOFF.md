@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.149.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.150.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -128,6 +128,8 @@ cannot see. Reviewing a **past** workout still expands everything - `collapsed` 
 `live`, deliberately.
 
 **The coach adds mid-workout from a sparkle beside Add exercise (2026-10-03, v0.147.0).** Chris: "have the AI universal symbol there so I can ask it to add an exercise." It opens the same session builder with `addTo` = the live workout: it is told what is already in the session (so it neither repeats nor piles on), uses the workout's gym, gets NO time budget (a "45 minutes" line beside "add one exercise" invites a whole new session), hides the minutes picker, and offers add-shaped starters. The picker's "Ask for ideas" opens the same mode when a workout is live.
+
+**"Load failed - tap to retry" on every launch (2026-10-03, v0.150.0).** Diagnosed from the Railway HTTP log, not guessed: every launch sent each collection GET TWICE (startup sync ran from both getSession and the auth listener), both runs stopped partway at a different collection each time, and every request that DID arrive got 200 - so the failure was on the phone. The chip shows the raw error text, and "Load failed" is Safari's wording for a fetch whose body is cut off; the server logs 200 because it sent the reply. Most likely cut by the service worker swapping in a new version at launch (there were ~15 deploys that day). Reproduced in the harness from the last committed build (a 200 whose body errors mid-read): old build stops after workouts with the error chip, new build recovers. Fixes: pullAll is single-flight; it retries twice (1.5s, 3s) before showing the chip; `authToken` shares one in-flight session lookup, caches the token until a minute before expiry, retries once, and is reset on every auth state change (concurrent getSession calls contend for supabase-js's browser lock); a cut-off body now reads "The download was cut off" instead of the browser's words.
 
 **Open exercise card: detail lines at full width, one left edge (2026-10-03, v0.149.0).** Chris: "how do we clean up how this is displayed? It looks sloppy on the left margin." Two causes: the detail lines (machine name, Plan, Up next, Last time, rest, setup) lived in the name column of a header row shared with up to seven controls, so a long name broke over three lines and the plan over five; and the tappable lines were buttons whose default padding indented them against the plain ones. Now the header holds only the name (at least ~55% of the row) and the controls as ONE group that wraps to its own line when it does not fit; the detail lines sit below in `.entry-detail`, which zeroes button padding so everything shares one edge.
 
