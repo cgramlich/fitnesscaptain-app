@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.146.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.147.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -126,6 +126,10 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**The coach adds mid-workout from a sparkle beside Add exercise (2026-10-03, v0.147.0).** Chris: "have the AI universal symbol there so I can ask it to add an exercise." It opens the same session builder with `addTo` = the live workout: it is told what is already in the session (so it neither repeats nor piles on), uses the workout's gym, gets NO time budget (a "45 minutes" line beside "add one exercise" invites a whole new session), hides the minutes picker, and offers add-shaped starters. The picker's "Ask for ideas" opens the same mode when a workout is live.
+
+**Standing rule (Chris, 2026-10-03): every AI answer can be replied to.** Only the coach could; the rest are being given a shared reply box - advice features first, then the data ones (imports, scan, organize, sort), where a reply means "fix it" and redoes the preview before anything saves.
 
 **"Your latest" is THIS gym's latest, for machines (2026-10-03, v0.146.0).** Chris: "on my lat
 pull-downs it grabbed the lat pull-downs from my Dallas gym, not the River Crossing gym." It took

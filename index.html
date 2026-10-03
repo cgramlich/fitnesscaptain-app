@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.146.0";
+const APP_VERSION = "0.147.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.6";
+const BUILD = "2026-10-03.7";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4901,11 +4901,15 @@ function parseAskMinutes(text){
   return null;
 }
 
-function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk }){
+/* addTo: the live workout, when opened from the sparkle beside Add exercise.
+   Then the coach is not planning a session, it is adding to one already
+   under way - see the ADD MODE lines in context(). */
+function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk, addTo }){
   const gyms = store.gyms || [];
   const units = store.cfg.units || "lb";
   const [gymId, setGymId] = useState(
-    (gyms.find(g => g.id === store.cfg.lastGymId) || gyms[0] || {}).id || null);
+    addTo ? (addTo.gymId || null)
+          : (gyms.find(g => g.id === store.cfg.lastGymId) || gyms[0] || {}).id || null);
   const [mins, setMins]   = useState(45);
   /* Which planned items are UNticked, keyed by message index. Everything
      starts ticked (Chris's call, 2026-10-03): you asked for this plan, so you
@@ -4930,11 +4934,26 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
      session is the single most obvious way for this to look stupid. */
   const context = (gym, mins, timeStated) => {
     const lines = [];
+    /* ADD MODE. Chris, mid-workout: "have the AI symbol next to Add exercise so
+       I can ask it to add an exercise." The useful facts there are different:
+       what is already in today's session (so it neither repeats one nor piles
+       more onto the same muscle), and NOT the time, which was settled when
+       the workout started - asking it would be a question with no right
+       answer. */
+    if(addTo){
+      const have = (addTo.entries||[]).map(e => e.name + " (" + ((e.sets||[]).length) + " sets logged)");
+      lines.push("MID-WORKOUT: they are adding to a session already under way, not planning a new " +
+                 "one. Do NOT ask how long they have. Propose ONLY what they ask for - often a single " +
+                 "exercise - in the plan block, and never re-propose what is already in it. " +
+                 "Already in today's workout: " + (have.join(", ") || "nothing yet") + ".");
+    }
     /* A time nobody said is a guess, and planning to a guess is how a 45-minute
        session lands on someone who has 30. Unstated -> the coach asks first,
        with the answers as buttons. "Stated" means said in the sentence or set
        on the picker by hand before sending. */
-    lines.push(timeStated
+    // No time budget at all mid-workout: a "45 minutes" line beside "add one
+    // exercise" invites a whole new session.
+    if(!addTo) lines.push(timeStated
       ? "Time available: " + mins + " minutes, including warm-up."
       : "Time available: NOT stated. Before planning, ask how long they have, with an " +
         "ask block offering \"30 min\", \"45 min\", \"60 min\", \"75 min\".");
@@ -5081,7 +5100,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
     setMsgs(history); setBusy(true);
     // A time said in the FIRST message beats the picker; it is the budget
     // the whole plan is built to. Later turns re-plan inside the thread.
-    let minsNow = mins, timeStated = minsTouched;
+    let minsNow = mins, timeStated = minsTouched || !!addTo;
     if(history.length === 1){
       const said = parseAskMinutes(text);
       if(said){ minsNow = said; setMins(said); timeStated = true; }
@@ -5182,7 +5201,12 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
   let lastPlanIdx = -1;
   msgs.forEach((m,i) => { if(m.plan) lastPlanIdx = i; });
 
-  const STARTERS = [
+  const STARTERS = addTo ? [
+    "Add something for biceps",
+    "Add a core finisher",
+    "Add the lat pulldown like last time",
+    "Something for what I haven't hit yet",
+  ] : [
     "Arms and back, plus a little cardio",
     "Legs, nothing that wrecks my knees",
     "Short full body, I'm short on time",
@@ -5194,7 +5218,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
       <div className="layer-inner">
         <div className="layer-top">
           <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
-          <h2 style={{flex:1,minWidth:0}}>Today's session</h2>
+          <h2 style={{flex:1,minWidth:0}}>{addTo ? "Add to your workout" : "Today's session"}</h2>
         </div>
 
         {/* The two facts that change every session sit at the top as controls,
@@ -5221,6 +5245,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
               {gyms.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               <option value="">No fixed gym</option>
             </select>}
+          {!addTo &&
           <select className="input" style={{flex:"0 1 120px"}} value={mins}
                   disabled={busy}
                   onChange={e=>{ const n = Number(e.target.value); setMins(n);
@@ -5228,7 +5253,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk 
                                          "Changed to " + n + " min");
                     else setMinsTouched(true); }}>
             {(SESSION_MINS.includes(mins) ? SESSION_MINS : SESSION_MINS.concat([mins]).sort((a,b)=>a-b)).map(m => <option key={m} value={m}>{m} min</option>)}
-          </select>
+          </select>}
         </div>
         {msgs.length>0 &&
           <p className="hint" style={{marginTop:6,marginBottom:0}}>
@@ -7732,10 +7757,21 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             : <React.Fragment key={e.id}>{card}</React.Fragment>;
         })}
 
+        {/* The sparkle is the coach, here to ADD rather than plan: "add the
+            lat pulldown like last time", "something for biceps". Same mark as
+            the coach card on the front screen, so it needs no label. */}
         {canEdit &&
-          <button className="btn btn-ghost btn-block" style={{marginTop:14}} onClick={()=>setPicker(true)}>
-            <Icon d={ICONS.plus} size={15}/> Add exercise
-          </button>}
+          <div className="row" style={{gap:8,marginTop:14}}>
+            <button className="btn btn-ghost" style={{flex:1}} onClick={()=>setPicker(true)}>
+              <Icon d={ICONS.plus} size={15}/> Add exercise
+            </button>
+            {active && onIdeas &&
+              <button className="btn btn-ghost" style={{flex:"0 0 auto",color:"var(--amber-2)",paddingLeft:16,paddingRight:16}}
+                aria-label="Ask the coach to add an exercise" title="Ask the coach"
+                onClick={()=>onIdeas({ add: true })}>
+                <Icon d={ICONS.sparkle} size={17}/>
+              </button>}
+          </div>}
 
         {/* First of the two, because doing it again is the common wish and
             saving a routine is the rarer, more deliberate one. */}
@@ -7784,7 +7820,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
            coach and is still open when you come back with your answer. */
         <ExercisePicker store={store} gym={gym} onPick={addExercise} onCreate={createAndAdd}
           onHelp={(x)=>setHelp({ name: x.name, exerciseId: x.id })}
-          onIdeas={onIdeas ? ()=>{ setPicker(false); setSwapId(null); onIdeas(); } : null}
+          onIdeas={onIdeas ? ()=>{ setPicker(false); setSwapId(null); onIdeas(active ? { add: true } : undefined); } : null}
           onClose={()=>{ setPicker(false); setSwapId(null); }} />}
 
       {help &&
@@ -11569,7 +11605,7 @@ function App(){
           onClose={()=>setWorkoutId(null)} onFinish={finishWorkout} onDelete={deleteWorkout}
           onSaveAsRoutine={saveAsRoutine} onRepeat={repeatWorkout}
           onAddToToday={addExerciseToToday}
-          onIdeas={()=>setSessionBuilder(true)} />}
+          onIdeas={(o)=>setSessionBuilder(o && o.add ? { add: true } : true)} />}
 
       {routineId &&
         <RoutineEditor key={routineId} store={store} routineId={routineId}
@@ -11590,7 +11626,8 @@ function App(){
       {sessionBuilder &&
         <SessionBuilderLayer store={store}
           liveWorkout={!!(store.data.workouts||[]).find(w=>!w.endedAt)} onClose={()=>setSessionBuilder(false)} onStart={startPlanned}
-          initialAsk={sessionBuilder && sessionBuilder.ask ? sessionBuilder.ask : null} />}
+          initialAsk={sessionBuilder && sessionBuilder.ask ? sessionBuilder.ask : null}
+          addTo={sessionBuilder && sessionBuilder.add ? ((store.data.workouts||[]).find(w=>!w.endedAt) || null) : null} />}
 
       {!inSettings &&
         <nav className="nav">
