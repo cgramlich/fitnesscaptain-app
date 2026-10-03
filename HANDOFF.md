@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.144.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
+**State as of 2026-10-03.** App `v0.145.0`, backend `v0.30.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -126,6 +126,20 @@ exception** - it was built, seen and rejected by the person using it. Also rejec
 per-workout preference, which makes the same workout look different on two days for reasons you
 cannot see. Reviewing a **past** workout still expands everything - `collapsed` is gated on
 `live`, deliberately.
+
+**Logged-set row: reps arrows left of the next chip, weight arrows right (2026-10-03, v0.145.0).**
+Chris picked this over a second line per set. The four arrows and the chip are ONE nowrap group:
+at 393px+ (current iPhones) it sits on the set's line; at 375px it drops under the set as a
+whole rather than splitting a pair from its number. Same release:
+
+- **2.5 lb steps when the history says so** (`inferWeightStep`): any logged, planned or next-time
+  weight for that exercise that is a multiple of 2.5 but not of 5 (82.5) makes the jump 2.5 for
+  the steppers and the arrows. Evidence only, never an override: an explicit Weight step on the
+  exercise wins, and no evidence leaves the 5 lb / 2.5 kg default.
+- **Add exercise mid-workout plans from your latest session** (Chris: "add an exercise I just
+  thought of from a prior workout and give me the most recent of that exercise"), the same
+  `latestEntryFor` + `latestSetupFor` as the coach and Add to today. It used to arrive blank with
+  a "repeat it" link.
 
 **Next time is set on the set you just did, not in the logging panel (2026-10-03, v0.143.0).**
 Chris: "after a set that I feel is easy, I wanna go up for that same set the next time, but it

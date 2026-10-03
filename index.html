@@ -408,10 +408,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.144.0";
+const APP_VERSION = "0.145.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.4";
+const BUILD = "2026-10-03.5";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -912,6 +912,30 @@ function latestSetupFor(workouts, exerciseId, gymId){
     if(e) return String(e.settings).trim();
   }
   return "";
+}
+
+/* THE JUMP THIS MOVEMENT ACTUALLY MOVES IN, read off what you have logged.
+   Chris: "for any sets where we know the increment can be in 2 1/2 pounds,
+   the step incrementer should move in 2 1/2 pound increments." We know it
+   when a weight you have lifted, or are planned to lift, is not a whole
+   multiple of 5 - 82.5 on a leg curl means that stack (or those plates)
+   goes in halves, and stepping it by 5 skips every other real setting.
+
+   Only ever narrows to 2.5 and only on evidence; with none it returns null
+   and the caller's default (5 lb / 2.5 kg) stands. An explicit Weight step
+   set on the exercise always wins - this is the fallback, not an override. */
+function inferWeightStep(workouts, exerciseId, entry){
+  if(!exerciseId) return null;
+  const weights = [];
+  const take = (s) => { const w = Number(s && s.weight); if(w > 0) weights.push(w);
+                        const n = s && s.next && Number(s.next.weight); if(n > 0) weights.push(n); };
+  (workouts||[]).forEach(w => (w.entries||[]).forEach(e => {
+    if(e.exerciseId !== exerciseId) return;
+    (e.sets||[]).forEach(take); (e.plan||[]).forEach(take);
+  }));
+  if(entry){ (entry.sets||[]).forEach(take); (entry.plan||[]).forEach(take); }
+  const half = weights.some(w => Math.abs((w % 5)) > 1e-9 && Math.abs((w % 2.5)) < 1e-9);
+  return half ? 2.5 : null;
 }
 
 function planOf(x){
@@ -6583,25 +6607,43 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               const stop = (ev) => ev.stopPropagation();
               return (
                 <>
-                  {/* "That was easy" in one tap: up one weight step, on THIS
-                      set's next time. Tap again to go higher; the chip shows
-                      the running number, so there is nothing to count. The red
-                      one is the same in reverse, for a set that was too much. */}
-                  <button className="entry-x" style={{color:"var(--red)"}}
-                    aria-label={"Go down on set " + (i+1) + " next time"} title="Go down next time"
-                    onClick={ev=>{ stop(ev); setNextFor(i, { reps: n.reps, weight: Math.max(0, n.weight - wStep) }); }}>
-                    <Icon d={ICONS.down} size={17}/>
-                  </button>
-                  <button className="entry-x" style={{color:"var(--green)"}}
-                    aria-label={"Go up on set " + (i+1) + " next time"} title="Go up next time"
-                    onClick={ev=>{ stop(ev); setNextFor(i, { reps: n.reps, weight: n.weight + wStep }); }}>
-                    <Icon d={ICONS.up} size={17}/>
-                  </button>
-                  <button style={{background:"none",border:0,padding:0}}
-                    aria-label={"Change what set " + (i+1) + " will be next time"}
-                    onClick={ev=>{ stop(ev); setNextEdit(nextEdit === i ? -1 : i); }}>
-                    {chip}
-                  </button>
+                  {/* NEXT TIME WITHOUT OPENING ANYTHING. Chris: a red and green
+                      arrow to the LEFT of the number for reps, and a pair to the
+                      RIGHT for weight - so "that was easy" is one tap, and the
+                      chip in the middle shows the running result. Each tap is
+                      one rep or one weight step on THIS set's next time.
+
+                      Kept together as one unbreakable group: if a long set
+                      ("12 x 112.5 lb") leaves too little room, the whole group
+                      drops under the set rather than splitting an arrow pair
+                      from the number it changes. */}
+                  <span style={{display:"inline-flex",alignItems:"center",gap:0,flex:"0 0 auto",whiteSpace:"nowrap"}}>
+                    <button className="entry-x" style={{color:"var(--red)",width:26}}
+                      aria-label={"Fewer reps on set " + (i+1) + " next time"} title="Fewer reps next time"
+                      onClick={ev=>{ stop(ev); setNextFor(i, { reps: Math.max(0, n.reps - 1), weight: n.weight }); }}>
+                      <Icon d={ICONS.down} size={16}/>
+                    </button>
+                    <button className="entry-x" style={{color:"var(--green)",width:26}}
+                      aria-label={"More reps on set " + (i+1) + " next time"} title="More reps next time"
+                      onClick={ev=>{ stop(ev); setNextFor(i, { reps: n.reps + 1, weight: n.weight }); }}>
+                      <Icon d={ICONS.up} size={16}/>
+                    </button>
+                    <button style={{background:"none",border:0,padding:"0 2px"}}
+                      aria-label={"Change what set " + (i+1) + " will be next time"}
+                      onClick={ev=>{ stop(ev); setNextEdit(nextEdit === i ? -1 : i); }}>
+                      {chip}
+                    </button>
+                    <button className="entry-x" style={{color:"var(--red)",width:26}}
+                      aria-label={"Go down on set " + (i+1) + " next time"} title="Less weight next time"
+                      onClick={ev=>{ stop(ev); setNextFor(i, { reps: n.reps, weight: Math.max(0, n.weight - wStep) }); }}>
+                      <Icon d={ICONS.down} size={16}/>
+                    </button>
+                    <button className="entry-x" style={{color:"var(--green)",width:26}}
+                      aria-label={"Go up on set " + (i+1) + " next time"} title="More weight next time"
+                      onClick={ev=>{ stop(ev); setNextFor(i, { reps: n.reps, weight: n.weight + wStep }); }}>
+                      <Icon d={ICONS.up} size={16}/>
+                    </button>
+                  </span>
                   {nextEdit === i &&
                     /* Key events stop here too: the row is a role=button that
                        opens the set on Enter, and Enter in a number box below
@@ -7343,7 +7385,25 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
                                    () => patch({ entries: before }));
       return;
     }
-    patch({ entries: [...(workout.entries||[]), { id: uid(), exerciseId: x.id, name: x.name, type: x.type, sets: [], cardio: null }] });
+    /* YOUR LATEST, AT ONCE. Chris: "I should be able to be in my workout and
+       add an exercise I just thought of from a prior workout and give me the
+       most recent of that exercise." It arrived blank, with a "Last time ...
+       repeat it" link to tap - one more step at exactly the moment you are
+       standing at the machine. It now arrives planned from your latest
+       finished session of it, the same way the coach and Add to today plan
+       it: sets, next-time targets, and your setup at THIS gym. The Plan line
+       still offers "drop it" for a day you want to do something different. */
+    const last = latestEntryFor(store.data.workouts, x.id);
+    let item;
+    if(last){
+      item = copyEntryForToday(last);
+      item.name = x.name;
+      const setup = latestSetupFor(store.data.workouts, x.id, workout.gymId || null);
+      if(setup) item.settings = setup; else delete item.settings;
+    }else{
+      item = { id: uid(), exerciseId: x.id, name: x.name, type: x.type, sets: [], cardio: null };
+    }
+    patch({ entries: [...(workout.entries||[]), item] });
     setPicker(false);
   };
   const createAndAdd = (name) => {
@@ -7517,7 +7577,8 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
             onUndoable={undoable}
             onSwap={()=>{ setSwapId(e.id); setPicker(true); }}
             onAddToToday={onAddToToday}
-            exStep={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).weightStep}
+            exStep={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).weightStep
+                    || inferWeightStep(store.data.workouts, e.exerciseId, e)}
             machineLabel={machineAt((store.data.exercises||[]).find(x=>x.id===e.exerciseId),
                                     workout.gymId)}
             onMachineLabel={(() => {
