@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-03.** App `v0.152.0`, backend `v0.31.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset); `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-04.** App `v0.152.0`, backend `v0.32.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset). Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -238,6 +238,27 @@ nor on one of our prices. Without that, a MenuCaptain subscriber would be writte
 app's table. MenuCaptain's own webhook has the mirror-image gap; that finding was routed to the
 MenuCaptain session (single-writer), not fixed from here.
 
+**The billing portal uses FitnessCaptain's own settings, never the account default
+(2026-10-04, backend v0.32.0).**
+- **What was found.** Reading the live account showed its default portal configuration
+  belongs to MenuCaptain: its plan switcher offers only MenuCaptain's product. A
+  FitnessCaptain subscriber sent there could switch to $2.99/$19.99 and, because the
+  subscription keeps our tag, stay Pro. Test mode had no portal configuration at all, so
+  "Manage subscription" would simply have failed.
+- **The fix.** The backend finds or creates one configuration tagged `app=fitnesscaptain`
+  and brings it into line with the code on the first portal call in each process. It switches
+  only between our two prices:
+  - monthly to yearly takes effect now, with the unused month credited;
+  - yearly to monthly waits for the end of the paid year;
+  - cancelling ends at the period end.
+- **It refuses rather than falls back.** If the configuration can't be made, the portal
+  returns 502 instead of using the account default.
+- `/health` → `billing.portal` shows `own` or `pending`.
+- **Road not taken:** turning plan switching off entirely, which is simpler but blocks the
+  monthly-to-yearly upgrade.
+- **Tested:** 19/19 against fakes; 9 of them fail on v0.31.0.
+- MenuCaptain's default configuration is never modified.
+
 Also closed in `billing.sql`: `record_ai_usage` was executable with the public anon key, so
 anyone could inflate `system_meter` past the $25 breaker and switch AI off for every user.
 
@@ -447,7 +468,7 @@ without logging anything, so the count never moves; `planned` belongs in the dep
 - **Pro billing — BUILT, NOT LIVE (2026-09-28).** Code complete in both repos behind
   `BILLING_ENABLED` (off). Launch sequence, one step at a time, in this order:
   (1) DONE 2026-10-03: `billing.sql` run, grants verified. (2) DONE: backend v0.31.0 + app
-  v0.152.0 live.
+  v0.152.0 live (backend now v0.32.0).
   (3) IN PROGRESS, in MilSpo Life's Stripe (shown as account "MenuCaptain",
   `acct_1TgruXBFKx2qM61m`), **test mode** first.
   - Connector access granted 2026-10-04: Live = **Read**, Test mode = **Write**. This is
@@ -461,8 +482,16 @@ without logging anything, so the count never moves; `planned` belongs in the dep
   - DONE 2026-10-04: both price IDs set on Railway `STRIPE_PRICE_MONTHLY` /
     `STRIPE_PRICE_YEARLY`.
   - Live mode needs its OWN product and prices at step 5: test IDs do not exist in live.
-  - NEXT: the **test secret key** goes into `STRIPE_SECRET_KEY`. Chris pastes it into
-    Railway himself; it never goes through chat.
+  - DONE 2026-10-04: test secret key in `STRIPE_SECRET_KEY`, pasted by Chris. It was rotated
+    first, because a screenshot had exposed the original; that key had never been used, and
+    MenuCaptain runs on the live key, so nothing was affected.
+  - DONE 2026-10-04: test webhook `we_1UMqNxBFKx2qM61m0neH9pCY` (Snapshot payload, API
+    2026-05-27.dahlia, the three events). Chris created it in the dashboard so the signing
+    secret never passed through Claude, and put it in `STRIPE_WEBHOOK_SECRET`. `/health`
+    then showed billing ready, mode test.
+  - DONE: own portal configuration (backend v0.32.0, see the decision above).
+  - NEXT, step 4: the test purchase needs a NON-OWNER login. Chris is in
+    `OWNER_USER_IDS`, so the app always treats him as Pro and he can't buy.
   - Webhook to `https://fitnesscaptain-backend-production.up.railway.app/api/stripe/webhook`
     for checkout.session.completed, customer.subscription.updated and
     customer.subscription.deleted. Its signing secret goes into `STRIPE_WEBHOOK_SECRET`,
