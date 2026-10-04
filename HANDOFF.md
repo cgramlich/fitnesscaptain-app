@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-04.** App `v0.152.0`, backend `v0.32.0`, both live. Pro billing deployed but SWITCHED OFF (`BILLING_ENABLED` unset). Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-04.** App `v0.152.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -257,6 +257,12 @@ MenuCaptain session (single-writer), not fixed from here.
 - **Road not taken:** turning plan switching off entirely, which is simpler but blocks the
   monthly-to-yearly upgrade.
 - **Tested:** 19/19 against fakes; 9 of them fail on v0.31.0.
+- **v0.32.1, the same day.** Reading back the first test-mode configuration showed that
+  Stripe switches quantity changes ON when they aren't specified, which let a subscriber pay
+  for 2+ copies. Now explicitly off.
+- In test mode our configuration became the account's default, because there was none
+  before. MenuCaptain doesn't test in this test mode (it has its own sandbox), so this is
+  harmless. In live, MenuCaptain's default stays the default.
 - MenuCaptain's default configuration is never modified.
 
 Also closed in `billing.sql`: `record_ai_usage` was executable with the public anon key, so
@@ -490,8 +496,15 @@ without logging anything, so the count never moves; `planned` belongs in the dep
     secret never passed through Claude, and put it in `STRIPE_WEBHOOK_SECRET`. `/health`
     then showed billing ready, mode test.
   - DONE: own portal configuration (backend v0.32.0, see the decision above).
-  - NEXT, step 4: the test purchase needs a NON-OWNER login. Chris is in
-    `OWNER_USER_IDS`, so the app always treats him as Pro and he can't buy.
+  - The test purchase needs a NON-OWNER login. Chris is in `OWNER_USER_IDS`, so the app
+    always treats him as Pro and he can't buy.
+  (4) 2026-10-04: `BILLING_ENABLED=1` (Stripe still in test mode). A test purchase on a
+  second login PASSED end to end:
+  - test card checkout for $29.99/year;
+  - the webhook arrived within about 45 s;
+  - the `subscriptions` row showed active, yearly, renewing 2027-10-04;
+  - the plan card showed Pro.
+  "Manage subscription" opened our own portal configuration, offering only our two prices.
   - Webhook to `https://fitnesscaptain-backend-production.up.railway.app/api/stripe/webhook`
     for checkout.session.completed, customer.subscription.updated and
     customer.subscription.deleted. Its signing secret goes into `STRIPE_WEBHOOK_SECRET`,
