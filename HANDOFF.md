@@ -445,13 +445,30 @@ without logging anything, so the count never moves; `planned` belongs in the dep
 
 **Blocked on Chris:**
 - **Pro billing — BUILT, NOT LIVE (2026-09-28).** Code complete in both repos behind
-  `BILLING_ENABLED` (off). Launch sequence, one step at a time, in this order: (1) Chris runs
-  `fitnesscaptain-backend/billing.sql` + his comp row; (2) push backend, then app; (3) Chris
-  creates the FitnessCaptain product + two prices in MilSpo Life's Stripe **test** mode, a
-  webhook to `/api/stripe/webhook` (events: checkout.session.completed,
-  customer.subscription.updated, customer.subscription.deleted), keys into Railway only;
-  (4) `BILLING_ENABLED=1`, end-to-end test purchase with a Stripe test card; (5) swap to live
-  keys. `/health` → `billing` shows enabled / ready / test-or-live at each step.
+  `BILLING_ENABLED` (off). Launch sequence, one step at a time, in this order:
+  (1) DONE 2026-10-03: `billing.sql` run, grants verified. (2) DONE: backend v0.31.0 + app
+  v0.152.0 live.
+  (3) NEXT, in MilSpo Life's Stripe, **test mode** first. Chris connected the Stripe connector
+  on 2026-10-03, after the session that built this had started, so it never loaded there. A
+  fresh session should have it.
+  - Product "FitnessCaptain Pro", metadata `app=fitnesscaptain`.
+  - Two recurring USD prices, set by Chris 2026-10-03: **$3.99/month** and **$29.99/year**.
+  - Each write needs Chris's yes on a question card first.
+  - The two `price_` IDs (not secrets) go into Railway `STRIPE_PRICE_MONTHLY` /
+    `STRIPE_PRICE_YEARLY` (FitnessCaptain project, service `fitnesscaptain-backend`).
+  - The **test secret key** goes into `STRIPE_SECRET_KEY`. Chris pastes it into Railway
+    himself; it never goes through chat.
+  - Webhook to `https://fitnesscaptain-backend-production.up.railway.app/api/stripe/webhook`
+    for checkout.session.completed, customer.subscription.updated and
+    customer.subscription.deleted. Its signing secret goes into `STRIPE_WEBHOOK_SECRET`,
+    again pasted by Chris.
+  - Check that the account's customer-portal configuration doesn't offer switching to
+    MenuCaptain's prices.
+
+  (4) `BILLING_ENABLED=1`, then an end-to-end test purchase with a Stripe test card.
+  (5) Swap to live keys.
+
+  `/health` → `billing` shows enabled / ready / test-or-live at each step.
 - **Log a first bodyweight** — 30 seconds, and it unlocks three built-but-dormant things: the
   check-in body row, both Progress body lenses, and the deficit-aware coaching in the Program
   Builder, which asks age and *derives* the deficit from weigh-ins.
