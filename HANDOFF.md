@@ -448,16 +448,21 @@ without logging anything, so the count never moves; `planned` belongs in the dep
   `BILLING_ENABLED` (off). Launch sequence, one step at a time, in this order:
   (1) DONE 2026-10-03: `billing.sql` run, grants verified. (2) DONE: backend v0.31.0 + app
   v0.152.0 live.
-  (3) NEXT, in MilSpo Life's Stripe, **test mode** first. Chris connected the Stripe connector
-  on 2026-10-03, after the session that built this had started, so it never loaded there. A
-  fresh session should have it.
-  - Product "FitnessCaptain Pro", metadata `app=fitnesscaptain`.
-  - Two recurring USD prices, set by Chris 2026-10-03: **$3.99/month** and **$29.99/year**.
-  - Each write needs Chris's yes on a question card first.
-  - The two `price_` IDs (not secrets) go into Railway `STRIPE_PRICE_MONTHLY` /
-    `STRIPE_PRICE_YEARLY` (FitnessCaptain project, service `fitnesscaptain-backend`).
-  - The **test secret key** goes into `STRIPE_SECRET_KEY`. Chris pastes it into Railway
-    himself; it never goes through chat.
+  (3) IN PROGRESS, in MilSpo Life's Stripe (shown as account "MenuCaptain",
+  `acct_1TgruXBFKx2qM61m`), **test mode** first.
+  - Connector access granted 2026-10-04: Live = **Read**, Test mode = **Write**. This is
+    deliberate, so a Claude session cannot change anything that charges real money. The
+    separate "MenuCaptain sandbox" was NOT used; classic test mode keeps the test key on the
+    same account as live.
+  - DONE 2026-10-04: test-mode product "FitnessCaptain Pro" `prod_VNavArGaxYgZid`
+    (metadata `app=fitnesscaptain`), with prices $3.99/month
+    `price_1UMpjiBFKx2qM61mL7D0ytHA` and $29.99/year `price_1UMpjjBFKx2qM61mmzxGmUOZ`.
+    Test mode had no other products.
+  - DONE 2026-10-04: both price IDs set on Railway `STRIPE_PRICE_MONTHLY` /
+    `STRIPE_PRICE_YEARLY`.
+  - Live mode needs its OWN product and prices at step 5: test IDs do not exist in live.
+  - NEXT: the **test secret key** goes into `STRIPE_SECRET_KEY`. Chris pastes it into
+    Railway himself; it never goes through chat.
   - Webhook to `https://fitnesscaptain-backend-production.up.railway.app/api/stripe/webhook`
     for checkout.session.completed, customer.subscription.updated and
     customer.subscription.deleted. Its signing secret goes into `STRIPE_WEBHOOK_SECRET`,
