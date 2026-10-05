@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-04.** App `v0.152.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-05.** App `v0.153.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,32 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**One exercise open at a time, once you choose one (2026-10-05, v0.153.0).** Chris: "if I open
+one, I'm doing the other should collapse. It's gonna allow me to see more of the screen."
+- Opening a card makes it the focus (`focusId` in WorkoutEditor), and every other card shuts.
+  That includes a card with sets logged, which the older rule kept open; its sets still show as
+  chips.
+- Until you open something, the whole-list view below stands unchanged.
+- The focus is not saved anywhere: reopening the workout starts from the whole list again.
+
+**Gym in light text beside an exercise planned from history (2026-10-05, v0.153.0).** Chris: "a
+subtle parentheses next to an exercise showing what gym it was done in, if it's one that we're
+bringing back from the past", for example "Seated Cable Row (Dallas)".
+- He chose **always**, even when it's today's gym. Rejected: only when it's another gym, and
+  machines only.
+- `latestFor` returns `gym`, and every place that plans from history sets `entry.planGym`: the
+  coach, Add exercise, Add to today, and Do this workout again.
+- It updates itself: do the exercise somewhere new and that session becomes the latest.
+- Shown on the LIVE workout only. On a finished one it would read as where today's sets were
+  done, and the workout's own gym chip already says that.
+- A gym name with its own brackets, like "6821 (Dallas)", shows as "(6821 · Dallas)".
+- The machine-only "(from X)" warning on the Plan line is unchanged.
+
+**Ask your coach is the first card on Workouts (2026-10-05, v0.153.0).** Chris: coach, then
+today's workout, then history. It used to sit under the workout in progress, which led as "the
+single most actionable thing". The coach is the way into a session, so it now goes above the
+session it leads to.
 
 **In a live workout, every exercise you have not started is collapsed (2026-09-27).** An
 untouched card is ~320px of steppers, plan line and note box, so three exercises pushed the third
@@ -505,6 +531,20 @@ without logging anything, so the count never moves; `planned` belongs in the dep
   - the `subscriptions` row showed active, yearly, renewing 2027-10-04;
   - the plan card showed Pro.
   "Manage subscription" opened our own portal configuration, offering only our two prices.
+  Cancellation was also checked: Claude set the test subscription to cancel at period end
+  through the API, and the row flipped to `cancel_at_period_end=true` within seconds. The
+  quantity fix (v0.32.1) is applied to the test configuration on the next portal open.
+  (5) IN PROGRESS 2026-10-04: going live.
+  - Live product "FitnessCaptain Pro" `prod_VNeJkEzYEqGfIO` (`app=fitnesscaptain`), with
+    $3.99/month `price_1UMt0vBFKx2qM61m8U4Va9iD` and $29.99/year
+    `price_1UMt0wBFKx2qM61mTTlrfTsc`. Claude created them with live Write granted briefly
+    for this; live goes back to Read afterwards.
+  - Remaining, in order:
+    1. Chris creates the live webhook in the dashboard, same three events, Snapshot.
+    2. In Railway, ONE deploy swaps the key (live), webhook secret (live) and both price IDs
+       (live) together. A half-swap means a broken checkout, because the test key can't
+       see live prices.
+    3. A $3.99 real purchase on the non-owner login, then refund and cancel it.
   - Webhook to `https://fitnesscaptain-backend-production.up.railway.app/api/stripe/webhook`
     for checkout.session.completed, customer.subscription.updated and
     customer.subscription.deleted. Its signing secret goes into `STRIPE_WEBHOOK_SECRET`,

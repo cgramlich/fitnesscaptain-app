@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.152.0";
+const APP_VERSION = "0.153.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-03.12";
+const BUILD = "2026-10-05.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -899,28 +899,35 @@ function copyEntryForToday(e){
 
    Never done it here? It falls back to the latest anywhere rather than
    giving you nothing, and says so: `otherGym` names where the numbers came
-   from, so the card can warn that they are another room's machine. */
+   from, so the card can warn that they are another room's machine.
+
+   `gym` is simply where the session it planned from was done, for every
+   exercise, machine or not. Chris: "a subtle parentheses next to an exercise
+   showing what gym it was done in, if it's one that we're bringing back from
+   the past" - and he chose to see it ALWAYS, even when it is today's gym. It
+   updates itself: do the exercise somewhere new and that session becomes the
+   latest, so next time the label names the new gym. */
 function isMachineWork(ex){
   if(!ex) return false;
   return MACHINE_LOADED.indexOf(ex.equipment) !== -1 || NAMED_MACHINE.test(String(ex.name||""));
 }
 function latestFor(workouts, exerciseId, gymId, exercise){
-  if(!exerciseId) return { entry: null, otherGym: null };
+  if(!exerciseId) return { entry: null, otherGym: null, gym: null };
   const ws = (workouts||[]).filter(w => w.endedAt).slice()
     .sort((a,b) => String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
   const hit = (w) => (w.entries||[]).find(x => x.exerciseId === exerciseId &&
     (x.sets||[]).some(s => (Number(s.reps)||0) > 0));
   if(gymId && isMachineWork(exercise)){
-    for(const w of ws){ if(w.gymId === gymId){ const e = hit(w); if(e) return { entry: e, otherGym: null }; } }
+    for(const w of ws){ if(w.gymId === gymId){ const e = hit(w); if(e) return { entry: e, otherGym: null, gym: w.gymName || null }; } }
   }
   for(const w of ws){
     const e = hit(w);
     if(e){
       const elsewhere = gymId && isMachineWork(exercise) && w.gymId && w.gymId !== gymId;
-      return { entry: e, otherGym: elsewhere ? (w.gymName || "another gym") : null };
+      return { entry: e, otherGym: elsewhere ? (w.gymName || "another gym") : null, gym: w.gymName || null };
     }
   }
-  return { entry: null, otherGym: null };
+  return { entry: null, otherGym: null, gym: null };
 }
 function latestEntryFor(workouts, exerciseId, gymId, exercise){
   return latestFor(workouts, exerciseId, gymId, exercise).entry;
@@ -2560,9 +2567,14 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
 
   return (
     <div>
-      {/* An open workout is the single most actionable thing on this screen,
-          so it goes first - above the program card, which now stays quiet
-          while one is running rather than repeating the same news. */}
+      {/* THE COACH GOES FIRST (2026-10-05). Chris: "ask your coach, instead of
+          being the second card ... should be at the top, so it goes ask your
+          coach, then today's workout, then the historical workouts." It is the
+          way into a session, so it sits above the session it leads to.
+          Previously the open workout led, as "the single most actionable thing
+          on this screen" - it is still directly under the coach, and above the
+          program card, which stays quiet while one is running. */}
+      {onAsk && <CoachCard onAsk={onAsk}/>}
       {/* Chris: "we should be able to swipe more of these cards to delete -
           like workout in progress, when I know I'm going to delete it."
           Every other row in the app already swipes; this one was a bare
@@ -2595,7 +2607,6 @@ function WorkoutsScreen({ store, onStart, onOpen, onImport, onDelete, onDiscard,
         </button>
         </SwipeRow>}
 
-      {onAsk && <CoachCard onAsk={onAsk}/>}
       <NextUpCard store={store} onStartRoutine={onStartRoutine} onOpenWorkout={onOpen} />
       <DailyCard store={store} />
 
@@ -5299,6 +5310,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk,
         const item = copyEntryForToday(last);
         item.name = hit.name;
         if(found.otherGym) item.planFrom = found.otherGym;
+        if(found.gym) item.planGym = found.gym;
         const setup = latestSetupFor(store.data.workouts, hit.id, planGym ? planGym.id : null);
         if(setup) item.settings = setup; else delete item.settings;
         if(note) item.note = note;
@@ -6436,7 +6448,7 @@ function MachinePhoto({ store, exercise, gymId, label, wide }){
   );
 }
 
-function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
+function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -6539,8 +6551,15 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
 
      Also rejected: a remembered per-workout preference, which makes the same
      workout look different on two days for reasons you cannot see. */
+  /* ONE OPEN AT A TIME, once you choose one (2026-10-05). Chris: "if I open
+     one, I'm doing the other should collapse. It's gonna allow me to see more
+     of the screen." Opening a card makes it the focus, and every OTHER card
+     shuts - including one with sets logged in it, which the rule above would
+     otherwise keep open; its sets still show as chips on the shut card. Until
+     you open something, nothing changes: the whole-list view above stands. */
   const started = sets.length > 0 || !!entry.cardio;
-  const collapsed = live && !expanded && (doneAll || closed || !started);
+  const focusElsewhere = !!focusId && focusId !== entry.id;
+  const collapsed = live && (focusElsewhere || (!expanded && (doneAll || closed || !started)));
 
   // Advance the steppers to the next prescribed set once one is logged.
   // Guarded on selIdx so correcting an earlier set doesn't yank the numbers.
@@ -6649,12 +6668,24 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
      THE CONTROL - tapping anywhere opens the logging steppers back up, the
      accordion everyone already knows. The pencil is gone because the card
      replaced it. The (i) stays; it answers a different question. */
+  /* WHERE THE PLAN CAME FROM, in light text after the name - "Lat Pulldown
+     (Dallas)". Live workout only: on a finished one it would read as where
+     today's sets were done, which is the workout's own gym chip's job. Not
+     underlined with the name, so it reads as a note, not part of the link. */
+  // A gym named "6821 (Dallas)" would read "(6821 (Dallas))", so its own
+  // brackets become a dot inside ours: "(6821 · Dallas)".
+  const gymTag = live && entry.planGym
+    ? <span style={{fontWeight:400,fontSize:"0.82em",color:"var(--ink-3)",
+                    textDecorationLine:"none",display:"inline-block",marginLeft:5}}>
+        ({String(entry.planGym).replace(/\s*\(([^)]*)\)\s*/g, " · $1 ").trim()})</span>
+    : null;
+
   if(collapsed){
     const shownSets = sets.slice(0, COLLAPSED_SET_CAP);
     const hiddenSets = sets.length - shownSets.length;
     // Two tap targets, one behaviour - the name and the sets both mean "open
     // this". Nested buttons are invalid HTML, so the (i) forces them apart.
-    const open = () => { setExpanded(true);
+    const open = () => { setExpanded(true); if(onFocus) onFocus(entry.id);
       if(closed) onUpdate(e => ({ ...e, closed: undefined })); };
     return (
       <div className="entry" style={{paddingTop:12,paddingBottom:12}}>
@@ -6663,7 +6694,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
                          background:"none",border:0,padding:0}}
             disabled={!active} onClick={open}
             aria-label={active ? "Open " + entry.name : entry.name}>
-            <div className="entry-name" style={{opacity:.75}}>{entry.name}</div>
+            <div className="entry-name" style={{opacity:.75}}>{entry.name}{gymTag}</div>
             {machineLabel &&
               <div className="entry-last" style={{color:"var(--ink-2)"}}>on the {machineLabel}</div>}
           </button>
@@ -6742,7 +6773,7 @@ function EntryCard({ entry, prev, units, active, live, hasDemo, restSecs, onHelp
               looking for an explanation without finding one. Both work now. */}
           <div className="entry-name" onClick={()=>onHelp && onHelp(entry)}
             style={{cursor:"pointer",textDecorationLine:"underline",textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}>
-            {entry.name}
+            {entry.name}{gymTag}
           </div>
         </div>
         {/* The controls travel as ONE group: beside the name when they fit,
@@ -7703,6 +7734,9 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
   // an import that mis-read a set can't be a delete-and-start-over.
   const [editing, setEditing] = useState(false);
   const [restUntil, setRestUntil] = useState(0);
+  // The exercise you last OPENED in a live workout; every other card shuts.
+  // See EntryCard's collapse rule for why.
+  const [focusId, setFocusId] = useState(null);
   const [, setTick] = useState(0);
   useEffect(()=>{ const iv=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(iv); },[]);
   if(!workout) return null;
@@ -7784,6 +7818,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       item = copyEntryForToday(last);
       item.name = x.name;
       if(found.otherGym) item.planFrom = found.otherGym;
+      if(found.gym) item.planGym = found.gym;
       const setup = latestSetupFor(store.data.workouts, x.id, workout.gymId || null);
       if(setup) item.settings = setup; else delete item.settings;
     }else{
@@ -7966,6 +8001,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         {(workout.entries||[]).map((e, i) => {
           const card = (
           <EntryCard key={e.id} entry={e} prev={lastPerf(e.exerciseId)} units={units} active={canEdit} live={!workout.endedAt}
+            focusId={focusId} onFocus={setFocusId}
             hasDemo={!!((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).demoVideoId}
             restSecs={((store.data.exercises||[]).find(x=>x.id===e.exerciseId)||{}).restSecs}
             onHelp={(en)=>setHelp({ name: en.name, exerciseId: en.exerciseId })}
@@ -11596,6 +11632,7 @@ function App(){
     const found = latestFor(store.data.workouts, entry.exerciseId, gymId, exRec);
     const item = copyEntryForToday(found.entry || entry);
     if(found.entry && found.otherGym) item.planFrom = found.otherGym;
+    if(found.entry && found.gym) item.planGym = found.gym;
     /* THE SETUP IS SEARCHED FOR SEPARATELY. Chris, choosing: "most recent with
        a setup." A seat-and-pin note gets written once, when you work it out,
        and rarely again - so the latest session usually has none, and taking
@@ -11625,7 +11662,12 @@ function App(){
     log("ADD-TODAY", item.name + " -> new workout");
   };
   const repeatWorkout = (w) => {
-    const entries = (w.entries||[]).map(copyEntryForToday);
+    // Every exercise here was planned from THIS session, so they all carry its gym.
+    const entries = (w.entries||[]).map(e => {
+      const item = copyEntryForToday(e);
+      if(w.gymName && planOf(item)) item.planGym = w.gymName;
+      return item;
+    });
     if(!entries.length){ showToast("There is nothing in this workout to copy"); return; }
     const existing = (store.data.workouts||[]).find(x => !x.endedAt);
     if(existing){
