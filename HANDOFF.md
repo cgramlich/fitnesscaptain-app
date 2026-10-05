@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-05.** App `v0.153.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-05.** App `v0.153.1`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,15 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**"Done" means you tapped Done (2026-10-05, v0.153.1).** Chris: "it should say done after I say
+it's done, but if it's collapsed in process, it should just say in progress."
+- `entryDone` used to count an exercise finished as soon as its planned number of sets was
+  logged. Now only `closed` (the Done button) or saved cardio counts.
+- A collapsed card with sets logged but not marked done shows an amber **in progress** chip.
+- Meeting the plan still puts the logger away. That state's **Collapse** button became **Done**,
+  because there was otherwise no way to finish.
+- "x of y done" and the Everything's done card follow the same rule.
 
 **One exercise open at a time, once you choose one (2026-10-05, v0.153.0).** Chris: "if I open
 one, I'm doing the other should collapse. It's gonna allow me to see more of the screen."

@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.153.0";
+const APP_VERSION = "0.153.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-05.1";
+const BUILD = "2026-10-05.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -819,15 +819,22 @@ function topSet(sets){
    needs migrating. Six is the cap because past that you are describing a
    circuit, not a set scheme. */
 const MAX_PLAN_SETS = 6;
-/* One definition of "finished", used by the card that collapses itself AND by
-   the workout that counts how many are left. Two answers to that question
-   would drift apart the first time either changed. */
+/* One definition of "finished" - the card's "done" chip, the "2 of 5 done"
+   count and the Everything's done card all use it.
+
+   DONE MEANS YOU SAID SO (2026-10-05). It used to count an exercise done the
+   moment its planned number of sets was logged. Chris: "it marks it as done,
+   so it should say done after I say it's done, but if it's collapsed in
+   process, it should just say in progress." Hitting the plan's count is not
+   the same as finishing - you may be going for one more - so only the Done
+   button (`closed`) finishes a lifting exercise. Cardio has no Done button;
+   saving its minutes is the finish. Meeting the plan still puts the logger
+   away (the card's own `doneAll`); it just no longer claims you're done. */
 function entryDone(e){
   if(!e) return false;
   if(e.closed) return true;
   if(e.cardio) return true;
-  const target = (Array.isArray(e.plan) && e.plan.length) ? e.plan.length : (Number(e.targetSets)||0);
-  return target > 0 && (e.sets||[]).length >= target;
+  return false;
 }
 
 /* ONE ENTRY, COPIED FORWARD - the shape both Do this workout again and Add
@@ -6698,8 +6705,9 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
             {machineLabel &&
               <div className="entry-last" style={{color:"var(--ink-2)"}}>on the {machineLabel}</div>}
           </button>
-          {(doneAll || closed) &&
-            <span className="chip green" style={{flex:"0 0 auto"}}>done</span>}
+          {entryDone(entry)
+            ? <span className="chip green" style={{flex:"0 0 auto"}}>done</span>
+            : started && <span className="chip amber" style={{flex:"0 0 auto"}}>in progress</span>}
           {/* Reordering has to work from HERE. Collapsed is now the normal
               resting state of an unstarted exercise, so putting the arrows
               only on the open card would mean opening a card to move it and
@@ -6782,7 +6790,7 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
         <span style={{display:"inline-flex",alignItems:"center",gap:8,marginLeft:"auto",flex:"0 0 auto"}}>
         {/* Visible while scrolling, so you can see what is left without
             opening each card. */}
-        {targetCount > 0 && sets.length >= targetCount &&
+        {entryDone(entry) &&
           <span className="chip green" style={{flex:"0 0 auto",alignSelf:"flex-start"}}>done</span>}
         {/* Beside the (i), because it answers the same kind of question:
             what IS this thing in front of me. Supplied only for
@@ -7088,8 +7096,16 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
           <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setMoreSets(true)}>
             Add another set
           </button>
-          <button className="btn btn-ghost btn-sm" style={{flex:1}} onClick={()=>setExpanded(false)}>
-            Collapse
+          {/* Done, not Collapse (2026-10-05). Meeting the plan no longer
+              counts as finished - only you saying so does (see entryDone) -
+              so this state needs the Done button the logger carries. A bare
+              Collapse is no longer needed: opening any other card shuts this
+              one anyway. */}
+          <button className="btn btn-ghost btn-sm" style={{flex:1}}
+            onClick={()=>{ setExpanded(false); setMoreSets(false);
+                           onUpdate(e => ({ ...e, closed: true })); }}
+            aria-label={"Done with "+entry.name}>
+            <Icon d={ICONS.check} size={15}/> Done
           </button>
         </div>}
 
