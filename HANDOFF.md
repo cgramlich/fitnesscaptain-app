@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-05.** App `v0.153.1`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-05.** App `v0.153.2`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -141,6 +141,10 @@ bringing back from the past", for example "Seated Cable Row (Dallas)".
   done, and the workout's own gym chip already says that.
 - A gym name with its own brackets, like "6821 (Dallas)", shows as "(6821 · Dallas)".
 - The machine-only "(from X)" warning on the Plan line is unchanged.
+- **v0.153.2: falls back to your last session's gym.** Chris didn't see labels: routine and
+  program starts plan from the routine's own numbers, and exercises added before v0.153.0 have
+  no `planGym`. He chose "Yes label". With no `planGym`, the card shows the gym of the session
+  its Last time line reads (`lastPerf().gym`, this gym first for machines).
 
 **Ask your coach is the first card on Workouts (2026-10-05, v0.153.0).** Chris: coach, then
 today's workout, then history. It used to sit under the workout in progress, which led as "the

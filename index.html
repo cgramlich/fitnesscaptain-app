@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.153.1";
+const APP_VERSION = "0.153.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-05.2";
+const BUILD = "2026-10-05.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -6681,10 +6681,17 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
      underlined with the name, so it reads as a note, not part of the link. */
   // A gym named "6821 (Dallas)" would read "(6821 (Dallas))", so its own
   // brackets become a dot inside ours: "(6821 · Dallas)".
-  const gymTag = live && entry.planGym
+  /* FALLS BACK TO YOUR LAST SESSION'S GYM (2026-10-05). Routine and program
+     starts plan from the routine's written numbers, not from a past session,
+     so they never get a planGym - and neither do exercises added before the
+     label existed. Chris didn't see labels and chose "Yes label" for those:
+     they show the gym of your last session of the exercise, the same session
+     the card's Last time line reads. */
+  const tagGym = entry.planGym || (prev && prev.gym) || null;
+  const gymTag = live && tagGym
     ? <span style={{fontWeight:400,fontSize:"0.82em",color:"var(--ink-3)",
                     textDecorationLine:"none",display:"inline-block",marginLeft:5}}>
-        ({String(entry.planGym).replace(/\s*\(([^)]*)\)\s*/g, " · $1 ").trim()})</span>
+        ({String(tagGym).replace(/\s*\(([^)]*)\)\s*/g, " · $1 ").trim()})</span>
     : null;
 
   if(collapsed){
@@ -7877,7 +7884,10 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
         if(sameGymOnly && w.gymId !== workout.gymId) continue;
         const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
         if(e) return { sets: e.sets, best: topSet(e.sets), settings: e.settings || "",
-                       otherGym: machine && w.gymId && w.gymId !== workout.gymId ? (w.gymName || "another gym") : null };
+                       otherGym: machine && w.gymId && w.gymId !== workout.gymId ? (w.gymName || "another gym") : null,
+                       // Where that last session was - the card's gym label
+                       // falls back to this when the entry carries no planGym.
+                       gym: w.gymName || null };
       }
       return null;
     };
