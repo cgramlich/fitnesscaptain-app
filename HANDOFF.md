@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-05.** App `v0.153.2`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-11.** App `v0.153.3`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,14 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**Six photos per gym, up from four (2026-10-11, v0.153.3).** Chris asked for "up to six photos
+for a gym".
+- `GYM_PHOTO_MAX` is 6, and the grid is three across, so six sit in two even rows.
+- The limit messages read the constant.
+- No backend change: the shared-gym page already reads up to eight.
+- **Compile-checked only.** The scratch harness had been cleared, and Chris chose to ship
+  without rebuilding it.
 
 **"Done" means you tapped Done (2026-10-05, v0.153.1).** Chris: "it should say done after I say
 it's done, but if it's collapsed in process, it should just say in progress."

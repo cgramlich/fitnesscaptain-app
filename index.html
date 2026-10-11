@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.153.2";
+const APP_VERSION = "0.153.3";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-05.3";
+const BUILD = "2026-10-11.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4242,14 +4242,21 @@ function GymsScreen({ store, onOpen, onAdd, onDelete, onFind }){
    for it after standing in a hotel gym that the inventory described
    accurately and unhelpfully.
 
-   FOUR, not sixteen. This is a memory aid, not a survey, and a wall of
-   thumbnails on a place page is worse than a handful.
+   A HANDFUL, not sixteen (four at first, six since 2026-10-11). This is a
+   memory aid, not a survey, and a wall of thumbnails on a place page is
+   worse than a handful.
 
    Storage rides the same private-bucket endpoints as progress photos: the
    same per-user prefix, the same signed links that expire, the same purge on
    account deletion. Only the RECORD differs - these hang off the gym rather
    than the photos list. */
-const GYM_PHOTO_MAX = 4;
+/* Six, up from four (2026-10-11): Chris asked for "up to six photos for a
+   gym". The grid went from four across to three across, so six sit in two
+   even rows and each thumbnail is larger. The server's shared-gym page reads
+   up to eight, so six needs no backend change. The limit messages below read
+   this number, so they cannot drift from it again. */
+const GYM_PHOTO_MAX = 6;
+const GYM_PHOTO_MAX_WORD = "Six";
 
 function GymPhotos({ store, gym, notify }){
   const photos = Array.isArray(gym.photos) ? gym.photos : [];
@@ -4330,13 +4337,13 @@ function GymPhotos({ store, gym, notify }){
     }
   };
 
-  /* Several at once, because the cap is four and picking them one at a time is
-     four trips through the photo roll. Sequential rather than parallel: each
+  /* Several at once, because picking them one at a time is a trip through the
+     photo roll for each one. Sequential rather than parallel: each
      upload reads the CURRENT count to enforce the cap, and firing them all at
      once would let every one of them pass a stale check. */
   const addMany = async (files) => {
     const room = GYM_PHOTO_MAX - photos.length;
-    if(room <= 0){ setErr("Four photos is the limit. Remove one first."); return; }
+    if(room <= 0){ setErr(GYM_PHOTO_MAX_WORD + " photos is the limit. Remove one first."); return; }
     if(files.length > room) setErr("Room for " + room + " more, so the rest were skipped.");
     setErr(""); setBusy(true);
     const added = [];
@@ -4398,7 +4405,7 @@ function GymPhotos({ store, gym, notify }){
         onChange={e=>{ const fs=Array.from(e.target.files||[]); e.target.value=""; addMany(fs); }} />
 
       {photos.length > 0 &&
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
           {photos.map(p => (
             <button key={p.id} onClick={async ()=>{
                 try{ await urlFor(p.id); }catch(e){ setErr(e.message); }
@@ -4434,7 +4441,7 @@ function GymPhotos({ store, gym, notify }){
         </button>}
       {photos.length >= GYM_PHOTO_MAX &&
         <p className="hint center" style={{marginTop:8,marginBottom:0}}>
-          Four is the limit. Tap one to remove it.
+          {GYM_PHOTO_MAX_WORD} is the limit. Tap one to remove it.
         </p>}
     </>
   );
