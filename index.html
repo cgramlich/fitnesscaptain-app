@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.153.4";
+const APP_VERSION = "0.154.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-11.2";
+const BUILD = "2026-10-11.3";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -4212,6 +4212,8 @@ function GymsScreen({ store, onOpen, onAdd, onDelete, onFind }){
         return (
           <SwipeRow key={g.id} onDelete={()=>onDelete(g)}>
             <button className="item" onClick={()=>onOpen(g)}>
+              {Array.isArray(g.photos) && g.photos[0] && g.photos[0].id &&
+                <GymCoverThumb photoId={g.photos[0].id} size={52} />}
               <div className="item-body">
                 <div className="item-title">{g.name}</div>
                 <div className="item-meta">
@@ -4260,6 +4262,53 @@ function GymsScreen({ store, onOpen, onAdd, onDelete, onFind }){
    this number, so they cannot drift from it again. */
 const GYM_PHOTO_MAX = 6;
 const GYM_PHOTO_MAX_WORD = "Six";
+
+/* THE COVER IS THE FIRST PHOTO (2026-10-11). Chris: "we need to be able to
+   pick a photo of a gym and make one the cover."
+
+   No new field. The backend already treats photos[0] as the picture of a gym:
+   it is what a shared-gym link shows as its preview, and the shared page lists
+   the photos in stored order. So choosing a cover MOVES that photo to the
+   front, and the link, the Gyms list and the grid all agree without anything
+   to keep in step. Road not taken: a separate `coverId` on the gym - a second
+   answer to "which one is the picture", and the share endpoints would have had
+   to learn it or keep showing a different photo from the app.
+
+   The Gyms list shows it as a thumbnail. Each one costs a signed-link request,
+   so the links are remembered here for 50 minutes (they last 60) rather than
+   asked for again every time the list is opened. */
+const _coverUrlCache = {};          // photoId -> { url, at }
+const COVER_URL_TTL_MS = 50 * 60 * 1000;
+function GymCoverThumb({ photoId, size }){
+  const hit = _coverUrlCache[photoId];
+  const fresh = hit && (Date.now() - hit.at) < COVER_URL_TTL_MS ? hit.url : null;
+  const [url, setUrl] = useState(fresh);
+  useEffect(() => {
+    let alive = true;
+    const c = _coverUrlCache[photoId];
+    if(c && (Date.now() - c.at) < COVER_URL_TTL_MS){ setUrl(c.url); return; }
+    setUrl(null);
+    (async () => {
+      try{
+        const token = await authToken();
+        const r = await fetch(API_BASE + "/api/progress/photo/" + photoId,
+          { headers:{ "Authorization":"Bearer "+token } });
+        if(!r.ok) return;
+        const j = await r.json();
+        _coverUrlCache[photoId] = { url: j.url, at: Date.now() };
+        if(alive) setUrl(j.url);
+      }catch(e){ /* offline or gone: the row simply has no picture */ }
+    })();
+    return () => { alive = false; };
+  }, [photoId]);
+  // The box is always drawn, so the row does not jump when the picture lands.
+  return (
+    <div style={{flex:"0 0 auto",width:size,height:size,borderRadius:10,overflow:"hidden",
+                 border:"1px solid var(--line-2)",background:"var(--bg-3)"}}>
+      {url && <img src={url} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />}
+    </div>
+  );
+}
 
 function GymPhotos({ store, gym, notify }){
   const photos = Array.isArray(gym.photos) ? gym.photos : [];
@@ -4378,6 +4427,15 @@ function GymPhotos({ store, gym, notify }){
     }catch(e){ patchPhotos(before); setErr(e.message || "Couldn't delete that photo."); }
   };
 
+  // The cover is whichever photo is first - see GymCoverThumb for why.
+  const isCover = (p) => photos.length > 0 && photos[0].id === p.id;
+  const makeCover = (p) => {
+    if(isCover(p)) return;
+    patchPhotos([p, ...photos.filter(x => x.id !== p.id)]);
+    log("GYM","cover photo set for "+gym.name);
+    if(notify) notify("Cover photo set");
+  };
+
   if(viewing){
     return (
       <div className="layer" style={{zIndex:90}}>
@@ -4391,7 +4449,14 @@ function GymPhotos({ store, gym, notify }){
             ? <img src={urls[viewing.id]} alt="" style={{width:"100%",borderRadius:12,marginTop:10,display:"block"}} />
             : <div className="row center" style={{padding:40}}><span className="spin"></span></div>}
           {err && <div className="auth-msg err" style={{marginTop:12}}>{err}</div>}
-          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:14}}
+          {/* A state when it IS the cover, a control when it is not - and no
+              control at all with one photo, where there is nothing to choose. */}
+          {photos.length > 1 && (isCover(viewing)
+            ? <p className="hint center" style={{marginTop:14,marginBottom:0}}>This is the cover photo.</p>
+            : <button className="btn btn-block" style={{marginTop:14}} onClick={()=>makeCover(viewing)}>
+                Make this the cover
+              </button>)}
+          <button className="btn btn-ghost btn-block btn-sm" style={{marginTop:10}}
             onClick={()=>remove(viewing)}>
             <Icon d={ICONS.trash} size={15}/> Delete this photo
           </button>
@@ -4421,9 +4486,18 @@ function GymPhotos({ store, gym, notify }){
                     style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} />
                 : <span className="spin" style={{position:"absolute",top:"50%",left:"50%",
                     transform:"translate(-50%,-50%)"}}></span>}
+              {photos.length > 1 && isCover(p) &&
+                <span style={{position:"absolute",left:5,bottom:5,fontSize:10.5,fontWeight:600,
+                              padding:"2px 6px",borderRadius:6,color:"#fff",
+                              background:"rgba(0,0,0,.62)"}}>Cover</span>}
             </button>
           ))}
         </div>}
+      {photos.length > 1 &&
+        <p className="hint" style={{marginTop:8,marginBottom:0}}>
+          Tap a photo to make it the cover - the one shown in your gym list and
+          on a link you share.
+        </p>}
 
       {!photos.length &&
         <p className="hint" style={{marginTop:0}}>

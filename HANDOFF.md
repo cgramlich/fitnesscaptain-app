@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-11.** App `v0.153.4`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-11.** App `v0.154.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,20 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**A gym's cover is its first photo (2026-10-11, v0.154.0).** Chris: "we need to be able to pick
+a photo of a gym and make one the cover."
+- Tap a photo, then **Make this the cover**. It moves that photo to the front of `gym.photos`.
+- The backend already used `photos[0]` as a shared gym's preview picture, so the link follows
+  with no server change. The preview is cached for an hour, so a new cover can take that long
+  to show on a link.
+- Shown as a "Cover" tag on the grid, and as a thumbnail on the Gyms list (`GymCoverThumb`).
+  Its signed links are remembered for 50 minutes, so opening the list doesn't re-request them.
+- With one photo there is nothing to choose, so no control and no tag.
+- **Road not taken:** a separate `coverId` field. That would be a second answer to "which one is
+  the picture", and the share endpoints would have had to learn it.
+- **Tested** in the harness (`?gymphotos`): the third photo became first, the tag and the list
+  thumbnail both moved, and the stored order was ph3, ph1, ph2.
 
 **Gym scan: one button per kind of thing, and an upload that survives a dropped connection
 (2026-10-11, v0.153.4).** Both came from Chris scanning a hotel gym in Sardinia.
