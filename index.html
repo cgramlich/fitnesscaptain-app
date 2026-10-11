@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.153.3";
+const APP_VERSION = "0.153.4";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-11.1";
+const BUILD = "2026-10-11.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1211,8 +1211,11 @@ async function metaPut(obj){
    enough to deserve a sentence that says what to do. */
 function transportError(e){
   const m = String((e && e.message) || "");
-  if(/load failed|failed to fetch|networkerror|network request failed/i.test(m))
-    return new Error("Couldn't reach the server - check your connection and try again. Nothing was saved.");
+  if(/load failed|failed to fetch|networkerror|network request failed/i.test(m)){
+    const out = new Error("Couldn't reach the server - check your connection and try again. Nothing was saved.");
+    out.transport = true;   // lets a caller tell "never got through" from a real refusal
+    return out;
+  }
   return e;
 }
 
@@ -5564,6 +5567,33 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk,
    MUST NOT EXCEED the backend's MAX_IMAGES_PER_CALL, which 400s the whole
    scan rather than truncating. Raise that one first. */
 const SCAN_MAX_IMAGES = 24;
+/* THE WHOLE SCAN GOES UP AS ONE REQUEST, so its size decides whether it
+   arrives. 2026-10-11, a hotel gym in Sardinia: a 23-photo scan went through
+   on wifi in 16s; six minutes later a 24-photo one never reached the server
+   at all (the Railway request log has no entry for it) - the phone had moved
+   to roaming 5G and the upload died on the way. The app said "Couldn't reach
+   the server" and stopped.
+
+   Three changes, all here:
+   - QUALITY 0.70, down from 0.85. Camera photos, unlike video frames, were
+     coming out several times the 29-74KB measured for frames. 0.70 at the
+     same 1024px makes the upload about a third smaller (33-39% measured on
+     three detailed photos: 255/120/70 KB down to 170/76/43) and costs the
+     model nothing it needs: vision cost is set by pixel size, unchanged.
+     A third smaller does not save a dead connection - the retries do that.
+   - RETRIES. A dropped connection is retried twice (after 2s, then 5s)
+     before giving up, and the screen says so.
+   - The photos stay on screen after a failure, and the message says that.
+
+   Known cost of retrying: if the first try DID reach the server and only the
+   answer was lost, the retry runs the scan twice - about $0.07, and for a
+   free account a second scan off the allowance. Rare, because the answer is a
+   few KB and the upload is megabytes. Road not taken: sending the photos in
+   several smaller requests. That cannot lose a whole scan to one drop, but
+   the model then sees each batch alone and can no longer count the same rack
+   once across photos. */
+const SCAN_JPEG_QUALITY = 0.70;
+const SCAN_RETRY_WAITS_MS = [2000, 5000];
 function GymScanLayer({ store, gym, onClose, onSaved }){
   const [phase, setPhase] = useState("pick");    // pick | busy | review
   const [imgs, setImgs] = useState([]);          // [{b64, thumb}]
@@ -5573,6 +5603,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
   const fileRef = useRef(null);
   const vidRef  = useRef(null);
   const [vidBusy, setVidBusy] = useState(false);
+  const [busyNote, setBusyNote] = useState("");   // "trying again (2 of 3)" while a scan retries
 
   const downscale = (file) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -5585,7 +5616,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         cv.width = Math.max(1, Math.round(img.width*scale));
         cv.height = Math.max(1, Math.round(img.height*scale));
         cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-        const dataUrl = cv.toDataURL("image/jpeg", 0.85);
+        const dataUrl = cv.toDataURL("image/jpeg", SCAN_JPEG_QUALITY);
         URL.revokeObjectURL(url);
         resolve({ b64: dataUrl.split(",")[1], thumb: dataUrl });
       }catch(e){ URL.revokeObjectURL(url); reject(e); }
@@ -5706,7 +5737,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
           try{ v.currentTime = target; }catch(e){}
           await waiter;
           ctx.drawImage(v, 0, 0, cv.width, cv.height);
-          const dataUrl = cv.toDataURL("image/jpeg", 0.85);
+          const dataUrl = cv.toDataURL("image/jpeg", SCAN_JPEG_QUALITY);
           out.push({ b64: dataUrl.split(",")[1], thumb: dataUrl });
         }
         ok(out);
@@ -5874,12 +5905,39 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
         '"smith machine" and usually "rack" too. Tag what could be trained there.';
       const content = imgs.map(im => ({ type:"image", source:{ type:"base64", media_type:"image/jpeg", data: im.b64 } }));
       content.push({ type:"text", text:"Inventory this gym's equipment from the photos." });
-      const out = await aiRelay("inventory_gym", [{ role:"user", content }], { system, maxTokens: 4000 });
+      // Logged so the next "it didn't go through" can be read against a size.
+      const kb = Math.round(imgs.reduce((n, im) => n + im.b64.length, 0) / 1024);
+      log("SCAN","sending "+imgs.length+" shots, "+kb+" KB");
+      let out = null;
+      for(let attempt = 0; ; attempt++){
+        try{
+          out = await aiRelay("inventory_gym", [{ role:"user", content }], { system, maxTokens: 4000 });
+          break;
+        }catch(e){
+          // Only a dropped connection is retried. A refusal from the server
+          // (too many, allowance used, AI busy) would just be refused again.
+          if(!e.transport || attempt >= SCAN_RETRY_WAITS_MS.length) throw e;
+          log("SCAN","upload dropped, retry "+(attempt+1)+" of "+SCAN_RETRY_WAITS_MS.length);
+          setBusyNote("The connection dropped - trying again (" + (attempt+2) + " of " +
+                      (SCAN_RETRY_WAITS_MS.length+1) + ")...");
+          await new Promise(r => setTimeout(r, SCAN_RETRY_WAITS_MS[attempt]));
+        }
+      }
+      setBusyNote("");
       const rows = applyScan(out);
       setScanConv({ system, answer: out });
       log("SCAN","recognized "+rows.length+" items");
     }catch(e){
-      setErr(e.message||"Scan failed."); setPhase("pick");
+      setBusyNote("");
+      /* The general transport message ends "Nothing was saved", which here
+         reads as "your photos are gone". They are not - say so, and say what
+         actually helps on a weak signal. */
+      setErr(e.transport
+        ? "The upload didn't get through after " + (SCAN_RETRY_WAITS_MS.length+1) + " tries - the signal is too weak " +
+          "for " + imgs.length + " shots right now. Your shots are still here: try again on wifi or a " +
+          "stronger signal, or remove a few and send fewer."
+        : (e.message||"Scan failed."));
+      setPhase("pick");
       log("ERROR","inventory_gym: "+e.message);
     }
   };
@@ -5920,9 +5978,8 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
 
         {phase==="pick" && <>
           <p className="hint" style={{marginTop:4}}>
-            Film a walk round the room, or upload a clip you already have, or add
-            photos - plus receipts or order screenshots if you have them, they
-            nail exact models. Up to{" "}
+            Show it the room with a video, photos, or both. Receipts or order
+            screenshots help too - they nail exact models. Up to{" "}
             {SCAN_MAX_IMAGES} shots per scan; you review everything before it
             saves to {gym.name}.
           </p>
@@ -5930,7 +5987,10 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
           {imgs.length>0 &&
             <div className="row" style={{flexWrap:"wrap",gap:10,marginTop:12}}>
               {imgs.map((im,i)=>(
-                <div key={i} style={{position:"relative"}}>
+                /* Fixed width: as a stretchy flex child the box grew wider
+                   than its 76px picture, and the remove-x - pinned to the
+                   BOX's corner - floated off in the gap beside the photo. */
+                <div key={i} style={{position:"relative",flex:"0 0 76px",width:76}}>
                   <img src={im.thumb} alt="" style={{width:76,height:76,objectFit:"cover",
                     borderRadius:10,border:"1px solid var(--line-2)",display:"block"}} />
                   <button onClick={()=>removeShot(i)} aria-label="Remove photo"
@@ -5940,46 +6000,53 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
                 </div>
               ))}
             </div>}
-          {/* Two ways in. Walking the floor filming beats framing eight stills,
-              so that gets its own button straight to the camera; everything
-              else - a photo at one rack, a clip already on the phone, a receipt
-              in the library - comes through the one picker. */}
-          <input ref={vidRef} type="file" accept="video/*" capture="environment" style={{display:"none"}}
+          {/* ONE BUTTON PER KIND OF THING: VIDEO, AND PHOTOS (2026-10-11).
+
+              Third arrangement, and each earlier one overlapped itself. First a
+              camera-only "Take photos" beside a picker whose sheet also offered
+              the camera. Then "Record a walkthrough" (straight to filming)
+              beside "Take or add photos", whose picker accepted video as well -
+              so the phone's own sheet under a button that said PHOTOS offered
+              "Take Photo or Video". Chris, with the screenshot: "it says record
+              walk-through, but then one of the selections is take a video."
+
+              The sheet's wording is the phone's and cannot be changed; what it
+              offers follows the accept attribute. So each button now accepts
+              one kind only, and its sheet can only talk about that kind:
+                video  -> Photo Library / Take Video / Choose Files
+                photos -> Photo Library / Take Photo / Choose Files
+
+              The cost, taken knowingly: filming is two taps instead of one,
+              because going straight to the camera (capture) is what hid "use a
+              clip I already have" behind the other button in the first place. */}
+          <input ref={vidRef} type="file" accept="video/*" style={{display:"none"}}
             onChange={e=>{ const f=e.target.files && e.target.files[0]; e.target.value="";
               if(f) addVideo(f).then(n => setErr(n||"")); }} />
-          {/* Photos OR video. "Record a walkthrough" uses capture, which forces
-              the camera, so before this there was NO way to use a clip you had
-              already filmed - or one somebody sent you. Chris asked for the
-              label to say both; the accept attribute had to change first, or
-              the label would have been a lie. */}
-          <input ref={fileRef} type="file" accept="image/*,video/*" multiple style={{display:"none"}}
+          <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}}
             onChange={e=>{ addPicked(e.target.files); e.target.value=""; }} />
 
-          <button className="btn btn-primary btn-block" style={{marginTop:14}}
+          {/* Orange only until there is something to read: after that Read
+              the equipment is the next step, and one orange button per screen
+              is the rule everywhere else in the app. */}
+          <button className={"btn btn-block " + (imgs.length ? "btn-ghost" : "btn-primary")} style={{marginTop:14}}
             disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
             onClick={()=>{ if(vidRef.current) vidRef.current.click(); }}>
             {vidBusy ? <span className="spin"></span>
-                     : <><Icon d={ICONS.play} size={15}/> Record a walkthrough</>}
+                     : <><Icon d={ICONS.play} size={15}/> Film or add a video</>}
           </button>
           <p className="hint center" style={{marginTop:6,marginBottom:0}}>
-            Walk the floor filming. Scanning again later ADDS to what is already
-            on file, so you can come back with photos of anything it missed.
+            Walk the floor filming, or pick a clip you already have.
           </p>
 
-          {/* ONE button, not two. "Take photos" used capture to force the
-              camera; the picker beside it opened the OS sheet, whose own
-              second item is "Take Photo or Video". So the camera button was a
-              strict subset of the button next to it - Chris sent a screenshot
-              of the sheet covering the very control it duplicated.
-
-              Record a walkthrough stays separate because it is not a subset:
-              capture goes straight to filming, which is one tap instead of
-              two for the thing you most want people to do. */}
-          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:10}}
+          <button className="btn btn-ghost btn-block" style={{marginTop:10}}
             disabled={vidBusy || imgs.length>=SCAN_MAX_IMAGES}
             onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
             Take or add photos
           </button>
+          <p className="hint center" style={{marginTop:6,marginBottom:0}}>
+            Scanning again later ADDS to what is already on file, so you can
+            come back with anything it missed.
+          </p>
           {imgs.length>0 &&
             <p className="hint center" style={{marginTop:8,marginBottom:0}}>
               {imgs.length} of {SCAN_MAX_IMAGES} shots ready
@@ -5994,6 +6061,7 @@ function GymScanLayer({ store, gym, onClose, onSaved }){
           <div className="empty" style={{padding:"60px 20px"}}>
             <span className="spin spin-lg" style={{margin:"0 auto 16px",display:"block"}}></span>
             <p>Reading {imgs.length} photo{imgs.length===1?"":"s"}...</p>
+            {busyNote && <p className="hint" style={{marginTop:6}}>{busyNote}</p>}
           </div>}
 
         {phase==="review" && <>

@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-11.** App `v0.153.3`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-11.** App `v0.153.4`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,38 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**Gym scan: one button per kind of thing, and an upload that survives a dropped connection
+(2026-10-11, v0.153.4).** Both came from Chris scanning a hotel gym in Sardinia.
+
+*Buttons.* "Record a walkthrough" sat beside "Take or add photos", whose picker also accepted
+video. So under a button that said photos, the phone's own sheet offered "Take Photo or Video".
+- Now there are two buttons: **Film or add a video** (accepts video only) and **Take or add
+  photos** (accepts images only). The sheet's wording is the phone's; what it offers follows the
+  accept attribute, so each sheet can only talk about its own kind.
+- Cost, taken knowingly: filming is two taps instead of one.
+- Road not taken: keeping one-tap filming and adding a third control for an existing clip. Chris
+  was offered it and chose two buttons.
+- Also: the video button is orange only until there are shots, so there is one primary per
+  screen. The remove-x now sits on the thumbnail's corner; it had floated beside it.
+
+*Scan failure.* The Railway request log shows a 23-photo scan at 15:10 UTC succeeding on wifi in
+16 s, and NO entry for the 24-photo one at about 15:16. The phone had moved to roaming 5G and
+the upload never arrived, so there was no server fault. The app showed the generic "Couldn't
+reach the server".
+- **Retries.** A dropped connection is retried twice (after 2 s, then 5 s), and the busy screen
+  says so. Only transport failures are retried, never a refusal from the server.
+- **Smaller upload.** JPEG quality went from 0.85 to 0.70 at the same 1024px, which is 33-39%
+  smaller on three test photos. Vision cost is unchanged.
+- **Clearer failure.** The shots stay on screen, and the message says to try wifi or send fewer.
+- **Known cost of retrying:** if the first try reached the server and only the answer was lost,
+  the scan runs twice (about $0.07, and a second scan off a free allowance). An idempotency key
+  on the relay would close that; not built.
+- **Road not taken:** sending the photos in several smaller requests, because the model could no
+  longer count one rack once across photos.
+- **Tested** in the rebuilt harness (`?scandrop=N`): 2 drops then success, and all 3 tries
+  failing leaves the shots in place with the message.
+- The scan now logs "sending N shots, X KB" to the in-app log.
 
 **Six photos per gym, up from four (2026-10-11, v0.153.3).** Chris asked for "up to six photos
 for a gym".
