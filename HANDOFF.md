@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-11.** App `v0.154.0`, backend `v0.32.1`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-19.** App `v0.155.0`, backend `v0.33.0`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,56 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**"Which machine?" - and numbers follow the machine (2026-10-19, app v0.155.0, backend
+v0.33.0).** Chris sent a photo of a hotel's Technogym Dual Adjustable Pulley: "the one I do at
+River Crossing club is made by Life Fitness, and although they are similar, the weight
+resistance I use is slightly different." He chose the full version, with photo reading counted
+as a scan.
+
+*Picking the machine.* The `MachinePicker` sheet replaces the old inline "name this machine"
+text box. It offers three ways in:
+1. **Read it from a photo:** new backend vision task `identify_machine`, Sonnet, at most 2
+   images, counted as a scan. It returns `{brand, model, label, confidence}`, and AIReply lets
+   you correct it without re-sending the photo.
+2. **Pick from this gym's scanned equipment:** the lines that fit the exercise come first
+   (`machineRelevance`), with the rest behind "Show all".
+3. **Type it.**
+
+Labels are built brand-first when a brand is known (`inventoryMachine`, `MACHINE_BRANDS`), so
+the same machine in another gym matches.
+- **Asked once at add time:** only for machine-loaded work at a known gym with no machine on
+  file. Skip (or Back) records `exercise.machineAsked[gymId]`, and it is never asked there again.
+- "+ which machine?" and "on the X" on the card reopen the sheet at any time.
+
+*Numbers follow the machine.*
+- Each logged entry is stamped with `entry.machine` the moment it has a set (`stampMachine` in
+  WorkoutEditor.updateEntry). Older entries fall back to that gym's machine on file
+  (`machineOfEntry`).
+- `latestFor` and the card's Last time line (`lastPerf`) now plan in this order: the same machine
+  anywhere, then this gym, then any session. A match on the same machine in another gym is not
+  flagged "different machine - check the weight".
+- **Free weights are excluded**, so a dumbbell still plans from your latest session.
+- `sameMachine`: names are equal, or every word of the shorter name (at least two words) appears
+  in the longer. One shared word is not enough, because "Life Fitness Cable" vs "Technogym Cable"
+  is the whole point.
+- **Choosing a machine re-plans** an entry with no sets yet from that machine's last session,
+  because the plan was picked before the machine was known.
+
+*Roads not taken:*
+- Keying numbers only by gym (the old rule). It can't recognise the same machine in two hotels
+  or tell two stations in one room apart.
+- A fixed machine catalogue. There isn't a public one; brand plates and the gym's own scan are
+  what we have.
+
+*Tested in the harness (`?machines&livegym=g-hotel`):*
+- The sheet opens on add, with the hotel's Technogym listed first.
+- Typing "Life Fitness Cable Crossover" re-planned from River Crossing's session (12x90, 10x105,
+  8x110) instead of the newer Dallas one (150s).
+- The photo read the Technogym; a reply corrected it to Life Fitness without re-sending the photo.
+- Picking the Technogym planned from Dallas with no warning, and the logged set stored its machine.
+- Free weights weren't asked; Skip recorded the answer, and adding the exercise again didn't ask.
+- Backend: 25/25 tests pass, 6 of them new.
 
 **A gym's cover is its first photo (2026-10-11, v0.154.0).** Chris: "we need to be able to pick
 a photo of a gym and make one the cover."

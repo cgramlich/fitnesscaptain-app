@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.154.0";
+const APP_VERSION = "0.155.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-11.3";
+const BUILD = "2026-10-19.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -924,6 +924,19 @@ function latestFor(workouts, exerciseId, gymId, exercise){
     .sort((a,b) => String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
   const hit = (w) => (w.entries||[]).find(x => x.exerciseId === exerciseId &&
     (x.sets||[]).some(s => (Number(s.reps)||0) > 0));
+  /* SAME MACHINE FIRST, wherever it was (see sameMachine). Only for
+     machine-loaded work: a dumbbell is a dumbbell, and preferring an older
+     session on the "same" bench over your latest would be a regression.
+     A match in another gym is NOT flagged as "different machine - check the
+     weight", because it is the same machine; that is the point. */
+  const today = isMachineWork(exercise) ? machineAt(exercise, gymId) : null;
+  if(today){
+    for(const w of ws){
+      const e = hit(w);
+      if(e && sameMachine(machineOfEntry(e, w, exercise), today))
+        return { entry: e, otherGym: null, gym: w.gymName || null, machine: today };
+    }
+  }
   if(gymId && isMachineWork(exercise)){
     for(const w of ws){ if(w.gymId === gymId){ const e = hit(w); if(e) return { entry: e, otherGym: null, gym: w.gymName || null }; } }
   }
@@ -1413,6 +1426,40 @@ function machineAt(ex, gymId){
   if(!ex || !gymId) return null;
   const m = ex.machines || {};
   return m[gymId] || null;
+}
+
+/* NUMBERS FOLLOW THE MACHINE (2026-10-19). Chris, with a photo of a
+   Technogym Dual Adjustable Pulley in a hotel: "the one I do at River Crossing
+   club is made by Life Fitness, and although they are similar, the weight
+   resistance I use is slightly different."
+
+   The gym rule above already keeps Life Fitness numbers out of a Technogym
+   plan. What it could not do: recognise the SAME Technogym in two different
+   hotels (a chain fits them out alike), or tell two different cable stations
+   in one room apart. So each logged exercise now records the machine it was
+   done on (entry.machine, stamped as sets are logged), and an entry from
+   before that existed falls back to whatever machine that gym has on file.
+
+   Matching is forgiving about wording, because the same machine gets named
+   from a photo one day and picked from a scanned list the next: "Technogym
+   Dual Adjustable Pulley" and "Technogym Dual Adjustable Pulley Upper Body"
+   are one machine. Two names match when they are equal, or when every word of
+   the shorter (at least two words) is in the longer. One shared word is not
+   enough - "Life Fitness Cable" and "Technogym Cable" are the whole point. */
+function machineKeyWords(label){
+  return String(label||"").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+    .split(" ").filter(Boolean);
+}
+function sameMachine(a, b){
+  const wa = machineKeyWords(a), wb = machineKeyWords(b);
+  if(!wa.length || !wb.length) return false;
+  if(wa.join(" ") === wb.join(" ")) return true;
+  const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  if(short.length < 2) return false;
+  return short.every(w => long.indexOf(w) !== -1);
+}
+function machineOfEntry(entry, workout, ex){
+  return (entry && entry.machine) || machineAt(ex, workout && workout.gymId) || null;
 }
 
 function availableAt(x, gym){
@@ -6604,7 +6651,210 @@ function MachinePhoto({ store, exercise, gymId, label, wide }){
   );
 }
 
-function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, onUndoable, onSwap, machineLabel, onMachineLabel, machineNoun, machinePhoto, onAddToToday, exStep }){
+/* ============================================================
+   "WHICH MACHINE?" (2026-10-19). Chris: "When I add an exercise, it would
+   be great if I could also pick a machine ... there's not that many
+   manufacturers, especially in hotels."
+
+   Three ways in, most useful first:
+   - READ IT FROM A PHOTO. One photo of the station or its instruction
+     placard; the model reads brand and model off the printing (his
+     Technogym says "Dual Adjustable Pulley Upper Body" right on the
+     stack). Counted as a scan for free accounts, because the backend counts
+     whatever carries an image as one. The answer can be argued with, like
+     every AI answer in the app, without re-sending the photo.
+   - PICK FROM THIS GYM'S EQUIPMENT. The scan already wrote the room's
+     machines down; the ones that fit this exercise come first.
+   - TYPE IT.
+
+   The label it produces is what planning matches on (sameMachine), so it is
+   built brand-first when the brand is known: "Technogym Dual Adjustable
+   Pulley" matches the same unit in another hotel; "Dual adjustable pulley"
+   alone would match every brand's.
+   ============================================================ */
+const MACHINE_BRANDS = ["Technogym","Life Fitness","Hammer Strength","Precor","Matrix","Cybex",
+  "Star Trac","Nautilus","Hoist","Keiser","Freemotion","Panatta","gym80","Body-Solid","Inspire",
+  "IronMaster","Concept2","Rogue","Atlantis","Pulse","Impulse","BH Fitness","Johnson","Bowflex",
+  "Torque","Woodway","Eleiko","Watson","Primal","Exigo","Signature","Insignia","Synrgy360"];
+function brandIn(text){
+  const t = String(text||"").toLowerCase();
+  return MACHINE_BRANDS.find(b => t.indexOf(b.toLowerCase()) !== -1) || null;
+}
+// "Dual adjustable pulley x2 - Technogym, 2 x 100kg stacks"
+//   -> { name, detail, label: "Technogym Dual adjustable pulley" }
+function inventoryMachine(line){
+  let s = String(line||"").trim();
+  let detail = "";
+  const dash = s.search(/\s+[-–]\s+/);
+  if(dash !== -1){ detail = s.slice(dash).replace(/^\s+[-–]\s+/, "").trim(); s = s.slice(0, dash); }
+  const name = s.replace(/\s+x\s*\d+\s*$/i, "").trim();
+  const brand = brandIn(name) ? null : brandIn(detail);
+  return { name, detail, label: ((brand ? brand + " " : "") + name).slice(0, 60) };
+}
+// Words that make a piece of kit a likely home for this exercise.
+const MACHINE_HINT_WORDS = {
+  "cable":          ["cable","pulley","crossover","functional","tower","dual","lat","pulldown"],
+  "machine":        ["machine","press","curl","extension","leg","chest","shoulder","row","pec","fly",
+                     "abductor","adductor","calf","glute","pulldown","dip","assisted"],
+  "smith machine":  ["smith"],
+};
+const HINT_STOP = new Set(["machine","cable","seated","standing","with","the","and","single","arm"]);
+function machineRelevance(line, ex){
+  const t = String(line||"").toLowerCase();
+  let score = 0;
+  (MACHINE_HINT_WORDS[ex && ex.equipment] || []).forEach(w => { if(t.indexOf(w) !== -1) score += 1; });
+  machineKeyWords(ex && ex.name).forEach(w => {
+    if(w.length >= 4 && !HINT_STOP.has(w) && t.indexOf(w) !== -1) score += 2;
+  });
+  return score;
+}
+
+function MachinePicker({ exercise, gym, current, asking, onChoose, onSkip, onClose }){
+  const [typed, setTyped] = useState(current || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [found, setFound] = useState(null);     // { label, brand, model, confidence }
+  const [raw, setRaw] = useState("");           // the model's answer, for replies
+  const [showAll, setShowAll] = useState(false);
+  const fileRef = useRef(null);
+
+  const lines = String((gym && gym.inventory) || "").split("\n").map(s => s.trim()).filter(Boolean);
+  const scored = lines.map(l => ({ m: inventoryMachine(l), score: machineRelevance(l, exercise) }))
+    .filter(x => x.m.name);
+  const likely = scored.filter(x => x.score > 0).sort((a,b) => b.score - a.score);
+  const rest = scored.filter(x => x.score === 0);
+  const shown = showAll ? likely.concat(rest) : likely;
+
+  const SYSTEM = 'You identify one piece of gym equipment from a photo. Return ONLY strict JSON, no prose ' +
+    'and no markdown fences: {"brand":"...","model":"...","label":"...","confidence":"high|low"}. ' +
+    'Read brand and model from text printed on the machine, its weight stack or its instruction ' +
+    'placard; printed text beats appearance. label = what a lifter would call it, brand first, ' +
+    'e.g. "Technogym Dual Adjustable Pulley". If no brand is readable, describe it plainly ' +
+    '(e.g. "Cable crossover") with confidence "low". Unknown fields are "".';
+  const parse = (txt) => {
+    try{
+      const j = JSON.parse(stripFences(txt));
+      const label = String(j.label || [j.brand, j.model].filter(Boolean).join(" ")).trim().slice(0, 60);
+      if(!label) throw new Error("empty");
+      setFound({ label, brand: j.brand || "", model: j.model || "", confidence: j.confidence || "" });
+      setRaw(txt);
+      return true;
+    }catch(e){ setErr("Couldn't make out a machine - try a photo of its label or instruction card."); return false; }
+  };
+  const readPhoto = async (file) => {
+    if(!file) return;
+    setErr(""); setFound(null); setBusy(true);
+    try{
+      const b64 = await new Promise((resolve, reject) => {
+        const u = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+          try{
+            const sc = Math.min(1, 1024/Math.max(img.width, img.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.width*sc)); cv.height = Math.max(1, Math.round(img.height*sc));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            URL.revokeObjectURL(u);
+            resolve(cv.toDataURL("image/jpeg", SCAN_JPEG_QUALITY).split(",")[1]);
+          }catch(e){ URL.revokeObjectURL(u); reject(e); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(u); reject(new Error("Couldn't read that image.")); };
+        img.src = u;
+      });
+      const out = await aiRelay("identify_machine", [{ role:"user", content: [
+        { type:"image", source:{ type:"base64", media_type:"image/jpeg", data: b64 } },
+        { type:"text", text:"Which machine is this? I use it for " + (exercise ? exercise.name : "this exercise") + "." } ] }],
+        { system: SYSTEM, maxTokens: 300 });
+      if(parse(out)) log("MACHINE", "read from photo for " + (exercise ? exercise.name : "?"));
+    }catch(e){ setErr(e.message || "Couldn't read that photo."); log("ERROR","identify_machine: "+e.message); }
+    finally{ setBusy(false); }
+  };
+
+  return (
+    <div className="layer" style={{zIndex:88}}>
+      <div className="layer-inner">
+        <div className="layer-top" style={{zIndex:89}}>
+          <button className="icon-btn" onClick={onClose} aria-label="Back"><Icon d={ICONS.back} size={20}/></button>
+          <h2 style={{flex:1,minWidth:0}}>Which machine?</h2>
+        </div>
+        <p className="hint" style={{marginTop:4}}>
+          {exercise ? exercise.name : "This exercise"}{gym ? " at " + gym.name : ""}. Your numbers
+          follow the machine: next time you're on the same one - even in another gym - it plans
+          from that session.
+        </p>
+
+        <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}}
+          onChange={e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; readPhoto(f); }} />
+        <button className="btn btn-primary btn-block" style={{marginTop:10}} disabled={busy}
+          onClick={()=>{ if(fileRef.current) fileRef.current.click(); }}>
+          {busy ? <span className="spin"></span> : <><Icon d={ICONS.sparkle} size={15}/> Read it from a photo</>}
+        </button>
+        <p className="hint center" style={{marginTop:6,marginBottom:0}}>
+          The brand plate or instruction card works best.
+        </p>
+        {err && <div className="auth-msg err" style={{marginTop:10}}>{err}</div>}
+        {found &&
+          <div className="card" style={{marginTop:12,borderColor:"var(--amber-line)"}}>
+            <div style={{fontWeight:700}}>{found.label}</div>
+            {found.confidence === "low" &&
+              <div className="hint" style={{margin:"2px 0 0"}}>No brand readable - a closer photo of the label would help.</div>}
+            <button className="btn btn-block" style={{marginTop:10}} onClick={()=>onChoose(found.label)}>
+              <Icon d={ICONS.check} size={15}/> Use this
+            </button>
+            <AIReply task="identify_machine" maxTokens={300}
+              base={[{ role:"user", content:"Which machine is this? (The photo went with the first request; " +
+                "this follow-up carries only your answer and my correction.)" }]}
+              answer={raw}
+              system={SYSTEM + " This is a follow-up WITHOUT the photo: correct your answer from what they " +
+                      "tell you and return the whole answer again in the same JSON shape."}
+              onResult={(txt)=>{ setErr(""); parse(txt); }}
+              placeholder="Not quite? e.g. it's the Life Fitness one" />
+          </div>}
+
+        <div className="set-group" style={{marginTop:18}}>{gym ? "At " + gym.name : "This gym's equipment"}</div>
+        {!lines.length &&
+          <p className="hint" style={{marginTop:0}}>No equipment list for this gym yet - scan the room from its
+            gym page, or read the machine from a photo above.</p>}
+        {lines.length > 0 && !shown.length &&
+          <p className="hint" style={{marginTop:0}}>Nothing on this gym's list looks like a fit.</p>}
+        <div className="list">
+          {shown.map((x, i) => (
+            <button key={i} className="item" style={{padding:"10px 12px"}} onClick={()=>onChoose(x.m.label)}>
+              <div className="item-body">
+                <div className="item-title" style={{fontSize:14.5}}>{x.m.label}</div>
+                {x.m.detail && <div className="hint" style={{margin:"2px 0 0"}}>{x.m.detail}</div>}
+              </div>
+            </button>
+          ))}
+        </div>
+        {!showAll && rest.length > 0 &&
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:8}} onClick={()=>setShowAll(true)}>
+            Show all {lines.length} items
+          </button>}
+
+        <div className="set-group" style={{marginTop:18}}>Or type it</div>
+        <div className="row" style={{gap:8}}>
+          <ClearInput value={typed} onChange={e=>setTyped(e.target.value)} style={{flex:1}} maxLength={60}
+            placeholder="e.g. Life Fitness cable crossover"
+            onKeyDown={e=>{ if(e.key === "Enter" && typed.trim()) onChoose(typed.trim()); }} />
+          <button className="btn btn-ghost" style={{flex:"0 0 auto"}} disabled={!typed.trim()}
+            onClick={()=>onChoose(typed.trim())}>Save</button>
+        </div>
+
+        {current &&
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:14}} onClick={()=>onChoose("")}>
+            Clear the machine
+          </button>}
+        {asking && !current &&
+          <button className="btn btn-ghost btn-sm btn-block" style={{marginTop:14}} onClick={onSkip}>
+            Skip - don't ask for this one here
+          </button>}
+      </div>
+    </div>
+  );
+}
+
+function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo, restSecs, onHelp, onUpdate, onRemove, onSetLogged, onMoveUp, onMoveDown, onUndoable, onSwap, machineLabel, onMachineLabel, onPickMachine, machineNoun, machinePhoto, onAddToToday, exStep }){
   /* Naming the machine from HERE, because here is where you are standing in
      front of it. It lived only in the exercise sheet, which meant leaving the
      workout to record something you are looking at.
@@ -7023,13 +7273,13 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
                 ? <button className="entry-last" style={{color:"var(--ink-2)",textAlign:"left",
                     textDecorationLine: onMachineLabel ? "underline" : "none",
                     textDecorationColor:"var(--line-2)",textUnderlineOffset:3}}
-                    onClick={()=>{ if(onMachineLabel) setNamingMachine(true); }}>
+                    onClick={()=>{ if(onPickMachine) onPickMachine(); else if(onMachineLabel) setNamingMachine(true); }}>
                     on the {machineLabel}
                   </button>
                 : onMachineLabel && active
                   ? <button className="entry-last" style={{color:"var(--ink-3)",textAlign:"left"}}
-                      onClick={()=>setNamingMachine(true)}>
-                      + name this {machineNoun || "machine"}
+                      onClick={()=>{ if(onPickMachine) onPickMachine(); else setNamingMachine(true); }}>
+                      + which {machineNoun || "machine"}?
                     </button>
                   : null}
             {/* Mobility carries targets too, so this can't be gated on strength.
@@ -7909,6 +8159,8 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
   // The exercise you last OPENED in a live workout; every other card shuts.
   // See EntryCard's collapse rule for why.
   const [focusId, setFocusId] = useState(null);
+  // The "Which machine?" sheet: { entryId, asking } - see chooseMachine.
+  const [machineFor, setMachineFor] = useState(null);
   const [, setTick] = useState(0);
   useEffect(()=>{ const iv=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(iv); },[]);
   if(!workout) return null;
@@ -7921,7 +8173,47 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     store.saveCollection("workouts",
       (store.data.workouts||[]).map(w => w.id===workout.id ? { ...w, ...p, updatedAt: nowISO() } : w));
   };
-  const updateEntry = (id, fn) => patch({ entries: (workout.entries||[]).map(e => e.id===id ? fn(e) : e) });
+  /* Every logged exercise remembers the machine it was done on (see
+     sameMachine), stamped here the moment it has a set in it - so a later
+     change to this gym's machine for the exercise cannot rewrite where past
+     sets were lifted. */
+  const stampMachine = (e) => {
+    if(!e || e.machine || !(e.sets||[]).length || !workout.gymId) return e;
+    const ex = (store.data.exercises||[]).find(x => x.id === e.exerciseId);
+    const m = machineAt(ex, workout.gymId);
+    return m ? { ...e, machine: m } : e;
+  };
+  const updateEntry = (id, fn) => patch({ entries: (workout.entries||[]).map(e => e.id===id ? stampMachine(fn(e)) : e) });
+
+  /* Choosing (or clearing) the machine for one exercise in this workout.
+     Saves it as this gym's machine for the exercise, marks THIS entry, and -
+     if nothing is logged yet - re-plans the entry from the same machine's
+     last session, because the plan it arrived with was chosen before anyone
+     said which machine it is on. Clearing from the add-time question records
+     that it was asked, so it is not asked again at this gym. */
+  const chooseMachine =(entryId, label, skipped) => {
+    const entry = (workout.entries||[]).find(e => e.id === entryId);
+    const ex = entry && (store.data.exercises||[]).find(x => x.id === entry.exerciseId);
+    setMachineFor(null);
+    if(!entry || !ex || !workout.gymId) return;
+    const gid = workout.gymId;
+    const exNext = { ...ex,
+      machines: { ...(ex.machines||{}), [gid]: label || undefined },
+      machineAsked: skipped ? { ...(ex.machineAsked||{}), [gid]: true } : ex.machineAsked,
+      updatedAt: nowISO() };
+    store.saveCollection("exercises", (store.data.exercises||[]).map(x => x.id === ex.id ? exNext : x));
+    let next = { ...entry, machine: label || undefined };
+    if(!(entry.sets||[]).length && label){
+      const found = latestFor(store.data.workouts, ex.id, gid, exNext);
+      if(found.entry && found.machine){
+        const fresh = copyEntryForToday(found.entry);
+        next = { ...next, plan: fresh.plan, targetSets: fresh.targetSets, targetReps: fresh.targetReps,
+                 planFrom: undefined, planGym: found.gym || undefined };
+      }
+    }
+    patch({ entries: (workout.entries||[]).map(e => e.id === entryId ? next : e) });
+    log("MACHINE", (label ? "set '" + label + "'" : skipped ? "skipped" : "cleared") + " for " + ex.name);
+  };
   /* An exercise added mid-workout lands at the bottom, which is rarely where
      you want to do it. Chris: "I want to add an exercise and then rearrange
      that it's happening second in line, not last just because it was added."
@@ -7998,6 +8290,14 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
     }
     patch({ entries: [...(workout.entries||[]), item] });
     setPicker(false);
+    /* ASKED AT ADD TIME, once. Chris wanted to pick the machine "when I add
+       an exercise". Only for machine-loaded work at a known gym with no
+       machine on file yet, and never again for this exercise here once
+       answered or skipped - a question that comes back every session is one
+       you learn to dismiss without reading. */
+    if(workout.gymId && isMachineWork(x) && canName(x) && !machineAt(x, workout.gymId) &&
+       !((x.machineAsked||{})[workout.gymId]))
+      setMachineFor({ entryId: item.id, asking: true });
   };
   const createAndAdd = (name) => {
     const x = { id: uid(), name, type:"strength", muscleGroup:"Full body", equipment:"none",
@@ -8027,19 +8327,24 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       .sort((a,b)=>String(b.startedAt||"").localeCompare(String(a.startedAt||"")));
     const ex = (store.data.exercises||[]).find(x => x.id === exerciseId);
     const machine = !!workout.gymId && isMachineWork(ex);
-    const pick = (sameGymOnly) => {
+    // Same order as latestFor: this machine anywhere, then this gym, then any.
+    const todayMachine = machine ? machineAt(ex, workout.gymId) : null;
+    const pick = (sameGymOnly, sameMach) => {
       for(const w of ws){
         if(w.id===workout.id) continue;
         if(sameGymOnly && w.gymId !== workout.gymId) continue;
         const e = (w.entries||[]).find(x=>x.exerciseId===exerciseId && (x.sets||[]).length);
+        if(e && sameMach && !sameMachine(machineOfEntry(e, w, ex), sameMach)) continue;
         if(e) return { sets: e.sets, best: topSet(e.sets), settings: e.settings || "",
-                       otherGym: machine && w.gymId && w.gymId !== workout.gymId ? (w.gymName || "another gym") : null,
+                       otherGym: !sameMach && machine && w.gymId && w.gymId !== workout.gymId ? (w.gymName || "another gym") : null,
                        // Where that last session was - the card's gym label
                        // falls back to this when the entry carries no planGym.
                        gym: w.gymName || null };
       }
       return null;
     };
+    const onMachine = todayMachine ? pick(false, todayMachine) : null;
+    if(onMachine) return onMachine;
     const here = machine ? pick(true) : null;
     if(here) return here;
     const any = pick(false);
@@ -8201,6 +8506,11 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
                       [workout.gymId]: label || undefined }, updatedAt: nowISO() }
                   : y));
             })()}
+            onPickMachine={(() => {
+              const x = (store.data.exercises||[]).find(y=>y.id===e.exerciseId);
+              if(!x || !workout.gymId || !canName(x) || !canEdit) return null;
+              return () => setMachineFor({ entryId: e.id, asking: false });
+            })()}
             machineNoun={(() => {
               const x = (store.data.exercises||[]).find(y=>y.id===e.exerciseId);
               return apparatusNoun(x);
@@ -8285,6 +8595,16 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       {help &&
         <ExerciseHelp store={store} name={help.name} exerciseId={help.exerciseId} gym={gym}
           undoable={undoable} onClose={()=>setHelp(null)} />}
+      {machineFor && (() => {
+        const en = (workout.entries||[]).find(e => e.id === machineFor.entryId);
+        const ex = en && (store.data.exercises||[]).find(x => x.id === en.exerciseId);
+        if(!en || !ex) return null;
+        return <MachinePicker exercise={ex} gym={gym} current={machineAt(ex, workout.gymId)}
+          asking={machineFor.asking}
+          onChoose={(label)=>chooseMachine(en.id, label, false)}
+          onSkip={()=>chooseMachine(en.id, "", true)}
+          onClose={()=>{ if(machineFor.asking) chooseMachine(en.id, "", true); else setMachineFor(null); }} />;
+      })()}
     </div>
   );
 }
