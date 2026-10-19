@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-19.** App `v0.155.0`, backend `v0.33.0`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-10-19.** App `v0.155.1`, backend `v0.33.0`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,28 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**Old machine numbers adjusted for your progress since (2026-10-19, v0.155.1).** Chris: "if I
+get stronger and don't use a machine for a while, those may not be indicative of what resistance
+weight I need." He chose "Adjust for progress" over "only trust recent" and over "show both, I
+decide".
+
+*How it works (`progressSince`, called from `latestFor`'s same-machine branch):* when the
+same-machine session is 21+ days old and newer sessions of the exercise exist, its weights are
+scaled.
+- **then** = the other-machine session nearest the old one, within 21 days of it.
+- **now** = the newest session on that same other machine, else the newest anywhere.
+- **ratio** = e1RM(now) / e1RM(then), where e1RM is the Epley estimate of the top set.
+- The ratio is clamped to 0.8 to 1.25, and a change under 3% is ignored.
+- Weights, including `next` targets, round to the exercise's step (its weightStep, else the
+  inferred step, else 5).
+- `item.planAdjust` puts a note on the Plan line, e.g. "+15% for your progress since Aug 20".
+- If no comparison is possible, nothing changes: it never guesses.
+
+*Tested in the harness (`?machines&stale`):*
+- A 60-day-old Technogym session at 10x150, with Life Fitness at 10x100 then and 10x115 now,
+  planned 10x175 (+15%).
+- A recent Technogym session stayed at 10x150 with no note.
 
 **"Which machine?" - and numbers follow the machine (2026-10-19, app v0.155.0, backend
 v0.33.0).** Chris sent a photo of a hotel's Technogym Dual Adjustable Pulley: "the one I do at

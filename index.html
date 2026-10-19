@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.155.0";
+const APP_VERSION = "0.155.1";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-19.1";
+const BUILD = "2026-10-19.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -933,8 +933,12 @@ function latestFor(workouts, exerciseId, gymId, exercise){
   if(today){
     for(const w of ws){
       const e = hit(w);
-      if(e && sameMachine(machineOfEntry(e, w, exercise), today))
-        return { entry: e, otherGym: null, gym: w.gymName || null, machine: today };
+      if(e && sameMachine(machineOfEntry(e, w, exercise), today)){
+        const adj = progressSince(ws, w, e, exerciseId, exercise);
+        return adj
+          ? { entry: adj.entry, otherGym: null, gym: w.gymName || null, machine: today, adjust: adj.note }
+          : { entry: e, otherGym: null, gym: w.gymName || null, machine: today };
+      }
     }
   }
   if(gymId && isMachineWork(exercise)){
@@ -949,6 +953,66 @@ function latestFor(workouts, exerciseId, gymId, exercise){
   }
   return { entry: null, otherGym: null, gym: null };
 }
+/* OLD MACHINE NUMBERS, BROUGHT UP TO DATE (2026-10-19). Chris, on numbers
+   following the machine: "if I get stronger and don't use a machine for a
+   while, those may not be indicative of what resistance weight I need."
+
+   The old session on the same machine still knows the MACHINE (how its
+   stack feels against your usual one); your recent sessions know YOU. So
+   when the same-machine session is stale, its weights are scaled by how far
+   you have come on this exercise since, measured like for like:
+     then = your session on some OTHER machine closest in time to the old one
+     now  = your latest session on that same other machine (else your latest)
+     ratio = strength(now) / strength(then)
+   Strength is the estimated one-rep max of the top set (Epley:
+   weight x (1 + reps/30)), so 10 x 100 and 8 x 105 compare fairly.
+
+   Only when the session is 3+ weeks old and something newer exists; no
+   comparison possible means no adjustment, never a guess. The ratio is held
+   to -20%..+25% (a layoff or a mis-logged set should not double a plan), a
+   change under 3% is ignored, and weights round to the exercise's step. The
+   note says what was done so the plan never moves silently.
+   Road not taken: distrusting old same-machine numbers altogether (Chris was
+   offered it) - it throws away the one thing the old session knows. */
+const STALE_MACHINE_DAYS = 21;
+const PROGRESS_CLAMP = [0.8, 1.25];
+function e1rm(sets){
+  const t = topSet((sets||[]).filter(s => (Number(s.reps)||0) > 0 && (Number(s.weight)||0) > 0));
+  return t ? (Number(t.weight)||0) * (1 + (Number(t.reps)||0) / 30) : 0;
+}
+function progressSince(ws, wOld, eOld, exerciseId, exercise){
+  const tOld = new Date(wOld.startedAt).getTime();
+  if(!(Date.now() - tOld > STALE_MACHINE_DAYS * 864e5)) return null;
+  const mOld = machineOfEntry(eOld, wOld, exercise);
+  const rows = [];
+  for(const w of ws){
+    const e = (w.entries||[]).find(x => x.exerciseId === exerciseId && e1rm(x.sets) > 0);
+    if(e) rows.push({ w, e, t: new Date(w.startedAt).getTime(), m: machineOfEntry(e, w, exercise) });
+  }
+  const others = rows.filter(r => !sameMachine(r.m, mOld));
+  const newer = others.filter(r => r.t > tOld);
+  if(!newer.length) return null;
+  // "then": the other-machine session nearest the old one, within three weeks of it.
+  const near = others.filter(r => Math.abs(r.t - tOld) <= STALE_MACHINE_DAYS * 864e5)
+    .sort((a,b) => Math.abs(a.t - tOld) - Math.abs(b.t - tOld))[0];
+  if(!near) return null;
+  // "now": newest on the SAME machine as "then", so the ratio is one machine against itself.
+  const now = newer.filter(r => near.m ? sameMachine(r.m, near.m) : !r.m).sort((a,b) => b.t - a.t)[0]
+           || newer.sort((a,b) => b.t - a.t)[0];
+  if(!now || now === near) return null;
+  let ratio = e1rm(now.e.sets) / e1rm(near.e.sets);
+  if(!isFinite(ratio) || ratio <= 0) return null;
+  ratio = Math.min(PROGRESS_CLAMP[1], Math.max(PROGRESS_CLAMP[0], ratio));
+  if(Math.abs(ratio - 1) < 0.03) return null;
+  const step = Number(exercise && exercise.weightStep) || inferWeightStep(ws, exerciseId, eOld) || 5;
+  const scale = (wt) => { const v = Number(wt)||0; return v > 0 ? Math.max(step, Math.round(v * ratio / step) * step) : v; };
+  const sets = (eOld.sets||[]).map(s => ({ ...s, weight: scale(s.weight),
+    next: s.next ? { ...s.next, weight: scale(s.next.weight) } : s.next }));
+  const pct = Math.round((ratio - 1) * 100);
+  return { entry: { ...eOld, sets },
+           note: (pct > 0 ? "+" : "") + pct + "% for your progress since " + fmtDate(wOld.date || wOld.startedAt) };
+}
+
 function latestEntryFor(workouts, exerciseId, gymId, exercise){
   return latestFor(workouts, exerciseId, gymId, exercise).entry;
 }
@@ -5449,6 +5513,7 @@ function SessionBuilderLayer({ store, onClose, onStart, liveWorkout, initialAsk,
         item.name = hit.name;
         if(found.otherGym) item.planFrom = found.otherGym;
         if(found.gym) item.planGym = found.gym;
+        if(found.adjust) item.planAdjust = found.adjust;
         const setup = latestSetupFor(store.data.workouts, hit.id, planGym ? planGym.id : null);
         if(setup) item.settings = setup; else delete item.settings;
         if(note) item.note = note;
@@ -7164,7 +7229,7 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
                 </div>
               : plan
                 ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
+                    Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}{entry.planAdjust ? " (" + entry.planAdjust + ")" : ""}
                   </div>
                 : entry.targetSets>0
                   ? <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -7301,10 +7366,10 @@ function EntryCard({ entry, prev, units, active, live, focusId, onFocus, hasDemo
                         textUnderlineOffset:3}}
                       onClick={()=>{ if(confirm("Drop the plan for "+entry.name+"? Logged sets stay."))
                         onUpdate(e => ({ ...e, plan: undefined })); }}>
-                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ", a different machine - check the weight)" : ""} - drop it
+                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ", a different machine - check the weight)" : ""}{entry.planAdjust ? " (" + entry.planAdjust + ")" : ""} - drop it
                     </button>
                   : <div className="entry-last" style={{color:"var(--amber-2)"}}>
-                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}
+                      Plan: {planLine(plan, units)}{entry.planFrom ? " (from " + entry.planFrom + ")" : ""}{entry.planAdjust ? " (" + entry.planAdjust + ")" : ""}
                     </div>)
               : entry.targetSets>0 &&
                 <div className="entry-last" style={{color:"var(--amber-2)"}}>
@@ -8208,7 +8273,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       if(found.entry && found.machine){
         const fresh = copyEntryForToday(found.entry);
         next = { ...next, plan: fresh.plan, targetSets: fresh.targetSets, targetReps: fresh.targetReps,
-                 planFrom: undefined, planGym: found.gym || undefined };
+                 planFrom: undefined, planGym: found.gym || undefined, planAdjust: found.adjust || undefined };
       }
     }
     patch({ entries: (workout.entries||[]).map(e => e.id === entryId ? next : e) });
@@ -8283,6 +8348,7 @@ function WorkoutEditor({ store, workoutId, onClose, onFinish, onDelete, onSaveAs
       item.name = x.name;
       if(found.otherGym) item.planFrom = found.otherGym;
       if(found.gym) item.planGym = found.gym;
+      if(found.adjust) item.planAdjust = found.adjust;
       const setup = latestSetupFor(store.data.workouts, x.id, workout.gymId || null);
       if(setup) item.settings = setup; else delete item.settings;
     }else{
@@ -12128,6 +12194,7 @@ function App(){
     const item = copyEntryForToday(found.entry || entry);
     if(found.entry && found.otherGym) item.planFrom = found.otherGym;
     if(found.entry && found.gym) item.planGym = found.gym;
+    if(found.entry && found.adjust) item.planAdjust = found.adjust;
     /* THE SETUP IS SEARCHED FOR SEPARATELY. Chris, choosing: "most recent with
        a setup." A seat-and-pin note gets written once, when you work it out,
        and rarely again - so the latest session usually has none, and taking
