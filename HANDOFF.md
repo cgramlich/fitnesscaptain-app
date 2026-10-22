@@ -678,6 +678,15 @@ without logging anything, so the count never moves; `planned` belongs in the dep
     $3.99/month `price_1UMt0vBFKx2qM61m8U4Va9iD` and $29.99/year
     `price_1UMt0wBFKx2qM61mTTlrfTsc`. Claude created them with live Write granted briefly
     for this; live goes back to Read afterwards.
+  - DONE 2026-10-21 by Chris: live webhook `we_1USytMBFKx2qM61m2C7BdYAR`
+    ("fitnesscaptain-backend-live", Snapshot, 2026-05-27.dahlia, the three events). Its signing
+    secret has not been read by any Claude session.
+  - ON HOLD 2026-10-21 (portfolio overview session): Railway emailed Chris about a security
+    incident in which customer environment variables may have been accessed. No new secret goes
+    into Railway until the scope and Railway's guidance are known. Nothing was staged or
+    deployed. Planned key choice when it resumes: FitnessCaptain gets its OWN restricted live key
+    (Customers write, Checkout Sessions write, Subscriptions write, Prices read, Customer portal
+    write), not the account's standard key, which MenuCaptain uses.
   - Remaining, in order:
     1. Chris creates the live webhook in the dashboard, same three events, Snapshot.
     2. In Railway, ONE deploy swaps the key (live), webhook secret (live) and both price IDs
