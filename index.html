@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.155.1";
+const APP_VERSION = "0.155.2";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-10-19.2";
+const BUILD = "2026-11-02.1";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -1150,9 +1150,12 @@ const FILES = ["exercises","workouts","routines"];
    key, Anthropic key) live ONLY on the Railway backend, never here.
    ============================================================ */
 const SUPABASE_URL = "https://aqrxrcdafjjswclcoytf.supabase.co";
-// Supabase anon / publishable key (Settings > API Keys > anon public). This is
+// Supabase PUBLISHABLE key, named "default" (Settings > API Keys > Publishable).
 // PUBLIC-SAFE by design - it only permits auth, never data access.
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFxcnhyY2RhZmpqc3djbGNveXRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ0ODU5MDQsImV4cCI6MjEwMDA2MTkwNH0.m9D0dGj_EW00GWMNDMnuxZZBbJzuGovEHSGfied4lYQ";
+// Switched from the legacy anon JWT on 2026-11-02 (v0.155.2): legacy keys can
+// be switched off project-wide in one toggle, and that would lock everyone
+// out of sign-in. The publishable key rotates on its own, without that risk.
+const SUPABASE_ANON_KEY = "sb_publishable_EQWTtbBb3kTV-kguUK4aHg_x0cYSYr5";
 const API_BASE = "https://fitnesscaptain-backend-production.up.railway.app";
 
 const CONFIGURED =

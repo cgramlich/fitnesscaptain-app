@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-10-19.** App `v0.155.1`, backend `v0.33.0`, both live. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-11-02.** App `v0.155.2`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,24 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**Frontend signs in with the Supabase PUBLISHABLE key, not the legacy anon JWT (2026-11-02,
+v0.155.2).** Chris got a report that sign-in failed with "API key disabled" and asked for the
+frontend key to be replaced. On checking, the shipped legacy anon key was still enabled and
+sign-in worked (a made-up account got "invalid credentials", the normal answer). He chose to swap
+anyway: legacy keys can be switched off project-wide in one toggle, and that would lock every
+user out. Now `SUPABASE_ANON_KEY` holds the "default" publishable key (`sb_publishable_…`), which
+supabase-js 2.111.0 accepts; tested in a browser against the real project. The key only does
+auth, because data goes through the backend with the user's token. Road not taken: leaving the
+legacy key in place. Once this version is live everywhere, the legacy toggle can be turned off
+without breaking FitnessCaptain sign-in, but that toggle is Chris's call and it covers the whole
+project.
+
+**Railway breach: Places and YouTube rotated (2026-11-02).** Chris put the new keys
+`FitnessCaptain-Places-2026-11` and `FitnessCaptain-YouTube-2026-11` in Railway, deployed them
+(deployment f743209d, 04:10 UTC) and disabled the old ones. On Anthropic, only two unused keys
+were disabled. Supabase and Stripe were not touched. Both new keys load (`[CONFIG] ... set:
+True`); the first real demo video and gym search after the deploy prove they work.
 
 **Old machine numbers adjusted for your progress since (2026-10-19, v0.155.1).** Chris: "if I
 get stronger and don't use a machine for a while, those may not be indicative of what resistance
