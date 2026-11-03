@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-11-03.** App `v0.156.0`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-11-03.** App `v0.157.0`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,18 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**Add exercise picks from what you have done, by gym (2026-11-03, v0.157.0).** Chris: "I'm
+having trouble adding exercises without going through the entire library ... It could be the
+entire library, or I should be able to choose ones that I've done by gym as well". The picker now
+has a row of choices above the search box: Done at <this gym>, Done at <each other gym with
+history>, Anything I've done, Whole library. Search and the muscle pills work inside the choice.
+It uses ALL history, not the 90-day window of Your usual. The choice is remembered per device as
+a kind (this gym / anything done / whole library), never as a specific gym, so a pick made at
+Dallas does not follow him to River Crossing. Reference-database matches and "Create ... myself"
+appear only under Whole library; a filtered search that finds nothing offers "Search the whole
+library". Tested in the harness (two gyms, three sessions). Road not taken: a separate "My
+exercises" screen; filtering in place keeps one picker everywhere it opens.
 
 **The workout timer is opt-in (2026-11-03, v0.156.0).** Chris: "the number of minutes is just not
 even close because I never set a timer and it just starts the minute I set it up". A workout used

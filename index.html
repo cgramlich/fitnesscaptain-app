@@ -414,10 +414,10 @@ const LOG_CAP = 600;
 const LOG = [];
 // User-facing semantic version (MAJOR.MINOR.PATCH). Shown in Settings + update
 // prompts. Bump on every deploy: PATCH for a fix, MINOR for a feature.
-const APP_VERSION = "0.156.0";
+const APP_VERSION = "0.157.0";
 // Internal build stamp - what the updater COMPARES (monotonic) + cache-busts.
 // Keep sw.js VERSION in lockstep with APP_VERSION on every deploy.
-const BUILD = "2026-11-03.1";
+const BUILD = "2026-11-03.2";
 // True iff build stamp `a` (YYYY-MM-DD.N) is strictly newer than `b`.
 function buildIsNewer(a, b){
   const parse = s => String(s||"").split(/[-.]/).map(n=>parseInt(n,10)||0);
@@ -8073,6 +8073,53 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
       });
     });
   })();
+  /* PICK FROM WHAT YOU HAVE DONE, BY GYM (2026-11-03). Chris: "I'm having
+     trouble adding exercises without going through the entire library, so I
+     really need to be able to choose when I want to add an exercise. It could
+     be the entire library, or I should be able to choose ones that I've done
+     by gym as well".
+
+     Sources: this gym, any other gym you have trained at, anything you have
+     ever done, or the whole library. All history counts here, not the 90-day
+     window "Your usual" uses: this answers "what have I done at Dallas",
+     and a lift from last spring is still one. Only gyms with history get a
+     pill. The choice is remembered as a KIND ("here", "done", "all"), not a
+     gym, so a pick made at Dallas does not follow you to River Crossing;
+     choosing another gym's pill lasts until the picker closes. */
+  const doneAt = {};     // gymId -> { exerciseId: 1 }
+  const doneAny = {};
+  (store.data.workouts||[]).forEach(w => {
+    if(!w.endedAt) return;
+    (w.entries||[]).forEach(e => {
+      const logged = (e.sets||[]).some(x => (Number(x.reps)||0) > 0) || !!e.cardio;
+      if(!e.exerciseId || !logged) return;
+      doneAny[e.exerciseId] = 1;
+      if(w.gymId) (doneAt[w.gymId] || (doneAt[w.gymId] = {}))[e.exerciseId] = 1;
+    });
+  });
+  const hasHere = !!(gym && doneAt[gym.id]);
+  const hasAny = Object.keys(doneAny).length > 0;
+  const otherGyms = (store.gyms||[]).filter(g => doneAt[g.id] && (!gym || g.id !== gym.id));
+  const [source, setSourceRaw] = useState(() => {
+    const saved = lsGet("pickerSource", "here");
+    if(saved === "here" && hasHere) return "here";
+    if(saved === "all") return "all";
+    return hasAny ? (hasHere && saved !== "done" ? "here" : "done") : "all";
+  });
+  const setSource = (v) => {
+    setSourceRaw(v);
+    if(v === "here" || v === "done" || v === "all") lsSet("pickerSource", v);
+  };
+  const inSource = (x) =>
+    source === "all" ? true :
+    source === "done" ? !!doneAny[x.id] :
+    source === "here" ? !!(gym && doneAt[gym.id] && doneAt[gym.id][x.id]) :
+    !!(doneAt[source.slice(4)] && doneAt[source.slice(4)][x.id]);   // "gym:<id>"
+  // " at Dallas", or "" for anything done anywhere. Reads after "you have done".
+  const doneWhere = source === "here" ? " at " + (gym ? gym.name : "this gym")
+    : source.indexOf("gym:") === 0 ? " at " + ((((store.gyms||[]).find(g => "gym:"+g.id === source)) || {}).name || "that gym")
+    : "";
+
   const usualRank = (a,b) =>
     (notHere(a)?1:0) - (notHere(b)?1:0) ||
     (usage[b.id].n - usage[a.id].n) ||
@@ -8105,6 +8152,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
     String((usage[b.id]||{}).last||"").localeCompare(String((usage[a.id]||{}).last||"")) ||
     (a.name||"").localeCompare(b.name||"");
   const list = (store.data.exercises||[])
+    .filter(inSource)
     .filter(x => groupF==="all" || x.muscleGroup===groupF)
     .filter(x => !needle || (x.name||"").toLowerCase().indexOf(needle)!==-1)
     .slice().sort(needle
@@ -8126,7 +8174,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
      already in the library is filtered out so the list never offers a
      duplicate. */
   const mine = new Set((store.data.exercises||[]).map(x => normName(x.name)));
-  const refHits = searchReference(refIdx, mine, q, 8);
+  const refHits = source === "all" ? searchReference(refIdx, mine, q, 8) : [];
 
   const addFromRef = async (item) => {
     setAdding(item.f);
@@ -8173,6 +8221,23 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
         </div>
         {gym && Array.isArray(gym.equipment) && gym.equipment.length>0 &&
           <div className="hint" style={{marginTop:2}}>Showing availability at {gym.name}.</div>}
+        {hasAny &&
+          <div className="pills-row">
+            {hasHere &&
+              <button className={"pill "+(source==="here"?"on":"")} onClick={()=>setSource("here")}>
+                Done at {gym.name}
+              </button>}
+            {otherGyms.map(g =>
+              <button key={g.id} className={"pill "+(source==="gym:"+g.id?"on":"")} onClick={()=>setSource("gym:"+g.id)}>
+                Done at {g.name}
+              </button>)}
+            <button className={"pill "+(source==="done"?"on":"")} onClick={()=>setSource("done")}>
+              Anything I've done
+            </button>
+            <button className={"pill "+(source==="all"?"on":"")} onClick={()=>setSource("all")}>
+              Whole library
+            </button>
+          </div>}
         <div className="search-wrap" style={{marginTop:4}}>
           {/* NO autoFocus. It opened the keyboard on arrival, which covered
               the two-thirds of the screen holding the exercises you were most
@@ -8180,7 +8245,8 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
               wrong now that the list leads with what you train. Tap the box
               and the keyboard is still one tap away. */}
           <input className="input" value={q} onChange={e=>setQ(e.target.value)}
-            placeholder="Search the library" autoCapitalize="off" autoCorrect="off" />
+            placeholder={source==="all" ? "Search the library" : "Search what you have done" + doneWhere}
+            autoCapitalize="off" autoCorrect="off" />
           {q &&
             <button className="search-x" onClick={()=>setQ("")} aria-label="Clear search">
               <Icon d={ICONS.x} size={16}/>
@@ -8221,7 +8287,7 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
             </button>
           ))}
         </>}
-        {q.trim().length>1 && !list.some(x=>(x.name||"").toLowerCase()===needle) &&
+        {source==="all" && q.trim().length>1 && !list.some(x=>(x.name||"").toLowerCase()===needle) &&
           <button className="btn btn-ghost btn-block" style={{marginTop:12}} onClick={()=>onCreate(q.trim())}>
             <Icon d={ICONS.plus} size={15}/> Create "{q.trim()}" myself
           </button>}
@@ -8236,9 +8302,16 @@ function ExercisePicker({ store, gym, onPick, onCreate, onHelp, onIdeas, onClose
         </>}
         {!list.length &&
           <div className="empty" style={{padding:"32px 20px"}}>
-            <p>{needle
+            <p>{source !== "all"
+              ? (needle ? "Nothing you have done" + doneWhere + " matches that."
+                       : "Nothing you have done" + doneWhere + (groupF==="all" ? "" : " for " + groupF) + " yet.")
+              : needle
               ? "Nothing in your library matches that."
               : "No exercises here yet."}</p>
+            {source !== "all" &&
+              <button className="btn btn-ghost btn-sm" style={{marginTop:8}} onClick={()=>setSource("all")}>
+                Search the whole library
+              </button>}
           </div>}
       </div>
     </div>
