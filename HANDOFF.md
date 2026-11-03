@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-11-02.** App `v0.155.2`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-11-03.** App `v0.156.0`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -111,6 +111,22 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**The workout timer is opt-in (2026-11-03, v0.156.0).** Chris: "the number of minutes is just not
+even close because I never set a timer and it just starts the minute I set it up". A workout used
+to time itself from creation. Now nothing is timed until he taps "No timer - tap to start timer"
+in the workout header; that moment is saved as `clockAt`, separate from `startedAt` (still the
+history sort key). Finishing without the timer saves 0 minutes, which every screen already shows
+as no duration. Road not taken: a settings switch for "always time workouts"; one tap per workout
+was the smaller change.
+
+**Coach plans ignore thin history (2026-11-03, v0.156.0).** Chris saw a squat plan of 25 x 45
+(his only squat log, 19 May, an imported-looking noon entry) and one-set exercises (his only DB
+Chest Press log had one set). startPlan now uses the coach's sets and reps when the last session
+is over 90 days old, or logged a single set where the coach wants two or more. Machine numbers
+already adjusted by progressSince are kept. The card's Last time line still shows the old numbers.
+Road not taken: editing his 19 May record (needs his yes on the right reps) and changing
+copyEntryForToday everywhere (Add to today has no coach numbers to fall back on).
 
 **Frontend signs in with the Supabase PUBLISHABLE key, not the legacy anon JWT (2026-11-02,
 v0.155.2).** Chris got a report that sign-in failed with "API key disabled" and asked for the
