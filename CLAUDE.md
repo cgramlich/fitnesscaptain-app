@@ -106,7 +106,7 @@ EVERY password field uses the shared `PwInput` reveal-eyeball component
 
 ## Config placeholders
 
-`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `API_BASE` at the top of the script
+`SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` / `API_BASE` at the top of the script
 block. All public-safe. `CONFIGURED` gates the sign-in button until set.
 
 ## Build order (from the kickoff doc)

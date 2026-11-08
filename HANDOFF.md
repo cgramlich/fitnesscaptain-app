@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-11-08.** App `v0.157.0`, backend `v0.33.0`, both live (checked 2026-11-08: `/health` ok, db connected, `ai_last_call` 200). Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet, held for Chris. Railway deploys work again (verified 2026-11-07), so a rotation can now take effect. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; the live switch-over is ON HOLD for the breach. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. **Next session: read "Start here" below, then What is open.**
+**State as of 2026-11-08.** App `v0.157.1`, backend `v0.33.0`, both live (checked 2026-11-08: `/health` ok, db connected, `ai_last_call` 200). Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet, held for Chris. Railway deploys work again (verified 2026-11-07), so a rotation can now take effect. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; the live switch-over is ON HOLD for the breach. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. **Next session: read "Start here" below, then What is open.**
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,7 +22,7 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.157.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| App | `v0.157.1` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
 | Backend | `v0.33.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
@@ -41,9 +41,11 @@ That also reports `ai_last_call` — see Traps.
 
 ## Start here (next session, written 2026-11-08)
 
-The last session (2026-10-19 to 2026-11-08) shipped v0.155.2 to v0.157.0 and left both repos
-committed, pushed and clean. Nothing is half-done. Its decisions are logged below under
-Decisions (the 2026-11-02 and 2026-11-03 entries).
+The 2026-11-08 session, the first on Chris's Mac, set the Mac up and shipped v0.157.1, which
+cleared the small list below. Both repos are committed, pushed and clean, and nothing is
+half-done. Its decision is the 2026-11-08 entry under Decisions. The session before it
+(2026-10-19 to 2026-11-08) shipped v0.155.2 to v0.157.0 (the 2026-11-02 and 2026-11-03
+entries).
 
 **Rules that still bind, from Chris:**
 - No new secret goes into Railway until he approves it. He types every new secret himself; no
@@ -55,18 +57,22 @@ Decisions (the 2026-11-02 and 2026-11-03 entries).
   project's legacy-key toggle without a card and his yes for that one action.
 - Any write to his workout data in Supabase needs his explicit yes.
 - Never `--no-verify` past the portfolio audit gate.
+- On the Mac there is no audit gate at all: the checker lives only on the PC. Don't push the
+  backend from the Mac. An app push skips only the advisory checks, so say so before pushing.
 
-**Small, ready when Chris says yes (none started):**
-1. Fix his 19 May squat record (the 25 x 45 that fed a bad coach plan). Needs his yes and the
-   right reps from him; see the v0.156.0 decision.
-2. Reword the "- drop it" link at the end of an exercise's Plan line (he asked what it meant).
-   Tapping it discards the plan for that exercise; logged sets stay (`index.html`, the
-   `entry-last` Plan button). Copy only.
-3. Rename the frontend constant `SUPABASE_ANON_KEY` to `SUPABASE_PUBLISHABLE_KEY`, to match
-   HomeCaptain, Crossmate and Whereabouts. The value is already the publishable key. Ride the
-   next release; not worth one on its own.
-4. Railway logs, read only: look for `[VIDEO]` and Places errors since the 2026-11-02 key swap.
-   `/health` shows both configured, but only a real call proves the new keys.
+**The old small list, closed 2026-11-08:**
+1. 19 May squat record: **left as is, Chris's choice.** It already reads 20 x 45, 16 x 55,
+   12 x 65, 8 x 75, the same as his 2 Nov squats, and the 2 Nov session now feeds the plan. The
+   "25 x 45" isn't in it.
+2. "- drop it" is now "- clear plan" (v0.157.1).
+3. `SUPABASE_ANON_KEY` is now `SUPABASE_PUBLISHABLE_KEY` (v0.157.1).
+4. Railway logs from 2026-11-02 to 2026-11-08 have no `[VIDEO]` or `[PLACES]` lines at all,
+   and no errors or warnings. Nobody has used either feature since the swap, so **the new keys
+   are still unproven.**
+
+**Ready when Chris says yes:** prove the new Places and YouTube keys. He does one gym search
+(Gyms, "near me") and opens one exercise video in the app, then a session reads the Railway logs
+for `[PLACES] search ok` and `[VIDEO] user=`.
 
 **Held for Chris (bigger, each its own card):** rotate the Supabase service key and the Stripe
 test keys (breach follow-up); then the Stripe live switch-over (What is open, step 5).
@@ -133,6 +139,12 @@ Deploy the backend (Railway redeploys on push, and on any variable change):
 cd /c/Users/cjgra/fitnesscaptain-backend && python -c "import ast;ast.parse(open('main.py',encoding='utf-8').read())" && git add -A && git commit && git push origin main
 ```
 
+**On the Mac** the clones are `~/fitnesscaptain-app` and `~/fitnesscaptain-backend`. Run
+`npm ci` once in the app repo, then `npm run check`. There is no pre-push gate there (see the
+rules under Start here). For a local smoke test, serve the repo with
+`python3 -m http.server 5181 --bind 127.0.0.1` from inside it. The preview browser never
+fetches `sw.js`, so its "register failed" line is expected there.
+
 **Version ritual, every app release — all three, or the updater lies:** `APP_VERSION` in
 `index.html`, `BUILD` in `index.html`, `VERSION` in `sw.js`.
 
@@ -150,6 +162,15 @@ hit the same trap.)
 ---
 
 ## Decisions, dated, with the road not taken
+
+**"- drop it" becomes "- clear plan", and the key constant gets its real name (2026-11-08,
+v0.157.1).** Chris had asked what "drop it" meant. He picked "clear plan" from three wordings
+(the others were "log without plan" and "remove plan"). The confirm now says "Clear the plan for
+{exercise}? Sets you've logged stay." The same release renamed `SUPABASE_ANON_KEY` to
+`SUPABASE_PUBLISHABLE_KEY` (same value), matching HomeCaptain, Crossmate and Whereabouts. Tested
+locally on the Mac: it booted to sign-in at v0.157.1, and a made-up account got "Invalid login
+credentials" from Supabase, so the renamed key still reaches auth. Road not taken: editing the
+19 May squat record, which already matched his 2 Nov session.
 
 **Add exercise picks from what you have done, by gym (2026-11-03, v0.157.0).** Chris: "I'm
 having trouble adding exercises without going through the entire library ... It could be the

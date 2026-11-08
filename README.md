@@ -21,7 +21,7 @@ used browser-side for AUTH ONLY.
 ## Configuration
 
 Three public-safe values at the top of the script block in `index.html`:
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `API_BASE`. Until they are set the app
+`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `API_BASE`. Until they are set the app
 boots to the sign-in screen with a "not configured" notice. Real secrets live
 only on the backend.
 
