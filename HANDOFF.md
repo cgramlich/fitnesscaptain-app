@@ -1,6 +1,6 @@
 # FitnessCaptain — HANDOFF
 
-**State as of 2026-11-03.** App `v0.157.0`, backend `v0.33.0`, both live. Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; live keys come at step 5. Stripe TEST mode is fully wired: product, prices, key, webhook and our own portal settings, with `/health` showing billing ready, mode test. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. Launch steps remaining: see What is open.
+**State as of 2026-11-08.** App `v0.157.0`, backend `v0.33.0`, both live (checked 2026-11-08: `/health` ok, db connected, `ai_last_call` 200). Railway breach rotation: Google Places and YouTube keys replaced 2026-11-02 (old ones disabled); Supabase service key and Stripe test keys NOT rotated yet, held for Chris. Railway deploys work again (verified 2026-11-07), so a rotation can now take effect. Pro billing is ON (`BILLING_ENABLED=1`) against Stripe TEST mode, so nobody can pay real money yet; the live switch-over is ON HOLD for the breach. `billing.sql` has been run; verified 2026-10-03 (read-only SQL): both public functions anon/authenticated=false, service_role=true; all 12 tables RLS on, 0 policies. **Next session: read "Start here" below, then What is open.**
 Written to the portfolio `DOCUMENTATION-STANDARD.md` (2026-08-24). Authoritative: where this and
 `BRIEFING.md` disagree, **this file is right**.
 
@@ -22,8 +22,8 @@ portfolio's shared plumbing (auth, sync, offline shell, AI relay).
 
 | | | |
 |---|---|---|
-| App | `v0.140.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
-| Backend | `v0.29.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
+| App | `v0.157.0` | https://fitnesscaptain.com — GitHub Pages, repo `cgramlich/fitnesscaptain-app` |
+| Backend | `v0.33.0` | Railway, repo `cgramlich/fitnesscaptain-backend` |
 | Share links | live | `go.fitnesscaptain.com/g/{token}` → server-rendered `gym.html` |
 | Data | Supabase | Postgres JSONB collections + a private Storage bucket |
 
@@ -36,6 +36,45 @@ curl -s https://fitnesscaptain-backend-production.up.railway.app/health
 ```
 
 That also reports `ai_last_call` — see Traps.
+
+---
+
+## Start here (next session, written 2026-11-08)
+
+The last session (2026-10-19 to 2026-11-08) shipped v0.155.2 to v0.157.0 and left both repos
+committed, pushed and clean. Nothing is half-done. Its decisions are logged below under
+Decisions (the 2026-11-02 and 2026-11-03 entries).
+
+**Rules that still bind, from Chris:**
+- No new secret goes into Railway until he approves it. He types every new secret himself; no
+  session reads or prints one.
+- The Stripe live switch-over stays held: don't ask him to paste the live key or webhook secret,
+  and don't deploy that swap.
+- Stripe connector: Live = Read. Test mode = Write.
+- Don't change the backend's Railway variables, the Supabase service/secret keys or the
+  project's legacy-key toggle without a card and his yes for that one action.
+- Any write to his workout data in Supabase needs his explicit yes.
+- Never `--no-verify` past the portfolio audit gate.
+
+**Small, ready when Chris says yes (none started):**
+1. Fix his 19 May squat record (the 25 x 45 that fed a bad coach plan). Needs his yes and the
+   right reps from him; see the v0.156.0 decision.
+2. Reword the "- drop it" link at the end of an exercise's Plan line (he asked what it meant).
+   Tapping it discards the plan for that exercise; logged sets stay (`index.html`, the
+   `entry-last` Plan button). Copy only.
+3. Rename the frontend constant `SUPABASE_ANON_KEY` to `SUPABASE_PUBLISHABLE_KEY`, to match
+   HomeCaptain, Crossmate and Whereabouts. The value is already the publishable key. Ride the
+   next release; not worth one on its own.
+4. Railway logs, read only: look for `[VIDEO]` and Places errors since the 2026-11-02 key swap.
+   `/health` shows both configured, but only a real call proves the new keys.
+
+**Held for Chris (bigger, each its own card):** rotate the Supabase service key and the Stripe
+test keys (breach follow-up); then the Stripe live switch-over (What is open, step 5).
+
+**Portfolio note:** Supabase legacy keys are OFF on 7 Team CG projects since 2026-10-22.
+FitnessCaptain was fixed in v0.155.2. HomeCaptain and Crossmate were fixed by their own sessions
+on 2026-11-03; Whereabouts by its session on 2026-11-07 (v0.14.3). Each app's own session owns
+its repo.
 
 ---
 
@@ -733,8 +772,8 @@ without logging anything, so the count never moves; `planned` belongs in the dep
     deployed. Planned key choice when it resumes: FitnessCaptain gets its OWN restricted live key
     (Customers write, Checkout Sessions write, Subscriptions write, Prices read, Customer portal
     write), not the account's standard key, which MenuCaptain uses.
-  - Remaining, in order:
-    1. Chris creates the live webhook in the dashboard, same three events, Snapshot.
+  - Remaining, in order, once Chris lifts the hold:
+    1. DONE 2026-10-21: live webhook created (above).
     2. In Railway, ONE deploy swaps the key (live), webhook secret (live) and both price IDs
        (live) together. A half-swap means a broken checkout, because the test key can't
        see live prices.
@@ -746,8 +785,6 @@ without logging anything, so the count never moves; `planned` belongs in the dep
   - Check that the account's customer-portal configuration doesn't offer switching to
     MenuCaptain's prices.
 
-  (4) `BILLING_ENABLED=1`, then an end-to-end test purchase with a Stripe test card.
-  (5) Swap to live keys.
 
   `/health` → `billing` shows enabled / ready / test-or-live at each step.
 - **Log a first bodyweight** — 30 seconds, and it unlocks three built-but-dormant things: the
